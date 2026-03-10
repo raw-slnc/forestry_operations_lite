@@ -1,0 +1,24 @@
+[general]
+name=Forestry Operations Lite
+qgisMinimumVersion=3.16
+description=Terrain analysis for forestry sites: DEM/DSM loading, slope, TWI, stability index, and flow accumulation.
+version=0.1.0
+author=Hideharu Masai
+email=hideharumasai@void.mints.ne.jp
+
+about=Supports forestry site assessment through terrain analysis using DEM/DSM data. Computes slope, topographic wetness index (TWI), infinite-slope stability factor of safety, and rational-formula flow accumulation. Support: https://paypal.me/rawslnc
+
+tracker=https://github.com/raw-slnc/forestry_operations_lite/issues
+repository=https://github.com/raw-slnc/forestry_operations_lite
+
+hasProcessingProvider=no
+changelog=0.1.0 - Initial release
+
+tags=python,forestry,terrain,dem,slope,twi,stability
+
+homepage=https://github.com/raw-slnc/forestry_operations_lite
+category=Vector
+icon=icon.png
+experimental=True
+deprecated=False
+server=False

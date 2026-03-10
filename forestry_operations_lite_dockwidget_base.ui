@@ -1,0 +1,407 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>LoggingRoadPlannerDockWidgetBase</class>
+ <widget class="QDockWidget" name="LoggingRoadPlannerDockWidgetBase">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>420</width>
+    <height>840</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Logging Road Planner</string>
+  </property>
+  <widget class="QWidget" name="dockWidgetContents">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <item>
+     <widget class="QGroupBox" name="grpTerrain">
+      <property name="title">
+       <string>Terrain Source (XYZ)</string>
+      </property>
+      <layout class="QGridLayout" name="gridLayoutTerrain">
+       <item row="0" column="0">
+        <widget class="QLabel" name="lblTileUrl">
+         <property name="text">
+          <string>Tile URL</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <widget class="QLineEdit" name="txtTileUrl">
+         <property name="text">
+          <string>https://forestgeo.info/opendata/22_shizuoka/csmap_2023/{z}/{x}/{y}.webp</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="0" colspan="2">
+        <widget class="QPushButton" name="btnLoadTerrain">
+         <property name="text">
+          <string>Load XYZ Terrain Layer</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="0" colspan="2">
+        <widget class="QLabel" name="lblStatus">
+         <property name="text">
+          <string>Ready.</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QGroupBox" name="grpStandards">
+      <property name="title">
+       <string>Design Standards</string>
+      </property>
+      <layout class="QGridLayout" name="gridLayoutStandards">
+       <item row="0" column="0">
+        <widget class="QLabel" name="lblRoadWidth">
+         <property name="text">
+          <string>Road width [m]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <widget class="QComboBox" name="cmbRoadWidth">
+         <item>
+          <property name="text">
+           <string>2.5</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>3.5</string>
+          </property>
+         </item>
+        </widget>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="lblMaxSlope">
+         <property name="text">
+          <string>Max slope [%]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QDoubleSpinBox" name="spinMaxSlope">
+         <property name="maximum">
+          <double>100.000000000000000</double>
+         </property>
+         <property name="value">
+          <double>20.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="lblAvgSlopeLimit">
+         <property name="text">
+          <string>Avg slope limit [%]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QDoubleSpinBox" name="spinAvgSlopeLimit">
+         <property name="maximum">
+          <double>100.000000000000000</double>
+         </property>
+         <property name="value">
+          <double>18.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="0">
+        <widget class="QLabel" name="lblAvgDistanceLimit">
+         <property name="text">
+          <string>Avg slope distance [m]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QDoubleSpinBox" name="spinAvgDistanceLimit">
+         <property name="maximum">
+          <double>200.000000000000000</double>
+         </property>
+         <property name="value">
+          <double>30.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="0">
+        <widget class="QLabel" name="lblSwitchbackSpanLimit">
+         <property name="text">
+          <string>Switchback span [m]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <widget class="QDoubleSpinBox" name="spinSwitchbackSpanLimit">
+         <property name="maximum">
+          <double>50.000000000000000</double>
+         </property>
+         <property name="value">
+          <double>5.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="0">
+        <widget class="QLabel" name="lblSwitchbackOffsetLimit">
+         <property name="text">
+          <string>Switchback offset [m]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="1">
+        <widget class="QDoubleSpinBox" name="spinSwitchbackOffsetLimit">
+         <property name="maximum">
+          <double>50.000000000000000</double>
+         </property>
+         <property name="value">
+          <double>5.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QGroupBox" name="grpConstraintCheck">
+      <property name="title">
+       <string>Constraint Check</string>
+      </property>
+      <layout class="QGridLayout" name="gridLayoutCheck">
+       <item row="0" column="0">
+        <widget class="QLabel" name="lblCurrentSlope">
+         <property name="text">
+          <string>Current slope [%]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <widget class="QDoubleSpinBox" name="spinCurrentSlope"/>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="lblCurrentAvgSlope">
+         <property name="text">
+          <string>Current avg slope [%]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QDoubleSpinBox" name="spinCurrentAvgSlope"/>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="lblCurrentAvgDistance">
+         <property name="text">
+          <string>Current avg distance [m]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QDoubleSpinBox" name="spinCurrentAvgDistance"/>
+       </item>
+       <item row="3" column="0">
+        <widget class="QLabel" name="lblCurrentSwitchbackSpan">
+         <property name="text">
+          <string>Current switchback span [m]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QDoubleSpinBox" name="spinCurrentSwitchbackSpan"/>
+       </item>
+       <item row="4" column="0">
+        <widget class="QLabel" name="lblCurrentSwitchbackOffset">
+         <property name="text">
+          <string>Current switchback offset [m]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <widget class="QDoubleSpinBox" name="spinCurrentSwitchbackOffset"/>
+       </item>
+       <item row="5" column="0" colspan="2">
+        <widget class="QPushButton" name="btnValidate">
+         <property name="text">
+          <string>Validate Constraints</string>
+         </property>
+        </widget>
+       </item>
+       <item row="6" column="0" colspan="2">
+        <widget class="QLabel" name="lblConstraintResult">
+         <property name="text">
+          <string>Not checked</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QGroupBox" name="grpEarthwork">
+      <property name="title">
+       <string>Cut / Fill Estimate</string>
+      </property>
+      <layout class="QGridLayout" name="gridLayoutEarthwork">
+       <item row="0" column="0">
+        <widget class="QLabel" name="lblSegmentLength">
+         <property name="text">
+          <string>Segment length [m]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <widget class="QDoubleSpinBox" name="spinSegmentLength">
+         <property name="maximum">
+          <double>10000.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="lblCutArea">
+         <property name="text">
+          <string>Cut section area [m2]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QDoubleSpinBox" name="spinCutArea">
+         <property name="maximum">
+          <double>10000.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="lblFillArea">
+         <property name="text">
+          <string>Fill section area [m2]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QDoubleSpinBox" name="spinFillArea">
+         <property name="maximum">
+          <double>10000.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="0" colspan="2">
+        <widget class="QPushButton" name="btnCalcEarthwork">
+         <property name="text">
+          <string>Calculate Cut/Fill</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="0" colspan="2">
+        <widget class="QLabel" name="lblEarthworkResult">
+         <property name="text">
+          <string>No result</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QGroupBox" name="grpStructure">
+      <property name="title">
+       <string>Crossing Structure Volume</string>
+      </property>
+      <layout class="QGridLayout" name="gridLayoutStructure">
+       <item row="0" column="0">
+        <widget class="QLabel" name="lblStructLength">
+         <property name="text">
+          <string>Length [m]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <widget class="QDoubleSpinBox" name="spinStructLength">
+         <property name="maximum">
+          <double>1000.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="lblStructWidth">
+         <property name="text">
+          <string>Width [m]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QDoubleSpinBox" name="spinStructWidth">
+         <property name="maximum">
+          <double>1000.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="lblStructHeight">
+         <property name="text">
+          <string>Height [m]</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QDoubleSpinBox" name="spinStructHeight">
+         <property name="maximum">
+          <double>1000.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="0" colspan="2">
+        <widget class="QPushButton" name="btnCalcStructure">
+         <property name="text">
+          <string>Calculate Structure Volume</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="0" colspan="2">
+        <widget class="QLabel" name="lblStructureResult">
+         <property name="text">
+          <string>No result</string>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="0" colspan="2">
+        <widget class="QTableWidget" name="tblStructures">
+         <column>
+          <property name="text">
+           <string>Name</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>Length</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>Width</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>Height</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>Volume [m3]</string>
+          </property>
+         </column>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
