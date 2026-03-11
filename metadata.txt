@@ -6,7 +6,7 @@ version=0.1.0
 author=Hideharu Masai
 email=hideharumasai@void.mints.ne.jp
 
-about=Supports forestry site assessment through terrain analysis using DEM/DSM data. Computes slope, topographic wetness index (TWI), infinite-slope stability factor of safety, and rational-formula flow accumulation. Support: https://paypal.me/rawslnc
+about=Supports forestry site assessment through terrain analysis using DEM/DSM data. Computes slope, topographic wetness index (TWI), infinite-slope stability factor of safety, and rational-formula flow accumulation. Requires numpy, GDAL, and scipy (bundled with most QGIS installations). Support: https://paypal.me/rawslnc
 
 tracker=https://github.com/raw-slnc/forestry_operations_lite/issues
 repository=https://github.com/raw-slnc/forestry_operations_lite

@@ -23,7 +23,7 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 
 - QGIS 3.16 or later
 - Python 3.7+
-- numpy, GDAL (bundled with QGIS)
+- numpy, GDAL, scipy (bundled with QGIS)
 
 ---
 
@@ -81,7 +81,7 @@ https://paypal.me/rawslnc
 
 - QGIS 3.16 以降
 - Python 3.7+
-- numpy、GDAL（QGIS同梱）
+- numpy、GDAL、scipy（QGIS同梱）
 
 ---
 

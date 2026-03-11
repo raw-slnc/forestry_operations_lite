@@ -47,6 +47,9 @@ def d8_flow_direction(dem):
         flow_dir[mask] = code
         max_slope[mask] = slope[mask]
 
+    # 平坦（max_slope==0）またはピット（max_slope<0）は流向なし=0
+    flow_dir[valid & (max_slope <= 0)] = 0
+
     return flow_dir
 
 

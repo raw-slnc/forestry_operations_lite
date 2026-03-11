@@ -1138,6 +1138,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._filter_state = {"wetland": "off", "flow": "off"}  # off/low/mid
         self._flow_buffer_state = "off"  # off/weak/strong
         self._flow_buffer_layer_ids = []  # バッファ滲みレイヤーのID管理
+        self._flow_buffer_mem_paths = []  # vsimem パス（解放用）
         self._loaded_terrain_basenames = {}  # key → base_name（フィルタ再適用用）
         self._terrain_layer_group = None   # QgsLayerTreeGroup or None
         self._exclusive_hidden = {}        # 排他非表示中のキー → 保存済みcycle state
@@ -1762,6 +1763,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         an_dir = os.path.join(out_dir, analysis_number)
         if not os.path.isdir(an_dir):
             return None
+        canvas_crs = (self.preview_canvas.mapSettings().destinationCrs()
+                      if self.preview_canvas is not None else None)
         for fname in os.listdir(an_dir):
             fpath = os.path.join(an_dir, fname)
             if fname.endswith(".tif"):
@@ -1775,8 +1778,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 ymax = gt[3]
                 ymin = gt[3] + gt[5] * h
                 r = QgsRectangle(xmin, ymin, xmax, ymax)
-                ext = r if ext is None else ext.combineExtentWith(r)
+                try:
+                    src_crs = QgsCoordinateReferenceSystem()
+                    src_crs.createFromWkt(ds.GetProjectionRef())
+                    if (canvas_crs is not None and src_crs.isValid()
+                            and canvas_crs.isValid() and src_crs != canvas_crs):
+                        xf = QgsCoordinateTransform(src_crs, canvas_crs, QgsProject.instance())
+                        r = xf.transformBoundingBox(r)
+                except Exception:
+                    pass
                 ds = None
+                if r.isEmpty():
+                    continue
+                ext = r if ext is None else ext.combineExtentWith(r)
             elif fname.endswith(".gpkg"):
                 ds = ogr.Open(fpath)
                 if ds is None:
@@ -1785,7 +1799,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     lyr = ds.GetLayerByIndex(i)
                     env = lyr.GetExtent()  # (xmin, xmax, ymin, ymax)
                     r = QgsRectangle(env[0], env[2], env[1], env[3])
-                    ext = r if ext is None else ext.combineExtentWith(r)
+                    try:
+                        srs = lyr.GetSpatialRef()
+                        if srs is not None:
+                            src_crs = QgsCoordinateReferenceSystem()
+                            src_crs.createFromWkt(srs.ExportToWkt())
+                            if (canvas_crs is not None and src_crs.isValid()
+                                    and canvas_crs.isValid() and src_crs != canvas_crs):
+                                xf = QgsCoordinateTransform(src_crs, canvas_crs, QgsProject.instance())
+                                r = xf.transformBoundingBox(r)
+                    except Exception:
+                        pass
+                    if not r.isEmpty():
+                        ext = r if ext is None else ext.combineExtentWith(r)
                 ds = None
         return ext
 
@@ -2407,6 +2433,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if proj.mapLayer(lid):
                 proj.removeMapLayer(lid)
         self._flow_buffer_layer_ids = []
+        from osgeo import gdal as _gdal
+        for mp in self._flow_buffer_mem_paths:
+            _gdal.Unlink(mp)
+        self._flow_buffer_mem_paths = []
 
         state = self._flow_buffer_state
         if state == "off":
@@ -2474,6 +2504,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 group.insertChildNode(pos, QgsLayerTreeLayer(blur_lyr))
 
             self._flow_buffer_layer_ids.append(blur_lyr.id())
+            self._flow_buffer_mem_paths.append(mem_path)
 
         self._refresh_preview_canvas()
 
@@ -2584,6 +2615,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 if proj.mapLayer(lid):
                     proj.removeMapLayer(lid)
             self._flow_buffer_layer_ids = []
+            from osgeo import gdal as _gdal
+            for mp in self._flow_buffer_mem_paths:
+                _gdal.Unlink(mp)
+            self._flow_buffer_mem_paths = []
         for lid in self._loaded_terrain_layers.pop(key, []):
             if proj.mapLayer(lid):
                 proj.removeMapLayer(lid)
@@ -2660,6 +2695,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     if proj.mapLayer(lid):
                         proj.removeMapLayer(lid)
                 self._flow_buffer_layer_ids = []
+                from osgeo import gdal as _gdal
+                for mp in self._flow_buffer_mem_paths:
+                    _gdal.Unlink(mp)
+                self._flow_buffer_mem_paths = []
                 # メインキャンバスが自動再描画されない場合に備えて明示的にリフレッシュ
                 if self.iface is not None:
                     self.iface.mapCanvas().refresh()
@@ -2866,49 +2905,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lblDemInfo.setText("⚠ キャンバスに表示範囲がありません。地図を表示してから再試行してください。")
             return
 
-    def _zoom_preview_to_analysis_extent_if_available(self):
-        if self.preview_canvas is None:
-            return
-        ext = self._analysis_layers_extent_in_canvas_crs()
-        if ext is None or ext.isEmpty():
-            ext = self._get_analysis_extent()
-        if ext is None or ext.isEmpty():
-            return
-        _prev = getattr(self, "_syncing", False)
-        self._syncing = True
-        try:
-            self.preview_canvas.setExtent(ext)
-        finally:
-            self._syncing = _prev
-        self.preview_canvas.refresh()
-
-    def _analysis_layers_extent_in_canvas_crs(self):
-        if self.preview_canvas is None:
-            return None
-        proj = QgsProject.instance()
-        canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
-        combined = None
-        for ids in getattr(self, "_loaded_terrain_layers", {}).values():
-            for lid in ids:
-                lyr = proj.mapLayer(lid)
-                if lyr is None or not lyr.isValid():
-                    continue
-                ext = lyr.extent()
-                if ext.isEmpty():
-                    continue
-                try:
-                    lyr_crs = lyr.crs()
-                    if lyr_crs.isValid() and canvas_crs.isValid() and lyr_crs != canvas_crs:
-                        from qgis.core import QgsCoordinateTransform as _CT
-                        xf = _CT(lyr_crs, canvas_crs, QgsProject.instance())
-                        ext = xf.transformBoundingBox(ext)
-                except Exception:
-                    pass
-                if ext.isEmpty():
-                    continue
-                combined = ext if combined is None else combined.combineExtentWith(ext)
-        return combined
-
         canvas_ext = self.preview_canvas.extent()
         canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
         wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -2958,6 +2954,49 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         self.txtDemPath.setToolTip(tif_path)
         self.lblDemInfo.setText(dem_loader.info_text())
+
+    def _zoom_preview_to_analysis_extent_if_available(self):
+        if self.preview_canvas is None:
+            return
+        ext = self._analysis_layers_extent_in_canvas_crs()
+        if ext is None or ext.isEmpty():
+            ext = self._get_analysis_extent()
+        if ext is None or ext.isEmpty():
+            return
+        _prev = getattr(self, "_syncing", False)
+        self._syncing = True
+        try:
+            self.preview_canvas.setExtent(ext)
+        finally:
+            self._syncing = _prev
+        self.preview_canvas.refresh()
+
+    def _analysis_layers_extent_in_canvas_crs(self):
+        if self.preview_canvas is None:
+            return None
+        proj = QgsProject.instance()
+        canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
+        combined = None
+        for ids in getattr(self, "_loaded_terrain_layers", {}).values():
+            for lid in ids:
+                lyr = proj.mapLayer(lid)
+                if lyr is None or not lyr.isValid():
+                    continue
+                ext = lyr.extent()
+                if ext.isEmpty():
+                    continue
+                try:
+                    lyr_crs = lyr.crs()
+                    if lyr_crs.isValid() and canvas_crs.isValid() and lyr_crs != canvas_crs:
+                        from qgis.core import QgsCoordinateTransform as _CT
+                        xf = _CT(lyr_crs, canvas_crs, QgsProject.instance())
+                        ext = xf.transformBoundingBox(ext)
+                except Exception:
+                    pass
+                if ext.isEmpty():
+                    continue
+                combined = ext if combined is None else combined.combineExtentWith(ext)
+        return combined
 
     def _move_preview_to_dem_extent(self, path):
         """DEM のエクステントにプレビューキャンバスを移動して再描画する。"""
