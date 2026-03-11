@@ -1036,6 +1036,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             "・DEMは汎用データか地形解析を行う箇所のデータを選択してください",
             "・DSM/DTMデータは地形解析を行う範囲のデータを選択してください",
             "・標高ソースは地表データのDEMデータ設定と範囲を同じくするデータを選んでください",
+            "",
+            "【TIF / ZIP の配置】",
+            "・単体TIF: そのままファイルを選択",
+            "・ZIP 1枚: ZIP内にTIFが入っている場合はZIPを直接選択",
+            "・複数ZIP結合: 同一地域の複数ZIPを1つのフォルダに配置し、そのフォルダを選択\n"
+            "　（親フォルダに merged_<フォルダ名>.tif が自動生成されます）",
+            "・結合後TIF: 生成された merged_*.tif を直接選択することで再結合を省けます",
         ):
             lbl = QtWidgets.QLabel(text)
             lbl.setWordWrap(True)
