@@ -19,6 +19,6 @@ tags=python,forestry,terrain,dem,slope,twi,stability
 homepage=https://github.com/raw-slnc/forestry_operations_lite
 category=Vector
 icon=icon.png
-experimental=True
+experimental=False
 deprecated=False
 server=False
