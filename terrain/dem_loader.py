@@ -213,12 +213,14 @@ class GSITileDEMLoader:
         import urllib.request
         from qgis.PyQt.QtGui import QImage
 
+        if not url.startswith(("https://", "http://")):
+            return None, f"不正なURLスキーム: {url}"
         try:
             req = urllib.request.Request(
                 url,
                 headers={"User-Agent": "Mozilla/5.0 (compatible; QGIS plugin)"},
             )
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
                 raw = resp.read()
         except Exception as e:
             return None, f"通信エラー: {e}"
