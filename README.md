@@ -31,13 +31,13 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 
 1. Download the ZIP from [Releases](https://github.com/raw-slnc/forestry_operations_lite/releases)
 2. In QGIS: **Plugins > Manage and Install Plugins > Install from ZIP**
-3. The plugin appears in the **Vector toolbar** and **Vector menu**
+3. The plugin appears in the **Raster toolbar** and **Raster menu**
 
 ---
 
 ## Usage
 
-1. Click the **FOL** icon in the Vector toolbar to open the plugin window
+1. Click the **FOL** icon in the Raster toolbar to open the plugin window
 2. Select a DEM/DSM source under **地形ソース** (Terrain Source)
 3. Set background / tile / GPKG layers under **レイヤー設定** (Layer Settings)
 4. Run terrain analysis — results are added to the QGIS layer panel grouped by run number
@@ -89,13 +89,13 @@ https://paypal.me/rawslnc
 
 1. [Releases](https://github.com/raw-slnc/forestry_operations_lite/releases) からZIPをダウンロード
 2. QGISで **プラグイン > プラグインの管理とインストール > ZIPからインストール**
-3. **ベクターツールバー**および**ベクターメニュー**にプラグインが追加されます
+3. **ラスターツールバー**および**ラスターメニュー**にプラグインが追加されます
 
 ---
 
 ## 使い方
 
-1. ベクターツールバーの **FOL** アイコンをクリックしてプラグインウィンドウを開く
+1. ラスターツールバーの **FOL** アイコンをクリックしてプラグインウィンドウを開く
 2. **地形ソース** でDEM/DSMソースを選択
 3. **レイヤー設定** で背景・タイル・GPKGレイヤーを設定
 4. 地形解析を実行 — 解析結果は解析番号グループとしてQGISレイヤーパネルに追加
