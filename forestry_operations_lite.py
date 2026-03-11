@@ -53,9 +53,9 @@ class ForestryOperationsLite:
         if whats_this is not None:
             action.setWhatsThis(whats_this)
         if add_to_toolbar:
-            self.iface.addVectorToolBarIcon(action)
+            self.iface.addRasterToolBarIcon(action)
         if add_to_menu:
-            self.iface.addPluginToVectorMenu(self.menu, action)
+            self.iface.addPluginToRasterMenu(self.menu, action)
 
         self.actions.append(action)
         return action
@@ -80,8 +80,8 @@ class ForestryOperationsLite:
             self.dockwidget.close()
             self.dockwidget = None
         for action in self.actions:
-            self.iface.removePluginVectorMenu(self.menu, action)
-            self.iface.removeVectorToolBarIcon(action)
+            self.iface.removePluginRasterMenu(self.menu, action)
+            self.iface.removeRasterToolBarIcon(action)
         self.actions = []
 
     def run(self):
