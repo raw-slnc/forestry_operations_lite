@@ -1130,9 +1130,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         # 解析読込セクションはプレビュー上部の「解析データの表示管理」バーに移動済み。
         # chkLoad* / spinOpacity* / lblLoadStatus は _build_extended_ui で先行作成。
-        self.chkAutoAddLayers = QtWidgets.QCheckBox()
-        self.chkAutoAddLayers.setChecked(True)
-        self.chkAutoAddLayers.setVisible(False)
         self._loaded_terrain_layers = {}   # key → [layer_id, ...]
         self._terrain_cycle_state = {}     # key → int (-1=非表示, 0..N-1=表示中ファイル番号)
         self._filter_state = {"wetland": "off", "flow": "off"}  # off/low/mid
@@ -3552,29 +3549,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.cmbAnalysisNumber.setCurrentIndex(idx)
             self.cmbAnalysisNumber.blockSignals(False)
 
-        # 自動レイヤ追加（コンボ更新後に実施）
-        if self.chkAutoAddLayers.isChecked():
-            self._unload_terrain_group()
-            self._create_terrain_group(analysis_number)
-            # 今回実行した解析種別を自動表示（ボタン状態に関わらず）
-            _ran = {}
-            if self.chkStability.isChecked():
-                _ran["stability"] = self.chkLoadStability
-            if self.chkValley.isChecked():
-                _ran["valley"]  = self.chkLoadValley
-                _ran["wetland"] = self.chkLoadWetland
-            if self.chkFlow.isChecked():
-                _ran["flow"] = self.chkLoadFlow
-            if (self.chkStability.isChecked()
-                    or self.chkValley.isChecked()
-                    or self.chkFlow.isChecked()):
-                _ran["integrated"] = self.chkLoadIntegrated
-            for key, chk in _ran.items():
-                chk.blockSignals(True)
-                chk.setChecked(True)
-                chk.blockSignals(False)
-                self._toggle_terrain_layer(key, True)
-
         self._update_analysis_condition_label(analysis_number)
         names = ", ".join(n for n, _, _ in saved)
         self.lblAnalysisStatus.setText(
@@ -3624,7 +3598,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
 
         # ── 解析設定 ──
-        s.setValue("chk_auto_add_layers", self.chkAutoAddLayers.isChecked())
         s.setValue("opacity_stability",  self.spinOpacityStability.value())
         s.setValue("opacity_valley",     self.spinOpacityValley.value())
         s.setValue("opacity_wetland",    self.spinOpacityWetland.value())
@@ -3835,7 +3808,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
 
         # ── 解析設定 ──
-        self.chkAutoAddLayers.setChecked(b("chk_auto_add_layers", True))
         self.spinOpacityStability.setValue( i("opacity_stability",  70))
         self.spinOpacityValley.setValue(    i("opacity_valley",     70))
         self.spinOpacityWetland.setValue(   i("opacity_wetland",    70))
