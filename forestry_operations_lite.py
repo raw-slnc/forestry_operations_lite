@@ -61,16 +61,6 @@ class ForestryOperationsLite:
         return action
 
     def initGui(self):
-        # Cleanup legacy custom toolbars created by earlier versions.
-        for legacy_name in (
-            "forestry_operations_planner_toolbar",
-            "logging_road_planner_toolbar",
-            "logging_road_planner",
-        ):
-            legacy = self.iface.mainWindow().findChild(QToolBar, legacy_name)
-            if legacy is not None:
-                legacy.hide()
-                legacy.deleteLater()
 
         icon_path = os.path.join(self.plugin_dir, "icon.png")
         self.add_action(
