@@ -2797,7 +2797,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             from osgeo import gdal
             utm_zone = int((centre_lon + 180) / 6) + 1
             epsg = 32600 + utm_zone if centre_lat >= 0 else 32700 + utm_zone
-            dst_path = src_path.replace(".tif", f"_utm{utm_zone}.tif")
+            base, ext = os.path.splitext(src_path)
+            dst_path = f"{base}_utm{utm_zone}{ext}"
             result = gdal.Warp(
                 dst_path, src_path,
                 dstSRS=f"EPSG:{epsg}",
