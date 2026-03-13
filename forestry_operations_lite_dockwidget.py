@@ -251,6 +251,19 @@ class DemBrowserDialog(QtWidgets.QDialog):
     GSI_DEM5A_SENTINEL  = "__GSI_DEM5A__"
     GSI_DEM10B_SENTINEL = "__GSI_DEM10B__"
 
+    # Copernicus GLO-30 センチネル値
+    COPERNICUS_GLO30_SENTINEL = "__COPERNICUS_GLO30__"
+
+    # (sentinel, リスト表示名, ダウンロードURL, 情報テキスト)
+    _COPERNICUS_ITEMS = [
+        ("__COPERNICUS_GLO30__",
+         "🌍  Copernicus GLO-30  30m  (global, regional overview)",
+         "https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.3",
+         "Copernicus DEM GLO-30 — 30m global coverage. Free, attribution required (© DLR/ESA).\n"
+         "⚠ 30m resolution: suitable for regional overview only. Not recommended for detailed slope / flow analysis.\n"
+         "Download GeoTIFF → reproject to UTM → load as local file."),
+    ]
+
     # (sentinel, リスト表示名, 情報テキスト)
     _GSI_ITEMS = [
         ("__GSI_DEM1A__",
@@ -265,6 +278,9 @@ class DemBrowserDialog(QtWidgets.QDialog):
     ]
 
     # VIRTUAL SHIZUOKA データソース（静岡県、WGS84 bbox）
+    # 日本全域 bbox（WGS84）
+    _JAPAN_BBOX_WGS84 = (122.0, 20.0, 154.0, 46.0)
+
     _VS_BBOX_WGS84 = (137.47410694, 34.57213583, 139.17655861, 35.64595651)
     _VS_ITEMS = [
         ("__VS_2019__",
@@ -306,15 +322,15 @@ class DemBrowserDialog(QtWidgets.QDialog):
         from qgis.PyQt.QtGui import QColor, QFont
         filter_on = self._chk_filter.isChecked()
 
-        # ── オンラインソース（フィルターON/OFFに関わらず常に表示）──
-        # DEM5A・DEM10B は日本全域カバーのため、プレビュー範囲が日本国内なら常に該当
-        sec = QtWidgets.QListWidgetItem("── GSI Elevation Tiles ─────────────")
-        sec.setFlags(Qt.NoItemFlags)
-        sec.setForeground(QColor("#1a5276"))
-        f2 = QFont(); f2.setBold(True)
-        sec.setFont(f2)
-        self._list.addItem(sec)
-        for sentinel, label, _ in self._GSI_ITEMS:
+        # ── GSI タイル（日本域のみ）──
+        if self._canvas_overlaps_japan():
+            sec = QtWidgets.QListWidgetItem("── GSI Elevation Tiles (Japan) ──────")
+            sec.setFlags(Qt.NoItemFlags)
+            sec.setForeground(QColor("#1a5276"))
+            f2 = QFont(); f2.setBold(True)
+            sec.setFont(f2)
+            self._list.addItem(sec)
+        for sentinel, label, _ in (self._GSI_ITEMS if self._canvas_overlaps_japan() else []):
             item = QtWidgets.QListWidgetItem(label)
             item.setData(Qt.UserRole, sentinel)
             f = QFont(); f.setBold(True)
@@ -382,6 +398,21 @@ class DemBrowserDialog(QtWidgets.QDialog):
             except OSError:
                 self._lbl_info.setText("Cannot read folder")
 
+        # ── Copernicus GLO-30（全球：常に表示）──
+        sec_cop = QtWidgets.QListWidgetItem("── Copernicus DEM (Global) ───────────")
+        sec_cop.setFlags(Qt.NoItemFlags)
+        sec_cop.setForeground(QColor("#7b4f00"))
+        f4 = QFont(); f4.setBold(True)
+        sec_cop.setFont(f4)
+        self._list.addItem(sec_cop)
+        for sentinel, label, _url, _info in self._COPERNICUS_ITEMS:
+            item = QtWidgets.QListWidgetItem(label)
+            item.setData(Qt.UserRole, sentinel)
+            f = QFont(); f.setBold(True)
+            item.setFont(f)
+            item.setForeground(QColor("#7b4f00"))
+            self._list.addItem(item)
+
         # ── VIRTUAL SHIZUOKA（静岡県専用：フィルター状態に関わらず地理判定）──
         if self._canvas_overlaps_shizuoka():
             sec_vs = QtWidgets.QListWidgetItem("── VIRTUAL SHIZUOKA (Shizuoka) ──────")
@@ -419,6 +450,14 @@ class DemBrowserDialog(QtWidgets.QDialog):
                 self._btn_ok.setEnabled(True)
                 self._btn_open_url.setVisible(False)
                 self._selected_url = None
+                return
+        # Copernicus GLO-30 リンクアイテム
+        for sentinel, _label, url, info_text in self._COPERNICUS_ITEMS:
+            if path == sentinel:
+                self._lbl_info.setText(info_text)
+                self._btn_ok.setEnabled(False)
+                self._selected_url = url
+                self._btn_open_url.setVisible(True)
                 return
         # VIRTUAL SHIZUOKA リンクアイテム
         for sentinel, _label, url, info_text in self._VS_ITEMS:
@@ -547,6 +586,23 @@ class DemBrowserDialog(QtWidgets.QDialog):
             self._btn_ok.setEnabled(False)
 
     # ── エクステント判定（VIRTUAL SHIZUOKA）────────────────────────
+
+    def _canvas_overlaps_japan(self):
+        """プレビューキャンバスの範囲が日本域と重なるか確認。"""
+        if self._canvas is None or self._canvas.extent().isEmpty():
+            return True
+        try:
+            wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+            canvas_crs = self._canvas.mapSettings().destinationCrs()
+            xform = QgsCoordinateTransform(canvas_crs, wgs84, QgsProject.instance())
+            ext84 = xform.transformBoundingBox(self._canvas.extent())
+            lon_min, lat_min, lon_max, lat_max = self._JAPAN_BBOX_WGS84
+            return not (
+                ext84.xMaximum() < lon_min or ext84.xMinimum() > lon_max
+                or ext84.yMaximum() < lat_min or ext84.yMinimum() > lat_max
+            )
+        except Exception:
+            return True
 
     def _canvas_overlaps_shizuoka(self):
         """プレビューキャンバスの範囲が VIRTUAL SHIZUOKA エリア（静岡県）と重なるか確認。"""
@@ -1036,6 +1092,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         grpHint = QtWidgets.QGroupBox("Data Setup")
         hint_lay = QtWidgets.QVBoxLayout(grpHint)
         hint_lay.setSpacing(4)
+        _warn = QtWidgets.QLabel(
+            "⚠ DEM must be in a projected CRS (metres), not geographic (degrees).\n"
+            "  Using EPSG:4326 (lat/lon) will produce incorrect slope, area and flow values."
+        )
+        _warn.setWordWrap(True)
+        _warn.setStyleSheet("color: #cc0000; font-size: 8pt;")
+        hint_lay.addWidget(_warn)
         for text in (
             "- Select a general-purpose DEM or one covering the analysis area.",
             "- Select a DSM/DTM that covers the same area as the DEM.",
@@ -1052,6 +1115,46 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             lbl.setWordWrap(True)
             hint_lay.addWidget(lbl)
         ds_layout.addWidget(grpHint)
+
+        # ── Tips アコーディオン ──────────────────────────────────
+        _btn_tips = QtWidgets.QPushButton("▶  Tips")
+        _btn_tips.setCheckable(True)
+        _btn_tips.setChecked(False)
+        _btn_tips.setStyleSheet(
+            "QPushButton { text-align:left; padding:4px 6px; font-size:8pt; "
+            "background:#e8e8e8; border:1px solid #ccc; border-radius:3px; }"
+            "QPushButton:checked { background:#d0d8e8; }"
+        )
+        ds_layout.addWidget(_btn_tips)
+
+        _tips_body = QtWidgets.QWidget()
+        _tips_lay = QtWidgets.QVBoxLayout(_tips_body)
+        _tips_lay.setContentsMargins(8, 4, 8, 4)
+        _tips_lay.setSpacing(3)
+        for _t in (
+            "DEM source selection",
+            "  • GSI tiles (Japan): auto-fetched from canvas extent. No download needed.",
+            "  • Local file: must be in a projected CRS (metres). Reproject if in EPSG:4326.",
+            "",
+            "Reproject in QGIS (if needed)",
+            "  1. Raster → Projections → Warp (Reproject)",
+            "  2. Target CRS — UTM zone for your area:",
+            "     lon 126–132° → EPSG:32653",
+            "     lon 132–138° → EPSG:32654",
+            "     lon 138–144° → EPSG:32655",
+            "  3. Resampling: Bilinear  →  Save & use the output file",
+        ):
+            _tl = QtWidgets.QLabel(_t)
+            _tl.setWordWrap(True)
+            _tl.setStyleSheet("font-size:8pt;" + ("color:#555;" if _t.startswith("  ") else "font-weight:bold; color:#333;") if _t else "")
+            _tips_lay.addWidget(_tl)
+        _tips_body.setVisible(False)
+        ds_layout.addWidget(_tips_body)
+
+        def _toggle_tips(checked):
+            _btn_tips.setText(("▼" if checked else "▶") + "  Tips")
+            _tips_body.setVisible(checked)
+        _btn_tips.toggled.connect(_toggle_tips)
 
         _lbl_credit = QtWidgets.QLabel("Developed by Avid Tree Work")
         _lbl_credit.setAlignment(Qt.AlignCenter)
@@ -2686,6 +2789,28 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     self._move_preview_to_dem_extent(path)
                 self._load_dem_info()
 
+    @staticmethod
+    def _reproject_to_utm(src_path, centre_lon, centre_lat):
+        """EPSG:4326 の GeoTIFF をキャンバス中心座標から自動判定した UTM に変換して返す。
+        失敗時は元パスをそのまま返す。"""
+        try:
+            from osgeo import gdal
+            utm_zone = int((centre_lon + 180) / 6) + 1
+            epsg = 32600 + utm_zone if centre_lat >= 0 else 32700 + utm_zone
+            dst_path = src_path.replace(".tif", f"_utm{utm_zone}.tif")
+            result = gdal.Warp(
+                dst_path, src_path,
+                dstSRS=f"EPSG:{epsg}",
+                resampleAlg=gdal.GRA_Bilinear,
+                multithread=True,
+            )
+            if result is None:
+                return src_path
+            result = None  # GDALデータセットをフラッシュ・クローズ
+            return dst_path
+        except Exception:
+            return src_path
+
     def _load_gsi_dem(self, sentinel=None):
         """国土地理院タイルをキャンバス範囲で取得し GeoTIFF に保存後 DEMLoader で読み込む。
         sentinel で DEM1A/DEM5A/DEM10B を選択（省略時は _dem_path から判定）。
@@ -2758,6 +2883,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         except Exception as e:
             self.lblDemInfo.setText(f"⚠ GeoTIFF save error: {e}")
             return
+
+        # EPSG:4326 → UTM 自動変換（メートル単位で解析するため）
+        centre_lon = (ext84.xMinimum() + ext84.xMaximum()) / 2
+        centre_lat = (ext84.yMinimum() + ext84.yMaximum()) / 2
+        self.lblDemInfo.setText("Reprojecting to UTM...")
+        QtWidgets.QApplication.processEvents()
+        tif_path = self._reproject_to_utm(tif_path, centre_lon, centre_lat)
 
         # 標準 DEMLoader で読み直す
         dem_loader = DEMLoader()
