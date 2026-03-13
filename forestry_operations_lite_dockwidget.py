@@ -21,6 +21,8 @@ FORM_CLASS, _ = uic.loadUiType(
 )
 
 
+
+
 class _ElidedPathLabel(QtWidgets.QLabel):
     """パスを省略表示し、クリックでファイルマネージャーを開くラベル。
 
@@ -54,7 +56,7 @@ class _ElidedPathLabel(QtWidgets.QLabel):
     def _update_elided(self):
         fm = self.fontMetrics()
         prefix_w = fm.horizontalAdvance(self._prefix)
-        avail = max(self.width() - prefix_w, 20)
+        avail = max(self.width() - prefix_w - 70, 20)
         elided = fm.elidedText(self._path, Qt.ElideLeft, avail) if self._path else self._path
         super().setText(self._prefix + elided)
 
@@ -102,7 +104,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
     def __init__(self, preview_canvas, initial_dir="", parent=None):
         super().__init__(parent)
-        self.setWindowTitle("DEM ファイルを選択")
+        self.setWindowTitle("Select DEM File")
         self.setMinimumSize(540, 440)
         self._canvas = preview_canvas
         self._selected_path = None
@@ -122,22 +124,22 @@ class DemBrowserDialog(QtWidgets.QDialog):
         # ディレクトリ選択行
         dir_row = QtWidgets.QHBoxLayout()
         self._txt_dir = QtWidgets.QLineEdit()
-        self._txt_dir.setPlaceholderText("フォルダを入力または参照…")
+        self._txt_dir.setPlaceholderText("Enter folder path or browse...")
         self._txt_dir.editingFinished.connect(self._on_dir_edited)
-        btn_dir = QtWidgets.QPushButton("参照…")
+        btn_dir = QtWidgets.QPushButton("Browse...")
         btn_dir.clicked.connect(self._browse_dir)
-        dir_row.addWidget(QtWidgets.QLabel("フォルダ:"))
+        dir_row.addWidget(QtWidgets.QLabel("Folder:"))
         dir_row.addWidget(self._txt_dir, 1)
         dir_row.addWidget(btn_dir)
         layout.addLayout(dir_row)
 
         # フィルタチェック
-        self._chk_filter = QtWidgets.QCheckBox("プロジェクトの領域データのみ表示")
-        self._chk_filter.setToolTip("プレビューキャンバスの表示範囲と重なるファイルだけを一覧します")
+        self._chk_filter = QtWidgets.QCheckBox("Show files overlapping project area only")
+        self._chk_filter.setToolTip("List only files overlapping the preview canvas extent")
         # キャンバスのエクステントが空の場合はチェックボックスを無効化
         if self._canvas is None or self._canvas.extent().isEmpty():
             self._chk_filter.setEnabled(False)
-            self._chk_filter.setToolTip("プレビューに表示範囲がないためフィルタは使用できません")
+            self._chk_filter.setToolTip("Filter unavailable: no extent set on preview canvas")
         self._chk_filter.toggled.connect(self._scan)
         layout.addWidget(self._chk_filter)
 
@@ -149,14 +151,14 @@ class DemBrowserDialog(QtWidgets.QDialog):
         layout.addWidget(self._list, 1)
 
         # ファイル情報ラベル
-        self._lbl_info = QtWidgets.QLabel("ファイルを選択してください")
+        self._lbl_info = QtWidgets.QLabel("Select a file")
         self._lbl_info.setStyleSheet("color:#555;font-size:9pt;")
         self._lbl_info.setWordWrap(True)
         self._lbl_info.setMinimumHeight(36)
         layout.addWidget(self._lbl_info)
 
         # 外部リンクを開くボタン（VIRTUAL SHIZUOKA 選択時のみ表示）
-        self._btn_open_url = QtWidgets.QPushButton("🔗 ダウンロードページをブラウザで開く")
+        self._btn_open_url = QtWidgets.QPushButton("🔗 Open download page in browser")
         self._btn_open_url.setVisible(False)
         self._btn_open_url.clicked.connect(self._open_selected_url)
         layout.addWidget(self._btn_open_url)
@@ -176,7 +178,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
     def _browse_dir(self):
         d = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "フォルダを選択", self._current_dir or ""
+            self, "Select Folder", self._current_dir or ""
         )
         if d:
             self._txt_dir.setText(d)
@@ -252,47 +254,47 @@ class DemBrowserDialog(QtWidgets.QDialog):
     # (sentinel, リスト表示名, 情報テキスト)
     _GSI_ITEMS = [
         ("__GSI_DEM1A__",
-         "🌐  DEM1A  1m メッシュ  ※航空レーザ測量済み地域のみ",
-         "DEM1A 1m — 航空レーザ測量。測量済み地域のみ取得可能（伊豆半島・山岳・森林等）。"),
+         "🌐  DEM1A  1m grid  (laser survey areas only)",
+         "DEM1A 1m — Airborne laser survey. Surveyed areas only (Izu Pen., mountains, forests)."),
         ("__GSI_DEM5A__",
-         "🌐  DEM5A  5m メッシュ  （標準）",
-         "DEM5A 5m — 標準解像度。日本全国の大部分で取得可能。"),
+         "🌐  DEM5A  5m grid  (standard)",
+         "DEM5A 5m — Standard resolution. Available nationwide."),
         ("__GSI_DEM10B__",
-         "🌐  DEM10B  10m メッシュ  （広域）",
-         "DEM10B 10m — 広域解析向け。日本全国で利用可能。"),
+         "🌐  DEM10B  10m grid  (wide area)",
+         "DEM10B 10m — Wide-area analysis. Available nationwide."),
     ]
 
     # VIRTUAL SHIZUOKA データソース（静岡県、WGS84 bbox）
     _VS_BBOX_WGS84 = (137.47410694, 34.57213583, 139.17655861, 35.64595651)
     _VS_ITEMS = [
         ("__VS_2019__",
-         "📦  VIRTUAL SHIZUOKA 2019 — 富士山南東部・伊豆東部",
+         "📦  VIRTUAL SHIZUOKA 2019 — SE Fuji / E Izu",
          "https://www.geospatial.jp/ckan/dataset/shizuoka-2019-pointcloud/resource/723e3289-f0da-425d-b669-de71479f1946",
-         "LAS点群・0.5m DTMグリッド（CC BY 4.0）\n図郭単位でダウンロード → ローカルDEMとして使用"),
+         "LAS point cloud / 0.5m DTM grid (CC BY 4.0)\nDownload by tile → use as local DEM"),
         ("__VS_2020__",
-         "📦  VIRTUAL SHIZUOKA 2020 — 伊豆西部",
+         "📦  VIRTUAL SHIZUOKA 2020 — W Izu",
          "https://www.geospatial.jp/ckan/dataset/shizuoka-2020-pointcloud/resource/d2b735ba-7689-4f27-8657-dceeb645e5f4",
-         "LAS点群・0.5m DTMグリッド（CC BY 4.0）\n図郭単位でダウンロード → ローカルDEMとして使用"),
+         "LAS point cloud / 0.5m DTM grid (CC BY 4.0)\nDownload by tile → use as local DEM"),
         ("__VS_2021__",
-         "📦  VIRTUAL SHIZUOKA 2021 — 富士山・静岡東部",
+         "📦  VIRTUAL SHIZUOKA 2021 — Fuji / E Shizuoka",
          "https://www.geospatial.jp/ckan/dataset/shizuoka-2021-pointcloud/resource/b1d6f7db-3097-4b91-87f9-61f50043bd8f",
-         "LAS点群・0.5m DTMグリッド（CC BY 4.0）\n図郭単位でダウンロード → ローカルDEMとして使用"),
+         "LAS point cloud / 0.5m DTM grid (CC BY 4.0)\nDownload by tile → use as local DEM"),
         ("__VS_MW__",
-         "📦  VIRTUAL SHIZUOKA 中・西部（MMS含む）",
+         "📦  VIRTUAL SHIZUOKA — Central / West (incl. MMS)",
          "https://www.geospatial.jp/ckan/dataset/virtual-shizuoka-mw/resource/7e8cac4d-6ab8-4ec9-b730-41123c6ae0b2",
-         "LAS点群・0.5m DTMグリッド・MMS点群（CC BY 4.0）\n図郭単位でダウンロード → ローカルDEMとして使用"),
+         "LAS / MMS point cloud / 0.5m DTM grid (CC BY 4.0)\nDownload by tile → use as local DEM"),
         ("__VS_1920__",
-         "📦  VIRTUAL SHIZUOKA 2019+2020統合 — 富士山南東部・伊豆全域",
+         "📦  VIRTUAL SHIZUOKA 2019+2020 merged — SE Fuji / all Izu",
          "https://www.geospatial.jp/ckan/dataset/shizuoka-19-20-pointcloud/resource/aa5e1c19-cab2-4852-8a46-8499f360aa23",
-         "2019+2020年統合版。LP/ALB/MMS点群（CC BY 4.0）\n図郭単位でダウンロード → ローカルDEMとして使用"),
+         "2019+2020 merged. LP/ALB/MMS point cloud (CC BY 4.0)\nDownload by tile → use as local DEM"),
         ("__VS_2022__",
-         "📦  VIRTUAL SHIZUOKA 2022 — 北部（南アルプス）",
+         "📦  VIRTUAL SHIZUOKA 2022 — N (Southern Alps)",
          "https://www.geospatial.jp/ckan/dataset/shizuoka-2022-pointcloud/resource/346d480c-1709-4db4-87f6-f864c3f9b680",
-         "LAS点群・0.5m DTMグリッド（CC BY 4.0）\n図郭単位でダウンロード → ローカルDEMとして使用"),
+         "LAS point cloud / 0.5m DTM grid (CC BY 4.0)\nDownload by tile → use as local DEM"),
         ("__VS_2025__",
-         "📦  VIRTUAL SHIZUOKA 2025 — 北西部",
+         "📦  VIRTUAL SHIZUOKA 2025 — NW Shizuoka",
          "https://www.geospatial.jp/ckan/dataset/shizuoka-2025-pointcloud/resource/0abed3d9-1b89-4577-bba5-709953bfc611",
-         "LAS点群・0.5m DTMグリッド（CC BY 4.0）\n図郭単位でダウンロード → ローカルDEMとして使用"),
+         "LAS point cloud / 0.5m DTM grid (CC BY 4.0)\nDownload by tile → use as local DEM"),
     ]
 
     # ── スキャン ─────────────────────────────────────────────────
@@ -306,7 +308,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
         # ── オンラインソース（フィルターON/OFFに関わらず常に表示）──
         # DEM5A・DEM10B は日本全域カバーのため、プレビュー範囲が日本国内なら常に該当
-        sec = QtWidgets.QListWidgetItem("── 国土地理院 標高タイル ────────────")
+        sec = QtWidgets.QListWidgetItem("── GSI Elevation Tiles ─────────────")
         sec.setFlags(Qt.NoItemFlags)
         sec.setForeground(QColor("#1a5276"))
         f2 = QFont(); f2.setBold(True)
@@ -320,18 +322,18 @@ class DemBrowserDialog(QtWidgets.QDialog):
             item.setForeground(QColor("#1a5276"))
             self._list.addItem(item)
 
-        sep = QtWidgets.QListWidgetItem("── ローカルファイル ──────────────────")
+        sep = QtWidgets.QListWidgetItem("── Local Files ──────────────────────")
         sep.setFlags(Qt.NoItemFlags)
         sep.setForeground(QColor("#999"))
         self._list.addItem(sep)
 
         d = self._txt_dir.text().strip()
         if not os.path.isdir(d):
-            self._lbl_info.setText("フォルダを選択するとローカルファイルを表示します")
+            self._lbl_info.setText("Select a folder to browse local files")
         else:
             self._current_dir = d
 
-            self._lbl_info.setText("スキャン中…")
+            self._lbl_info.setText("Scanning...")
             QtWidgets.QApplication.processEvents()
 
             try:
@@ -350,10 +352,10 @@ class DemBrowserDialog(QtWidgets.QDialog):
                     self._list.addItem(item)
                     added += 1
                 if added == 0:
-                    msg = "領域内に該当ファイルがありません" if filter_on else "GeoTIFF ファイルが見つかりません"
+                    msg = "No files found in project area" if filter_on else "No GeoTIFF files found"
                     self._lbl_info.setText(msg)
                 else:
-                    self._lbl_info.setText(f"{added} 件")
+                    self._lbl_info.setText(f"{added} file(s)")
 
                 # ZIP入りサブフォルダを結合候補として表示
                 try:
@@ -364,25 +366,25 @@ class DemBrowserDialog(QtWidgets.QDialog):
                                 for f in os.listdir(os.path.join(d, sd)))
                     )
                     if subdirs:
-                        sec_dir = QtWidgets.QListWidgetItem("── ZIP結合フォルダ ───────────────────")
+                        sec_dir = QtWidgets.QListWidgetItem("── ZIP merge folders ────────────────")
                         sec_dir.setFlags(Qt.NoItemFlags)
                         sec_dir.setForeground(QColor("#999"))
                         self._list.addItem(sec_dir)
                         for sname in subdirs:
                             spath = os.path.join(d, sname)
                             n = sum(1 for f in os.listdir(spath) if f.lower().endswith(".zip"))
-                            item = QtWidgets.QListWidgetItem(f"📁 {sname}  ({n} 件)")
+                            item = QtWidgets.QListWidgetItem(f"📁 {sname}  ({n} files)")
                             item.setData(Qt.UserRole, spath)
                             self._list.addItem(item)
                 except OSError:
                     pass
 
             except OSError:
-                self._lbl_info.setText("フォルダを読み取れません")
+                self._lbl_info.setText("Cannot read folder")
 
         # ── VIRTUAL SHIZUOKA（静岡県専用：フィルター状態に関わらず地理判定）──
         if self._canvas_overlaps_shizuoka():
-            sec_vs = QtWidgets.QListWidgetItem("── VIRTUAL SHIZUOKA（静岡県）────────")
+            sec_vs = QtWidgets.QListWidgetItem("── VIRTUAL SHIZUOKA (Shizuoka) ──────")
             sec_vs.setFlags(Qt.NoItemFlags)
             sec_vs.setForeground(QColor("#1a6b1a"))
             f3 = QFont(); f3.setBold(True)
@@ -404,7 +406,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
             self._btn_ok.setEnabled(False)
             self._btn_open_url.setVisible(False)
             self._selected_url = None
-            self._lbl_info.setText("ファイルを選択してください")
+            self._lbl_info.setText("Select a file")
             return
         self._handle_single_item(items[0])
 
@@ -413,7 +415,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
         # GSI タイルソース
         for sentinel, _label, info_text in self._GSI_ITEMS:
             if path == sentinel:
-                self._lbl_info.setText(info_text + "  プレビューキャンバスの表示範囲を自動取得します。")
+                self._lbl_info.setText(info_text + "  Extent will be automatically fetched from the preview canvas.")
                 self._btn_ok.setEnabled(True)
                 self._btn_open_url.setVisible(False)
                 self._selected_url = None
@@ -444,13 +446,13 @@ class DemBrowserDialog(QtWidgets.QDialog):
                 from osgeo import osr
                 srs = osr.SpatialReference(wkt=wkt)
                 auth = srs.GetAuthorityCode(None)
-                crs_str = f"EPSG:{auth}" if auth else "不明CRS"
+                crs_str = f"EPSG:{auth}" if auth else "Unknown CRS"
             except Exception:
-                crs_str = "不明CRS"
+                crs_str = "Unknown CRS"
             w = round(xmax - xmin, 1)
             h = round(ymax - ymin, 1)
             self._lbl_info.setText(
-                f"範囲: X {xmin:.1f}〜{xmax:.1f}  /  Y {ymin:.1f}〜{ymax:.1f}"
+                f"Extent: X {xmin:.1f}–{xmax:.1f}  /  Y {ymin:.1f}–{ymax:.1f}"
                 f"  ({w} × {h})  |  {crs_str}"
             )
         else:
@@ -463,19 +465,19 @@ class DemBrowserDialog(QtWidgets.QDialog):
         """ZIP結合フォルダ選択時の情報表示。"""
         zips = sorted(f for f in os.listdir(dir_path) if f.lower().endswith(".zip"))
         if not zips:
-            self._lbl_info.setText("ZIPファイルが見つかりません")
+            self._lbl_info.setText("No ZIP files found")
             self._btn_ok.setEnabled(False)
             return
         dir_name = os.path.basename(dir_path)
         merged_name = f"merged_{dir_name}.tif"
         out_path = os.path.join(os.path.dirname(dir_path), merged_name)
         if os.path.exists(out_path):
-            status = f"（結合済み: {merged_name} を上書き）"
+            status = f"(already merged: will overwrite {merged_name})"
         else:
-            status = f"→ {merged_name} を生成"
+            status = f"→ will generate {merged_name}"
         self._lbl_info.setText(
-            f"{len(zips)} 件のZIPを結合  {status}\n"
-            "⚠ 隣接しないデータは解析精度を下げます"
+            f"{len(zips)} ZIPs to merge  {status}\n"
+            "⚠ Non-adjacent data may reduce analysis accuracy"
         )
         self._btn_ok.setEnabled(True)
 
@@ -486,7 +488,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
             with _zf.ZipFile(zip_path, "r") as zf:
                 names = zf.namelist()
         except Exception as e:
-            self._lbl_info.setText(f"ZIPを開けません: {e}")
+            self._lbl_info.setText(f"Cannot open ZIP: {e}")
             self._btn_ok.setEnabled(False)
             return
 
@@ -502,18 +504,18 @@ class DemBrowserDialog(QtWidgets.QDialog):
                     from osgeo import osr
                     srs = osr.SpatialReference(wkt=wkt)
                     auth = srs.GetAuthorityCode(None)
-                    crs_str = f"EPSG:{auth}" if auth else "不明CRS"
+                    crs_str = f"EPSG:{auth}" if auth else "Unknown CRS"
                 except Exception:
-                    crs_str = "不明CRS"
+                    crs_str = "Unknown CRS"
                 w = round(xmax - xmin, 1)
                 h = round(ymax - ymin, 1)
                 self._lbl_info.setText(
-                    f"[ZIP内TIF] {tif_names[0]}\n"
-                    f"範囲: X {xmin:.1f}〜{xmax:.1f}  /  Y {ymin:.1f}〜{ymax:.1f}"
+                    f"[ZIP TIF] {tif_names[0]}\n"
+                    f"Extent: X {xmin:.1f}–{xmax:.1f}  /  Y {ymin:.1f}–{ymax:.1f}"
                     f"  ({w} × {h})  |  {crs_str}"
                 )
             else:
-                self._lbl_info.setText(f"[ZIP内TIF] {tif_names[0]}")
+                self._lbl_info.setText(f"[ZIP TIF] {tif_names[0]}")
             self._btn_ok.setEnabled(True)
 
         elif txt_names:
@@ -527,21 +529,21 @@ class DemBrowserDialog(QtWidgets.QDialog):
                     w = round(xmax - xmin, 1)
                     h = round(ymax - ymin, 1)
                     self._lbl_info.setText(
-                        f"[変換済み] {tif_name}\n"
-                        f"範囲: X {xmin:.1f}〜{xmax:.1f}  /  Y {ymin:.1f}〜{ymax:.1f}"
+                        f"[Converted] {tif_name}\n"
+                        f"Extent: X {xmin:.1f}–{xmax:.1f}  /  Y {ymin:.1f}–{ymax:.1f}"
                         f"  ({w} × {h})  |  EPSG:6676"
                     )
                 else:
-                    self._lbl_info.setText(f"[変換済み] {tif_name}")
+                    self._lbl_info.setText(f"[Converted] {tif_name}")
             else:
                 self._lbl_info.setText(
                     f"[XYZ DEM / EPSG:6676] {txt_name}\n"
-                    f"→ 決定時に {tif_name} へ変換します"
+                    f"→ will convert to {tif_name} on confirm"
                 )
             self._btn_ok.setEnabled(True)
 
         else:
-            self._lbl_info.setText("未対応のZIP形式です（TIFまたは_DEM.txtが見つかりません）")
+            self._lbl_info.setText("Unsupported ZIP format (no TIF or _DEM.txt found)")
             self._btn_ok.setEnabled(False)
 
     # ── エクステント判定（VIRTUAL SHIZUOKA）────────────────────────
@@ -613,13 +615,13 @@ class DemBrowserDialog(QtWidgets.QDialog):
         """
         tif_paths = []
         for i, zp in enumerate(zip_paths):
-            self._lbl_info.setText(f"変換中… ({i + 1}/{len(zip_paths)}) {os.path.basename(zp)}")
+            self._lbl_info.setText(f"Converting... ({i + 1}/{len(zip_paths)}) {os.path.basename(zp)}")
             QtWidgets.QApplication.processEvents()
             tif = self._zip_to_tif(zp)
             if tif is None:
                 return None
             if not tif.startswith("/vsizip/") and not os.path.exists(tif):
-                self._lbl_info.setText(f"変換後ファイルが見つかりません: {os.path.basename(tif)}")
+                self._lbl_info.setText(f"Converted file not found: {os.path.basename(tif)}")
                 return None
             tif_paths.append(tif)
 
@@ -627,7 +629,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
             return tif_paths[0]
 
         # 結合
-        self._lbl_info.setText(f"{len(tif_paths)} 枚を結合中…")
+        self._lbl_info.setText(f"{len(tif_paths)} files merging...")
         QtWidgets.QApplication.processEvents()
         folder = dir_path or os.path.dirname(zip_paths[0])
         dir_name = os.path.basename(folder)
@@ -638,11 +640,11 @@ class DemBrowserDialog(QtWidgets.QDialog):
             gdal.UseExceptions()
             ds = gdal.Warp(out_path, tif_paths, format="GTiff")
             if ds is None:
-                self._lbl_info.setText(f"結合に失敗しました: {gdal.GetLastErrorMsg()}")
+                self._lbl_info.setText(f"Merge failed: {gdal.GetLastErrorMsg()}")
                 return None
             ds = None
         except Exception as e:
-            self._lbl_info.setText(f"結合エラー: {e}")
+            self._lbl_info.setText(f"Merge error: {e}")
             return None
 
         # フォルダ内の個別TIFを削除（/vsizipパスは物理ファイルなし）
@@ -674,7 +676,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
                     if os.path.exists(tif_path):
                         return tif_path
                     # 変換実行
-                    self._lbl_info.setText("変換中… しばらくお待ちください")
+                    self._lbl_info.setText("Converting... please wait")
                     QtWidgets.QApplication.processEvents()
                     import tempfile
                     with tempfile.TemporaryDirectory() as tmpdir:
@@ -687,13 +689,13 @@ class DemBrowserDialog(QtWidgets.QDialog):
                             format="GTiff",
                         )
                         if ds is None:
-                            self._lbl_info.setText("変換に失敗しました")
+                            self._lbl_info.setText("Conversion failed")
                             return None
                         ds = None
                     return tif_path
 
         except Exception as e:
-            self._lbl_info.setText(f"ZIP処理エラー: {e}")
+            self._lbl_info.setText(f"ZIP error: {e}")
         return None
 
     def _open_selected_url(self):
@@ -794,8 +796,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
     def _apply_japanese_base_labels(self):
         self.setWindowTitle("Forestry Operations Lite")
-        self.grpTerrain.setTitle("地形ソース")
-        self.lblStatus.setText("準備完了")
+        self.grpTerrain.setTitle("Terrain Source")
+        self.lblStatus.setText("Ready")
 
     def _build_extended_ui(self):
         while self.verticalLayout.count():
@@ -806,16 +808,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         # ── 解析データ表示管理ウィジェットを先行作成 ──────────────────
         # （_build_terrain_tab より前に作る必要があるため）
-        self.btnTerrainToggle = QtWidgets.QPushButton("解析データ")
+        self.btnTerrainToggle = QtWidgets.QPushButton("Analysis Data")
         self.btnTerrainToggle.setCheckable(True)
         self.btnTerrainToggle.setChecked(True)
-        self.btnTerrainToggle.setToolTip("解析レイヤーの表示/非表示を切替（個別設定は保持）")
+        self.btnTerrainToggle.setToolTip("Toggle all analysis layers (preserves individual state)")
 
-        self.chkLoadStability  = QtWidgets.QPushButton("斜面安定")
-        self.chkLoadValley     = QtWidgets.QPushButton("沢地形")
-        self.chkLoadWetland    = QtWidgets.QPushButton("湿潤地形")
-        self.chkLoadFlow       = QtWidgets.QPushButton("流量推測")
-        self.chkLoadIntegrated = QtWidgets.QPushButton("総合リスク")
+        self.chkLoadStability  = QtWidgets.QPushButton("Slope Stability")
+        self.chkLoadValley     = QtWidgets.QPushButton("Valley Terrain")
+        self.chkLoadWetland    = QtWidgets.QPushButton("Wetland Terrain")
+        self.chkLoadFlow       = QtWidgets.QPushButton("Flow Estimation")
+        self.chkLoadIntegrated = QtWidgets.QPushButton("Overall Risk")
         for _b in (self.chkLoadStability, self.chkLoadValley,
                    self.chkLoadWetland, self.chkLoadFlow, self.chkLoadIntegrated):
             _b.setCheckable(True)
@@ -833,7 +835,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             sp.setValue(default)
             sp.setSuffix("%")
             sp.setFixedWidth(54)
-            sp.setToolTip("透過率（0=不透明、100=透明）")
+            sp.setToolTip("Opacity (0=opaque, 100=transparent)")
             return sp
         self.spinOpacityStability  = _make_opacity_spin()
         self.spinOpacityValley     = _make_opacity_spin()
@@ -845,13 +847,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             b = QtWidgets.QPushButton("off")
             b.setFixedWidth(32)
             b.setCheckable(False)
-            b.setToolTip("low: 低値透明グラデーション / mid: 中値以下を透明 / off: フィルタなし")
+            b.setToolTip("low: fade low values / mid: transparent below median / off: no filter")
             b.setStyleSheet("font-size:8pt; padding:1px 2px;")
             return b
         self.btnFilterWetland = _make_filter_btn()
         self.btnFilterFlow    = _make_filter_btn()
-        self.btnFlowBuffer = QtWidgets.QPushButton("バッファ：切")
-        self.btnFlowBuffer.setToolTip("流量レイヤーに滲み表現を適用: 切→弱→強")
+        self.btnFlowBuffer = QtWidgets.QPushButton("Buffer: Off")
+        self.btnFlowBuffer.setToolTip("Apply blur to flow layer: Off→Low→High")
         self.btnFlowBuffer.setStyleSheet("font-size:8pt; padding:1px 2px;")
 
         self.lblLoadStatus = QtWidgets.QLabel("")
@@ -859,12 +861,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         # 解析番号セレクタ（解析データの表示管理 Row1）
         self.cmbAnalysisNumber = QtWidgets.QComboBox()
-        self.cmbAnalysisNumber.addItem("解析番号を選択", None)
+        self.cmbAnalysisNumber.addItem("Select run", None)
         self.cmbAnalysisNumber.setFixedWidth(180)
-        self.cmbAnalysisNumber.setToolTip("表示する解析結果の番号を選択")
+        self.cmbAnalysisNumber.setToolTip("Select analysis run to display")
         self.btnRefreshAnalysis = QtWidgets.QPushButton("↺")
         self.btnRefreshAnalysis.setFixedWidth(28)
-        self.btnRefreshAnalysis.setToolTip("解析番号リストを更新")
+        self.btnRefreshAnalysis.setToolTip("Refresh analysis list")
 
         self.mainSplitter = QtWidgets.QSplitter(Qt.Horizontal, self)
         self.leftPane = QtWidgets.QWidget(self.mainSplitter)
@@ -874,7 +876,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         left_layout = QtWidgets.QVBoxLayout(self.leftPane)
         right_layout = QtWidgets.QVBoxLayout(self.rightPane)
 
-        self.grpPreviewCanvas = QtWidgets.QGroupBox("設計プレビュー")
+        self.grpPreviewCanvas = QtWidgets.QGroupBox("Design Preview")
         preview_layout = QtWidgets.QVBoxLayout(self.grpPreviewCanvas)
         self.preview_canvas = QgsMapCanvas(self)
         self.preview_canvas.setCanvasColor(Qt.white)
@@ -897,40 +899,43 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         for _l in (self.lblPreviewStatus, self.lblPreviewStatusScale, self.lblPreviewStatusCrs):
             _l.setStyleSheet(_ps)
             _l.setFixedHeight(20)
+        # ステータスバー
         _sb = QtWidgets.QWidget()
         _sb.setFixedHeight(22)
         _sbl = QtWidgets.QHBoxLayout(_sb)
         _sbl.setContentsMargins(0, 1, 0, 1)
         _sbl.setSpacing(4)
-        for _prefix, _val in (
-            ("中心座標：", self.lblPreviewStatus),
-            ("地図縮尺：", self.lblPreviewStatusScale),
-            ("座標参照系（CRS）：", self.lblPreviewStatusCrs),
+        self._lbl_center_prefix = QtWidgets.QLabel("Center:")
+        self._lbl_scale_prefix  = QtWidgets.QLabel("Scale:")
+        self._lbl_crs_prefix    = QtWidgets.QLabel("CRS:")
+        for _prefix_lbl, _val in (
+            (self._lbl_center_prefix, self.lblPreviewStatus),
+            (self._lbl_scale_prefix,  self.lblPreviewStatusScale),
+            (self._lbl_crs_prefix,    self.lblPreviewStatusCrs),
         ):
-            _lbl = QtWidgets.QLabel(_prefix)
-            _lbl.setStyleSheet(_ts)
-            _lbl.setFixedHeight(20)
-            _sbl.addWidget(_lbl)
+            _prefix_lbl.setStyleSheet(_ts)
+            _prefix_lbl.setFixedHeight(20)
+            _sbl.addWidget(_prefix_lbl)
             _sbl.addWidget(_val)
             _sbl.addSpacing(8)
         _sbl.addStretch(1)
         preview_layout.addWidget(_sb)
 
-        self.chkStandaloneWindow = QtWidgets.QCheckBox("独立ウィンドウで作業")
+        self.chkStandaloneWindow = QtWidgets.QCheckBox("Open in standalone window")
         self.chkStandaloneWindow.setChecked(True)
         self.chkStandaloneWindow.hide()
 
-        self.grpLayers = QtWidgets.QGroupBox("レイヤー設定")
+        self.grpLayers = QtWidgets.QGroupBox("Layer Settings")
         layer_layout = QtWidgets.QGridLayout(self.grpLayers)
         self.cmbBackgroundLayer = QtWidgets.QComboBox()
         self.cmbTileLayer = QtWidgets.QComboBox()
         self.cmbGpkgLayer = QtWidgets.QComboBox()
-        self.btnRefreshLayerList = QtWidgets.QPushButton("レイヤー一覧を更新")
+        self.btnRefreshLayerList = QtWidgets.QPushButton("Refresh Layers")
 
         # 解析データの表示管理 Row2 で使うレイヤー表示管理ウィジェット（ここで先行作成）
         self.btnGpkgLayerVis = QtWidgets.QPushButton("GPKG")
-        self.btnTileLayerVis = QtWidgets.QPushButton("タイル")
-        self.btnBgLayerVis   = QtWidgets.QPushButton("背景")
+        self.btnTileLayerVis = QtWidgets.QPushButton("Tile")
+        self.btnBgLayerVis   = QtWidgets.QPushButton("Background")
         for _b in (self.btnGpkgLayerVis, self.btnTileLayerVis, self.btnBgLayerVis):
             _b.setCheckable(True)
             _b.setChecked(True)
@@ -940,56 +945,56 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.spinGpkgOpacity.setValue(100)
         self.spinGpkgOpacity.setSuffix("%")
         self.spinGpkgOpacity.setFixedWidth(54)
-        self.spinGpkgOpacity.setToolTip("GPKGレイヤ透過率")
+        self.spinGpkgOpacity.setToolTip("GPKG layer opacity")
         self.spinTileOpacity = QtWidgets.QSpinBox()
         self.spinTileOpacity.setRange(0, 100)
         self.spinTileOpacity.setValue(60)
         self.spinTileOpacity.setSuffix("%")
         self.spinTileOpacity.setFixedWidth(54)
-        self.spinTileOpacity.setToolTip("タイルレイヤ透過率")
+        self.spinTileOpacity.setToolTip("Tile layer opacity")
         self.spinBgOpacity = QtWidgets.QSpinBox()
         self.spinBgOpacity.setRange(0, 100)
         self.spinBgOpacity.setValue(100)
         self.spinBgOpacity.setSuffix("%")
         self.spinBgOpacity.setFixedWidth(54)
-        self.spinBgOpacity.setToolTip("背景地図透過率")
+        self.spinBgOpacity.setToolTip("Background map opacity")
 
         # Row 0: GPKGレイヤ | combo
-        layer_layout.addWidget(QtWidgets.QLabel("GPKGレイヤ"),  0, 0)
+        layer_layout.addWidget(QtWidgets.QLabel("GPKG Layer"),  0, 0)
         layer_layout.addWidget(self.cmbGpkgLayer,               0, 1)
         # Row 1: タイルレイヤ | combo
-        layer_layout.addWidget(QtWidgets.QLabel("タイルレイヤ"), 1, 0)
+        layer_layout.addWidget(QtWidgets.QLabel("Tile Layer"), 1, 0)
         layer_layout.addWidget(self.cmbTileLayer,               1, 1)
         # Row 2: 背景地図 | combo
-        layer_layout.addWidget(QtWidgets.QLabel("背景地図"),    2, 0)
+        layer_layout.addWidget(QtWidgets.QLabel("Background Map"),    2, 0)
         layer_layout.addWidget(self.cmbBackgroundLayer,         2, 1)
         # Row 3: 更新ボタン（span 2）
         layer_layout.addWidget(self.btnRefreshLayerList,        3, 0, 1, 2)
         layer_layout.setColumnStretch(1, 1)
 
         # ── 地表データ（tabDataSettings へ）──────────────────────────────
-        self.grpDem = QtWidgets.QGroupBox("地表データ")
+        self.grpDem = QtWidgets.QGroupBox("Terrain Data")
         dem_lay = QtWidgets.QGridLayout(self.grpDem)
-        dem_lay.addWidget(QtWidgets.QLabel("DEMデータ"),   0, 0)
+        dem_lay.addWidget(QtWidgets.QLabel("DEM Data"),   0, 0)
         self.txtDemPath = QtWidgets.QLineEdit()
         self.txtDemPath.setReadOnly(True)
-        self.txtDemPath.setPlaceholderText("ファイルを選択…")
+        self.txtDemPath.setPlaceholderText("Select file...")
         self.txtDemPath.setMaximumWidth(200)
-        self.btnBrowseDem = QtWidgets.QPushButton("参照")
+        self.btnBrowseDem = QtWidgets.QPushButton("Browse")
         dem_lay.addWidget(self.txtDemPath,   0, 1)
         dem_lay.addWidget(self.btnBrowseDem, 0, 2)
-        self.lblDemInfo = QtWidgets.QLabel("未設定")
+        self.lblDemInfo = QtWidgets.QLabel("Not set")
         self.lblDemInfo.setWordWrap(True)
         dem_lay.addWidget(self.lblDemInfo,   1, 0, 1, 3)
-        dem_lay.addWidget(QtWidgets.QLabel("DSM/DTMデータ"), 2, 0)
+        dem_lay.addWidget(QtWidgets.QLabel("DSM/DTM Data"), 2, 0)
         self.txtDsmPath = QtWidgets.QLineEdit()
         self.txtDsmPath.setReadOnly(True)
-        self.txtDsmPath.setPlaceholderText("ファイルを選択…（任意）")
+        self.txtDsmPath.setPlaceholderText("Select file... (optional)")
         self.txtDsmPath.setMaximumWidth(200)
-        self.btnBrowseDsm = QtWidgets.QPushButton("参照")
+        self.btnBrowseDsm = QtWidgets.QPushButton("Browse")
         dem_lay.addWidget(self.txtDsmPath,   2, 1)
         dem_lay.addWidget(self.btnBrowseDsm, 2, 2)
-        self.lblDsmInfo = QtWidgets.QLabel("未設定")
+        self.lblDsmInfo = QtWidgets.QLabel("Not set")
         self.lblDsmInfo.setWordWrap(True)
         dem_lay.addWidget(self.lblDsmInfo,   3, 0, 1, 3)
         self._dem_path = ""
@@ -997,13 +1002,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         # ── ソースの設定（tabDataSettings へ）──────────────────────────
         # 地形ソースウィジェット（シグナルは _setup_terrain_source_controls で接続）
-        self.lblTerrainSourceChoice = QtWidgets.QLabel("地形ソース")
+        self.lblTerrainSourceChoice = QtWidgets.QLabel("Terrain Source")
         self.cmbTerrainSourceChoice = QtWidgets.QComboBox()
         # .ui 由来の旧テキストフィールドを非表示
         for _w in (self.lblTileUrl, self.txtTileUrl, self.btnLoadTerrain):
             _w.hide()
 
-        self.grpSourceSettings = QtWidgets.QGroupBox("ソースの設定")
+        self.grpSourceSettings = QtWidgets.QGroupBox("Source Settings")
         src_lay = QtWidgets.QGridLayout(self.grpSourceSettings)
         src_lay.setVerticalSpacing(5)
         src_lay.addWidget(self.lblTerrainSourceChoice,           0, 0)
@@ -1028,21 +1033,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         ds_layout.addWidget(self.grpSourceSettings)
         ds_layout.addWidget(self.grpLayers)
 
-        # ── 設定ヒント ──────────────────────────────────────────────────
-        grpHint = QtWidgets.QGroupBox("設定ヒント")
+        grpHint = QtWidgets.QGroupBox("Data Setup")
         hint_lay = QtWidgets.QVBoxLayout(grpHint)
         hint_lay.setSpacing(4)
         for text in (
-            "・DEMは汎用データか地形解析を行う箇所のデータを選択してください",
-            "・DSM/DTMデータは地形解析を行う範囲のデータを選択してください",
-            "・標高ソースは地表データのDEMデータ設定と範囲を同じくするデータを選んでください",
+            "- Select a general-purpose DEM or one covering the analysis area.",
+            "- Select a DSM/DTM that covers the same area as the DEM.",
+            "- The elevation source should match the DEM extent.",
             "",
-            "【TIF / ZIP の配置】",
-            "・単体TIF: そのままファイルを選択",
-            "・ZIP 1枚: ZIP内にTIFが入っている場合はZIPを直接選択",
-            "・複数ZIP結合: 同一地域の複数ZIPを1つのフォルダに配置し、そのフォルダを選択\n"
-            "　（親フォルダに merged_<フォルダ名>.tif が自動生成されます）",
-            "・結合後TIF: 生成された merged_*.tif を直接選択することで再結合を省けます",
+            "[TIF / ZIP Layout]",
+            "- Single TIF: select the file directly.",
+            "- Single ZIP (containing a TIF): select the ZIP directly.",
+            "- Multiple ZIPs (same region): place all ZIPs in one folder and select that folder.\n"
+            "  A merged_<folder>.tif is auto-generated in the parent folder.",
+            "- Reuse merged TIF: select the generated merged_*.tif to skip re-merging.",
         ):
             lbl = QtWidgets.QLabel(text)
             lbl.setWordWrap(True)
@@ -1058,13 +1062,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.tabTerrain = QtWidgets.QWidget()
         self._build_terrain_tab(self.tabTerrain)
         # タブ順: 地形データ設定 → 地形解析
-        self.leftTabs.addTab(self.tabDataSettings, "地形データ設定")
-        self.leftTabs.addTab(self.tabTerrain,      "地形解析")
+        self.leftTabs.addTab(self.tabDataSettings, "Terrain Data")
+        self.leftTabs.addTab(self.tabTerrain,      "Analysis")
 
         left_layout.addWidget(self.leftTabs)
 
         # ── 解析データの表示管理（プレビュー上部・2行）────────────────
-        grpDisplayMgmt = QtWidgets.QGroupBox("解析データの表示管理")
+        grpDisplayMgmt = QtWidgets.QGroupBox("Analysis Layer Display")
         dm_vlay = QtWidgets.QVBoxLayout(grpDisplayMgmt)
         dm_vlay.setContentsMargins(6, 2, 6, 4)
         dm_vlay.setSpacing(2)
@@ -1096,20 +1100,23 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if _fb is not None:
                 dm_row2.addWidget(_fb)
             dm_row2.addSpacing(4)
-        dm_row2.addSpacing(12)
-        # レイヤー表示 ON/OFF + 透過率（GPKGレイヤ / タイルレイヤ / 背景地図）
+        dm_row2.addStretch(1)
+        self.chkMapLock = QtWidgets.QCheckBox("Lock Map")
+        dm_row2.addWidget(self.chkMapLock)
+        dm_vlay.addLayout(dm_row2)
+        # Row3: レイヤー表示 ON/OFF + 透過率（GPKG / Tile / Background）
+        dm_row3 = QtWidgets.QHBoxLayout()
+        dm_row3.setSpacing(2)
         for _b, _sp in (
             (self.btnGpkgLayerVis, self.spinGpkgOpacity),
             (self.btnTileLayerVis, self.spinTileOpacity),
             (self.btnBgLayerVis,   self.spinBgOpacity),
         ):
-            dm_row2.addWidget(_b)
-            dm_row2.addWidget(_sp)
-            dm_row2.addSpacing(2)
-        dm_row2.addStretch(1)
-        self.chkMapLock = QtWidgets.QCheckBox("地図をロック")
-        dm_row2.addWidget(self.chkMapLock)
-        dm_vlay.addLayout(dm_row2)
+            dm_row3.addWidget(_b)
+            dm_row3.addWidget(_sp)
+            dm_row3.addSpacing(2)
+        dm_row3.addStretch(1)
+        dm_vlay.addLayout(dm_row3)
 
         right_layout.addWidget(grpDisplayMgmt)
         right_layout.addWidget(self.grpPreviewCanvas, stretch=1)
@@ -1148,12 +1155,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._exclusive_hidden = {}        # 排他非表示中のキー → 保存済みcycle state
 
         # --- 解析種別 ---
-        grpTypes = QtWidgets.QGroupBox("解析種別")
+        grpTypes = QtWidgets.QGroupBox("Analysis Types")
         types_lay = QtWidgets.QHBoxLayout(grpTypes)
         types_lay.setContentsMargins(6, 6, 6, 6)
-        self.chkStability = QtWidgets.QCheckBox("斜面安定")
-        self.chkValley    = QtWidgets.QCheckBox("沢地形")
-        self.chkFlow      = QtWidgets.QCheckBox("流量推測")
+        self.chkStability = QtWidgets.QCheckBox("Slope Stability")
+        self.chkValley    = QtWidgets.QCheckBox("Valley Terrain")
+        self.chkFlow      = QtWidgets.QCheckBox("Flow Estimation")
         self.chkStability.setChecked(True)
         self.chkValley.setChecked(True)
         for chk in (self.chkStability, self.chkValley, self.chkFlow):
@@ -1161,8 +1168,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         lay.addWidget(grpTypes)
 
         # --- 斜面安定 パラメータ ---
-        self.grpParamStability = QtWidgets.QGroupBox("斜面安定（無限斜面モデル） パラメータ")
+        self.grpParamStability = QtWidgets.QGroupBox("Slope Stability Parameters")
         ps_lay = QtWidgets.QGridLayout(self.grpParamStability)
+        ps_lay.setVerticalSpacing(2)
+        ps_lay.setColumnStretch(0, 1)
         self.spinPhiDeg = QtWidgets.QDoubleSpinBox()
         self.spinPhiDeg.setRange(0, 60); self.spinPhiDeg.setValue(35); self.spinPhiDeg.setSuffix("°")
         self.spinCKpa   = QtWidgets.QDoubleSpinBox()
@@ -1173,85 +1182,93 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.spinMSat.setRange(0, 1);    self.spinMSat.setValue(0.5); self.spinMSat.setSingleStep(0.1)
         self.spinFsThresh = QtWidgets.QDoubleSpinBox()
         self.spinFsThresh.setRange(0.5, 3.0); self.spinFsThresh.setValue(1.5); self.spinFsThresh.setSingleStep(0.1)
-        for i, (lbl, w, hint) in enumerate([
-            ("内部摩擦角 φ'",       self.spinPhiDeg,   "表土の粒子の噛み合わせ：壌土30〜35°、礫混じり38°〜"),
-            ("粘着力 c'",            self.spinCKpa,     "表土の粘り：砂質若齢林=0、礫混じり壌土=5 kPa"),
-            ("土壌深度 z",           self.spinZm,       "表土の厚さ：硬い層（色・硬さ・粒径の変わり目）まで"),
-            ("飽和率 m",             self.spinMSat,     "0〜1（0=乾燥、0.5=半飽和、1=完全飽和）"),
-            ("FS 閾値（要注意以下）", self.spinFsThresh, "0.5〜3.0（要注意 ≤1.5、危険 ≤1.0）"),
-        ]):
+        _ps_defs = [
+            ("内部摩擦角 φ'",       "Friction angle φ'",  self.spinPhiDeg,   "Loam: 30–35°, gravel mix: 38°+"),
+            ("粘着力 c'",            "Cohesion c'",         self.spinCKpa,     "Sandy young forest: 0, gravelly loam: 5 kPa"),
+            ("土壌深度 z",           "Soil depth z",        self.spinZm,       "Depth to hard layer (change in color/hardness/grain size)"),
+            ("飽和率 m",             "Saturation m",        self.spinMSat,     "0–1  (0=dry, 0.5=half-saturated, 1=fully saturated)"),
+            ("FS 閾値（要注意以下）", "FS threshold",        self.spinFsThresh, "0.5–3.0  (caution ≤1.5, danger ≤1.0)"),
+        ]
+        for i, (ja, en, w, hint) in enumerate(_ps_defs):
             row = i * 2
-            ps_lay.addWidget(QtWidgets.QLabel(lbl), row, 0)
+            ql = QtWidgets.QLabel(en)
+            ps_lay.addWidget(ql, row, 0)
             ps_lay.addWidget(w, row, 1)
             _hl = QtWidgets.QLabel(hint)
-            _hl.setStyleSheet("color:#888;font-size:8pt;")
+            _hl.setStyleSheet("color:#888;font-size:8pt;margin-bottom:10px;")
             ps_lay.addWidget(_hl, row + 1, 0, 1, 2)
+        ps_lay.setRowStretch(len(_ps_defs) * 2, 1)
 
         # --- 沢地形 パラメータ ---
-        self.grpParamValley = QtWidgets.QGroupBox("沢地形（TWI） パラメータ")
-        pv_outer = QtWidgets.QVBoxLayout(self.grpParamValley)
-        pv_lay = QtWidgets.QHBoxLayout()
+        self.grpParamValley = QtWidgets.QGroupBox("Valley Terrain (TWI) Parameters")
+        pv_lay = QtWidgets.QGridLayout(self.grpParamValley)
+        pv_lay.setVerticalSpacing(2)
+        pv_lay.setColumnStretch(0, 1)
         self.spinTwiThresh = QtWidgets.QDoubleSpinBox()
         self.spinTwiThresh.setRange(1, 20); self.spinTwiThresh.setValue(8.0); self.spinTwiThresh.setSingleStep(0.5)
         self.spinMinArea = QtWidgets.QDoubleSpinBox()
         self.spinMinArea.setRange(100, 100000); self.spinMinArea.setValue(1000); self.spinMinArea.setSuffix(" m²"); self.spinMinArea.setSingleStep(500)
-        for lbl, w in [("TWI 閾値", self.spinTwiThresh), ("最小集水面積", self.spinMinArea)]:
-            pv_lay.addWidget(QtWidgets.QLabel(lbl))
-            pv_lay.addWidget(w)
-        pv_outer.addLayout(pv_lay)
-        _pv_hl = QtWidgets.QLabel("TWI閾値: 1〜20（大=湿潤地形強調）　最小集水面積: 100〜100000 m²")
-        _pv_hl.setStyleSheet("color:#888;font-size:8pt;")
-        pv_outer.addWidget(_pv_hl)
+        _pv_defs = [
+            ("TWI Threshold",       self.spinTwiThresh, "1–20  (higher = more wetland areas captured)"),
+            ("Min. Catchment Area", self.spinMinArea,   "100–100000 m²  (smaller = finer stream network)"),
+        ]
+        for i, (en, w, hint) in enumerate(_pv_defs):
+            row = i * 2
+            ql = QtWidgets.QLabel(en)
+            pv_lay.addWidget(ql, row, 0)
+            pv_lay.addWidget(w, row, 1)
+            _hl = QtWidgets.QLabel(hint)
+            _hl.setStyleSheet("color:#888;font-size:8pt;margin-bottom:10px;")
+            pv_lay.addWidget(_hl, row + 1, 0, 1, 2)
+        pv_lay.setRowStretch(len(_pv_defs) * 2, 1)
 
         # --- 流量 パラメータ ---
-        self.grpParamFlow = QtWidgets.QGroupBox("流量（修正合理式・到達時間考慮） パラメータ")
+        self.grpParamFlow = QtWidgets.QGroupBox("Flow (Rational Method) Parameters")
         pf_lay = QtWidgets.QGridLayout(self.grpParamFlow)
-        pf_lay.setSpacing(4)
+        pf_lay.setVerticalSpacing(2)
+        pf_lay.setColumnStretch(0, 1)
         self.spinRainfall = QtWidgets.QDoubleSpinBox()
         self.spinRainfall.setRange(1, 500); self.spinRainfall.setValue(50); self.spinRainfall.setSuffix(" mm/h")
-        self.spinRainfall.setToolTip("最大降雨強度 i_peak（Qp計算に使用）")
+        self.spinRainfall.setToolTip("Peak rainfall intensity i_peak (used for Qp calculation)")
         self.spinRunoff   = QtWidgets.QDoubleSpinBox()
         self.spinRunoff.setRange(0.1, 1.0); self.spinRunoff.setValue(0.8); self.spinRunoff.setSingleStep(0.05)
-        self.spinRunoff.setToolTip("流出係数 C")
+        self.spinRunoff.setToolTip("Runoff coefficient C")
         self.spinTotalRainfall = QtWidgets.QDoubleSpinBox()
         self.spinTotalRainfall.setRange(1, 2000); self.spinTotalRainfall.setValue(100); self.spinTotalRainfall.setSuffix(" mm")
-        self.spinTotalRainfall.setToolTip("期間総降水量（Qm・V計算に使用）")
+        self.spinTotalRainfall.setToolTip("Total rainfall for period (used for Qm/V calculation)")
         self.spinDuration = QtWidgets.QDoubleSpinBox()
         self.spinDuration.setRange(0.5, 72); self.spinDuration.setValue(6.0); self.spinDuration.setSuffix(" h"); self.spinDuration.setSingleStep(0.5)
-        self.spinDuration.setToolTip("降雨継続時間 T（Tc比較の基準時間）")
+        self.spinDuration.setToolTip("Rainfall duration T (reference time vs Tc)")
         self.spinVelocityCoef = QtWidgets.QDoubleSpinBox()
         self.spinVelocityCoef.setRange(0.01, 5.0); self.spinVelocityCoef.setValue(0.3)
         self.spinVelocityCoef.setSingleStep(0.05); self.spinVelocityCoef.setDecimals(2)
-        self.spinVelocityCoef.setToolTip("流速係数 v_coef [m/s]  velocity = v_coef × tan(slope)^0.5\n林地：0.3、草地：0.6、舗装面：1.5")
-        for col, (lbl, w) in enumerate([
-            ("i_peak",    self.spinRainfall),
-            ("流出係数 C", self.spinRunoff),
-        ]):
-            pf_lay.addWidget(QtWidgets.QLabel(lbl), 0, col * 2)
-            pf_lay.addWidget(w, 0, col * 2 + 1)
-        _pf_h0 = QtWidgets.QLabel("降雨強度: 1〜500 mm/h　流出係数: 0.1〜1.0（森林0.3、草地0.6、裸地0.9）")
-        _pf_h0.setStyleSheet("color:#888;font-size:8pt;")
-        pf_lay.addWidget(_pf_h0, 1, 0, 1, 4)
-        for col, (lbl, w) in enumerate([
-            ("総降水量", self.spinTotalRainfall),
-            ("継続時間 T", self.spinDuration),
-        ]):
-            pf_lay.addWidget(QtWidgets.QLabel(lbl), 2, col * 2)
-            pf_lay.addWidget(w, 2, col * 2 + 1)
-        _pf_h2 = QtWidgets.QLabel("総降水量: 1〜2000 mm　継続時間: 0.5〜72 h（Tc比較の基準時間）")
-        _pf_h2.setStyleSheet("color:#888;font-size:8pt;")
-        pf_lay.addWidget(_pf_h2, 3, 0, 1, 4)
-        pf_lay.addWidget(QtWidgets.QLabel("流速係数 v_coef"), 4, 0)
-        pf_lay.addWidget(self.spinVelocityCoef, 4, 1, 1, 3)
-        _pf_h4 = QtWidgets.QLabel("0.01〜5.0 m/s（林地 0.3、草地 0.6、舗装面 1.5）")
-        _pf_h4.setStyleSheet("color:#888;font-size:8pt;")
-        pf_lay.addWidget(_pf_h4, 5, 0, 1, 4)
+        self.spinVelocityCoef.setToolTip("Flow velocity coef. v_coef [m/s]  velocity = v_coef × tan(slope)^0.5\nForest: 0.3, grass: 0.6, pavement: 1.5")
+        self._lbl_vel_coef = QtWidgets.QLabel("Flow velocity coef.")
+        _pf_defs = [
+            ("i_peak",              self.spinRainfall,      "Peak rainfall intensity  1–500 mm/h"),
+            ("Runoff coef. C",      self.spinRunoff,        "0.1–1.0  (forest 0.3, grass 0.6, bare soil 0.9)"),
+            ("Total rainfall",      self.spinTotalRainfall, "Total precipitation for the period  1–2000 mm"),
+            ("Duration T",          self.spinDuration,      "Rainfall duration vs. Tc  0.5–72 h"),
+            (self._lbl_vel_coef,    self.spinVelocityCoef,  "Forest 0.3, grass 0.6, pavement 1.5  (0.01–5.0 m/s)"),
+        ]
+        for i, (en, w, hint) in enumerate(_pf_defs):
+            row = i * 2
+            ql = en if isinstance(en, QtWidgets.QLabel) else QtWidgets.QLabel(en)
+            pf_lay.addWidget(ql, row, 0)
+            pf_lay.addWidget(w, row, 1)
+            _hl = QtWidgets.QLabel(hint)
+            _hl.setStyleSheet("color:#888;font-size:8pt;margin-bottom:10px;")
+            pf_lay.addWidget(_hl, row + 1, 0, 1, 2)
+        pf_lay.setRowStretch(len(_pf_defs) * 2, 1)
 
         # --- パラメータ タブ ---
         self.tabParams = QtWidgets.QTabWidget()
-        self.grpParamPlaceholder = QtWidgets.QGroupBox("パラメータ")
+        self.tabParams.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Minimum)
+        self.grpParamPlaceholder = QtWidgets.QGroupBox("Parameters")
         _ph_lay = QtWidgets.QVBoxLayout(self.grpParamPlaceholder)
-        _ph_lbl = QtWidgets.QLabel("解析項目を選択してください")
+        _ph_lbl = QtWidgets.QLabel("Select analysis types above")
         _ph_lbl.setAlignment(Qt.AlignCenter)
         _ph_lbl.setStyleSheet("color:#888;font-size:9pt;padding:12px 0;")
         _ph_lay.addWidget(_ph_lbl)
@@ -1259,177 +1276,42 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         lay.addWidget(self.grpParamPlaceholder)
 
         # --- 解析条件 ---
-        self.grpAnalysisCondition = QtWidgets.QGroupBox("解析条件")
+        self.grpAnalysisCondition = QtWidgets.QGroupBox("Analysis Conditions")
         self.grpAnalysisCondition.setStyleSheet(
             "QGroupBox{border:1px solid #ccc;border-radius:3px;margin-top:6px;padding:4px;}"
             "QGroupBox::title{subcontrol-origin:margin;left:6px;}"
         )
         _ac_lay = QtWidgets.QVBoxLayout(self.grpAnalysisCondition)
         _ac_lay.setContentsMargins(4, 2, 4, 4)
-        self.lblAnalysisCondition = QtWidgets.QLabel("解析番号を選択すると条件を表示します")
+        self.lblAnalysisCondition = QtWidgets.QLabel("Select a run to view conditions")
         self.lblAnalysisCondition.setWordWrap(True)
         self.lblAnalysisCondition.setStyleSheet("color:#555;font-size:8pt;")
         _ac_lay.addWidget(self.lblAnalysisCondition)
         lay.addWidget(self.grpAnalysisCondition)
 
-        # --- 設定ヒント ---
-        self.grpHint = QtWidgets.QGroupBox()
-        self.grpHint.setStyleSheet(
-            "QGroupBox{border:1px solid #ccc;border-radius:3px;"
-            "margin-top:0px;padding:4px 4px 0px 4px;}"
-        )
-        _hint_lay = QtWidgets.QVBoxLayout(self.grpHint)
-        _hint_lay.setContentsMargins(4, 4, 0, 4)
-        _hint_lay.setSpacing(2)
-        _hint_hdr = QtWidgets.QHBoxLayout()
-        _hint_title = QtWidgets.QLabel("設定ヒント")
-        _hint_title.setStyleSheet("font-weight:bold;font-size:8pt;")
-        self.btnHintToggle = QtWidgets.QPushButton("▼")
-        self.btnHintToggle.setCheckable(True)
-        self.btnHintToggle.setChecked(False)
-        self.btnHintToggle.setFixedSize(20, 18)
-        self.btnHintToggle.setFlat(True)
-        self.btnHintToggle.setStyleSheet("font-size:8pt;")
-        _hint_hdr.addWidget(_hint_title)
-        _hint_hdr.addStretch()
-        _hint_hdr.addWidget(self.btnHintToggle)
-        _hint_lay.addLayout(_hint_hdr)
-        self.wgtHintContent = QtWidgets.QWidget()
-        _hc_lay = QtWidgets.QVBoxLayout(self.wgtHintContent)
-        _hc_lay.setContentsMargins(0, 2, 0, 0)
-        self.lblHintText = QtWidgets.QLabel()
-        self.lblHintText.setWordWrap(True)
-        self.lblHintText.setStyleSheet("color:#444;font-size:8pt;")
-        _hc_lay.addWidget(self.lblHintText)
-        _hint_lay.addWidget(self.wgtHintContent)
-        lay.addWidget(self.grpHint)
 
         # --- 出力 ---
-        grpOut = QtWidgets.QGroupBox("出力")
+        grpOut = QtWidgets.QGroupBox("Output")
         out_lay = QtWidgets.QVBoxLayout(grpOut)
         self.lblOutDir = _ElidedPathLabel()
         self.lblOutDir.setStyleSheet("color:#555;font-size:8pt;text-decoration:underline;")
         self._update_out_dir_label()
         out_lay.addWidget(self.lblOutDir)
-        self.chkOverwrite = QtWidgets.QCheckBox("既存ファイルを上書き（データ増加を抑制）")
+        self.chkOverwrite = QtWidgets.QCheckBox("Overwrite existing files")
         self.chkOverwrite.setChecked(True)
         out_lay.addWidget(self.chkOverwrite)
-        self.btnRunAnalysis = QtWidgets.QPushButton("解析実行")
+        self.btnRunAnalysis = QtWidgets.QPushButton("Run Analysis")
         self.btnRunAnalysis.setMinimumHeight(32)
         out_lay.addWidget(self.btnRunAnalysis)
-        self.lblAnalysisStatus = QtWidgets.QLabel("待機中")
+        self.lblAnalysisStatus = QtWidgets.QLabel("Ready")
         self.lblAnalysisStatus.setWordWrap(True)
         out_lay.addWidget(self.lblAnalysisStatus)
+        self.progressAnalysis = QtWidgets.QProgressBar()
+        self.progressAnalysis.setRange(0, 0)
+        self.progressAnalysis.setVisible(False)
+        out_lay.addWidget(self.progressAnalysis)
         lay.addWidget(grpOut)
-
-        # --- データ解説 / 機能説明 タブ ---
-        _info_tabs = QtWidgets.QTabWidget()
-        _info_tabs.setStyleSheet("QTabWidget::pane{border:1px solid #ccc;}"
-                                 "QTabBar::tab{font-size:10px;padding:3px 8px;}")
-
-        # Tab 1: データ解説（ファイル一覧 + ロゴ）
-        _tab_memo = QtWidgets.QWidget()
-        _tab_memo_lay = QtWidgets.QVBoxLayout(_tab_memo)
-        _tab_memo_lay.setContentsMargins(4, 4, 4, 4)
-        _tab_memo_lay.setSpacing(4)
-
-        def _memo_col(items):
-            col = QtWidgets.QWidget()
-            col_lay = QtWidgets.QVBoxLayout(col)
-            col_lay.setContentsMargins(0, 0, 0, 0)
-            col_lay.setSpacing(2)
-            for fname, desc in items:
-                row = QtWidgets.QWidget()
-                rl = QtWidgets.QHBoxLayout(row)
-                rl.setContentsMargins(0, 0, 0, 0)
-                rl.setSpacing(3)
-                lbl_file = QtWidgets.QLabel(fname)
-                lbl_file.setStyleSheet("color:#555;font-size:10px;")
-                lbl_arrow = QtWidgets.QLabel("→")
-                lbl_arrow.setStyleSheet("color:#888;font-size:10px;")
-                lbl_desc = QtWidgets.QLabel(desc)
-                lbl_desc.setStyleSheet("font-size:10px;")
-                rl.addWidget(lbl_file)
-                rl.addWidget(lbl_arrow)
-                rl.addWidget(lbl_desc)
-                rl.addStretch()
-                col_lay.addWidget(row)
-            return col
-
-        _memo_cols = QtWidgets.QWidget()
-        memo_outer = QtWidgets.QHBoxLayout(_memo_cols)
-        memo_outer.setSpacing(8)
-        memo_outer.setContentsMargins(0, 0, 0, 0)
-        memo_outer.addWidget(_memo_col([
-            ("twi.tif",                   "排水・湧水・ぬかるみ"),
-            ("stability_fs.tif",          "斜面安定性"),
-            ("integrated_risk_index.tif", "総合リスク"),
-            ("integrated_high_risk.gpkg", "重点箇所"),
-        ]))
-        memo_outer.addWidget(_memo_col([
-            ("valley_zones.gpkg",  "沢形状・集水地形"),
-            ("flow_peak.tif",      "ピーク流量 Qp[m³/s]"),
-            ("flow_mean.tif",      "平均流量 Qm[m³/s]"),
-            ("flow_vtotal.tif",    "総流量体積 V[m³]"),
-        ]))
-        _tab_memo_lay.addWidget(_memo_cols)
-        _tab_memo_lay.addStretch()
-        _info_tabs.addTab(_tab_memo, "データ解説")
-
-        # Tab 2: 各機能の説明（1カラム）
-        _tab_func = QtWidgets.QWidget()
-        func_lay = QtWidgets.QVBoxLayout(_tab_func)
-        func_lay.setSpacing(4)
-        func_lay.setContentsMargins(6, 4, 6, 4)
-        _FUNC_DESCS = [
-            ("斜面安定",
-             "無限斜面モデルによる安定性係数 FS を算出。FS<1.0 で崩壊リスク、"
-             "FS<1.5 で注意域。土質パラメータ（φ・c・γ）と地形勾配・土層深から計算。"),
-            ("沢地形",
-             "DEMから集水地形・沢筋を抽出したベクターデータ。"
-             "路網や作業道計画での水系との干渉確認に使用。"),
-            ("湿潤地形",
-             "地形湿潤指数（TWI）ラスタ。値が高いほど水が集まりやすく排水不良・"
-             "地盤軟弱・ぬかるみリスクが高い。"),
-            ("流量推測",
-             "修正合理式（Q=CiA/360）による各セルのピーク・平均流量と総流量体積を推計。"
-             "DSM設定時は樹冠高から流出係数を地点ごとに可変。"),
-            ("総合リスク",
-             "FS・TWI・流量ピークを統合した加算型リスク指標（0〜6）。"
-             "複数の危険因子が重なる箇所を「重点箇所」ポリゴンで抽出。"),
-        ]
-        for title, desc in _FUNC_DESCS:
-            row_w = QtWidgets.QWidget()
-            row_l = QtWidgets.QVBoxLayout(row_w)
-            row_l.setContentsMargins(0, 2, 0, 2)
-            row_l.setSpacing(1)
-            lbl_t = QtWidgets.QLabel(f"■ {title}")
-            lbl_t.setStyleSheet("font-size:10px;font-weight:bold;")
-            lbl_d = QtWidgets.QLabel(desc)
-            lbl_d.setStyleSheet("font-size:10px;color:#444;")
-            lbl_d.setWordWrap(True)
-            row_l.addWidget(lbl_t)
-            row_l.addWidget(lbl_d)
-            func_lay.addWidget(row_w)
-        func_lay.addStretch()
-        _info_tabs.addTab(_tab_func, "機能説明")
-
-        _info_tabs.setCurrentIndex(0)
-        self._info_tabs = _info_tabs
-        lay.addWidget(_info_tabs)
-        lay.addStretch()
-
-        def _fit_info_tabs_height():
-            w = self._info_tabs.currentWidget()
-            if w is None:
-                return
-            lay_h = w.layout().sizeHint().height() if w.layout() else w.sizeHint().height()
-            bar_h = self._info_tabs.tabBar().sizeHint().height()
-            self._info_tabs.setMaximumHeight(bar_h + lay_h + 8)
-
-        self._info_tabs.currentChanged.connect(lambda _: _fit_info_tabs_height())
-        from qgis.PyQt.QtCore import QTimer
-        QTimer.singleShot(0, _fit_info_tabs_height)
+        lay.addStretch(1)
 
         # チェックボックス連動でパラメータタブを更新
         for _chk in (self.chkStability, self.chkValley, self.chkFlow):
@@ -1440,69 +1322,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                      self.grpParamFlow):
             _grp.installEventFilter(self)
         # ヒントセクション連動
-        self.btnHintToggle.toggled.connect(self._update_hint_visibility)
-        self.tabParams.currentChanged.connect(self._sync_hint_to_tab)
+
         self._sync_param_tabs()
 
-    _PARAM_HINTS = {
-        "斜面安定": (
-            "【概要】無限斜面モデルで斜面安定指数（FS）を算出します。\n"
-            "FSは傾斜角・内部摩擦角・粘着力・土壌深度・飽和率から計算されます。\n"
-            "FS ＜ 1.0：崩壊危険　FS ＜ FS閾値：要注意\n"
-            "※いずれのパラメータも「硬い層までの表土」の性質を入力します。\n"
-            "\n"
-            "【内部摩擦角 φ'】表土の粒子の噛み合わせ\n"
-            "現場で土を手に取り握って確認します。\n"
-            "・握ると形が残るが水を含むとドロッと崩れる → φ 20〜28°\n"
-            "  （細かい砂・粘土質・雨後に表面が流れた跡のある斜面）\n"
-            "・握ると固まるが砕ける → φ 30〜35°\n"
-            "  （一般的な杉・檜植林地の山土・壌土）\n"
-            "・握っても形にならずざらざらする → φ 38°〜\n"
-            "  （礫・岩屑混じり・尾根筋・岩盤に近い層）\n"
-            "\n"
-            "【粘着力 c'】表土の粘り・団結力\n"
-            "・砂質で根系の浅い若齢林 → 0 kPa\n"
-            "・礫混じり壌土・中齢林 → 5 kPa\n"
-            "・有機質を含む粘性土 → 10〜20 kPa\n"
-            "\n"
-            "【土壌深度 z】表土の厚さ（硬い層までの深さ）\n"
-            "バックホウや鉄芯で掘削・刺込み、層の変わり目\n"
-            "（色・硬さ・粒径が変わる箇所）までを計測します。\n"
-            "硬い層が滑り面の候補となります。\n"
-            "\n"
-            "【飽和率 m】\n"
-            "・0.5 = 半分濡れた状態（平常時）\n"
-            "・0.9 = 大雨後の状態\n"
-            "\n"
-            "【FS閾値】1.5以下を危険、2.5以下を要注意など\n"
-            "基準を変えて分布の変化を確認してください。\n"
-            "※現場試験値がある場合はそちらを優先してください。"
-        ),
-        "沢地形": (
-            "【概要】TWI（地形湿潤指数）＝ ln(A / tan(β)) で湿潤帯を識別します。\n"
-            "値が大きいほど水が集まりやすい谷・低地を示します。\n"
-            "\n"
-            "【各パラメータの考え方】\n"
-            "・TWI閾値：設定値以下を乾燥地形としてフィルタリングします。\n"
-            "  8.0にすると湿りやすい谷部を中心に抽出。値を上げると乾燥地とみなす\n"
-            "  箇所が増え、湿潤地が拾えなくなります。\n"
-            "・最小集水面積：小さい水みちを除外する下限サイズ。小さい値ほど\n"
-            "  細かい沢地形も検出されます。"
-        ),
-        "流量": (
-            "【概要】修正合理式＋到達時間（Tc）ルーティングで流量を推定します。\n"
-            "Q ＝ (1/360)×C×i×A_eff　A_eff ＝ A×min(1, T/Tc)\n"
-            "継続時間 T が Tc より短い集水域は流量が抑制されます。\n"
-            "\n"
-            "【各パラメータの考え方】\n"
-            "・i_peak（最大降雨強度）：50mm/hで「1時間50mmの豪雨」を想定。\n"
-            "・流出係数 C：0.8なら雨の約8割が地表流として計算されます。\n"
-            "・総降水量：100mmで降り始めから終わりまで合計100mmのケース。\n"
-            "・継続時間 T：6hで6時間続く降雨として平均流量・総流量を計算。\n"
-            "・流速係数：林地 0.3、草地 0.6、舗装面 1.5 m/s が目安。\n"
-            "  ※DSM/DTMを設定した場合、流出係数・流速係数は樹冠高さから自動計算。"
-        ),
-    }
 
     def eventFilter(self, obj, event):
         """タブバー空白 / パラメータ表示領域背景クリックで次タブへ切り替える。"""
@@ -1520,29 +1342,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 return True
         return super().eventFilter(obj, event)
 
-    def _update_hint_visibility(self):
-        """ヒントセクションの表示状態を更新する。"""
-        # isVisible() は起動時に親ウィジェット未表示でFalseになるため count() のみで判定
-        has_tabs = self.tabParams.count() > 0
-        self.grpHint.setVisible(has_tabs)
-        if has_tabs:
-            show = self.btnHintToggle.isChecked()
-            self.wgtHintContent.setVisible(show)
-            self.btnHintToggle.setText("▲" if show else "▼")
-            self._sync_hint_to_tab()
-
-    def _sync_hint_to_tab(self):
-        """現在のタブに対応するヒントテキストを更新する。"""
-        idx = self.tabParams.currentIndex()
-        label = self.tabParams.tabText(idx) if idx >= 0 else ""
-        self.lblHintText.setText(self._PARAM_HINTS.get(label, ""))
 
     def _sync_param_tabs(self):
         """解析種別チェックに応じてパラメータタブを更新する。"""
         ITEMS = [
-            (self.chkStability, self.grpParamStability, "斜面安定"),
-            (self.chkValley,    self.grpParamValley,    "沢地形"),
-            (self.chkFlow,      self.grpParamFlow,      "流量"),
+            (self.chkStability, self.grpParamStability, "Slope Stability"),
+            (self.chkValley,    self.grpParamValley,    "Valley Terrain"),
+            (self.chkFlow,      self.grpParamFlow,      "Flow"),
         ]
         # 現在のタブ構成を一旦クリア（ウィジェットは破棄しない）
         while self.tabParams.count() > 0:
@@ -1553,7 +1359,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         has_tabs = self.tabParams.count() > 0
         self.tabParams.setVisible(has_tabs)
         self.grpParamPlaceholder.setVisible(not has_tabs)
-        self._update_hint_visibility()
 
     def _connect_extended_signals(self):
         self.btnRefreshLayerList.clicked.connect(self._refresh_layer_combos)
@@ -1601,9 +1406,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
     def _refresh_layer_combos(self, *args):
         del args
-        bg_data = [("なし", "")]
-        tile_data = [("なし", "")]
-        gpkg_data = [("なし", "")]
+        bg_data = [("None", "")]
+        tile_data = [("None", "")]
+        gpkg_data = [("None", "")]
         terrain_ids = {
             lid
             for ids in getattr(self, "_loaded_terrain_layers", {}).values()
@@ -1653,7 +1458,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         previous = self.cmbTerrainSourceChoice.currentData()
         self.cmbTerrainSourceChoice.blockSignals(True)
         self.cmbTerrainSourceChoice.clear()
-        self.cmbTerrainSourceChoice.addItem("ソースを選択...", None)
+        self.cmbTerrainSourceChoice.addItem("Select source...", None)
 
         terrain_ids = {
             lid
@@ -1667,7 +1472,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 )
         for name, url in self._saved_xyz_connections():
             self.cmbTerrainSourceChoice.addItem(
-                "[XYZ設定] {}".format(name), ("xyz", url, name)
+                "[XYZ] {}".format(name), ("xyz", url, name)
             )
 
         idx = self.cmbTerrainSourceChoice.findData(previous)
@@ -1676,7 +1481,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.cmbTerrainSourceChoice.blockSignals(False)
 
         if self.cmbTerrainSourceChoice.count() <= 1:
-            self.lblStatus.setText("ラスタレイヤまたは保存済みXYZ設定が見つかりません。")
+            self.lblStatus.setText("No raster layer or saved XYZ source found.")
 
     @staticmethod
     def _set_combo_data(combo, data):
@@ -1696,7 +1501,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         center = self.preview_canvas.center()
         scale = self.preview_canvas.scale()
         crs = self.preview_canvas.mapSettings().destinationCrs()
-        crs_text = crs.authid() if crs.isValid() else "CRS不明"
+        crs_text = crs.authid() if crs.isValid() else "Unknown CRS"
         self.lblPreviewStatus.setText("{:.2f}, {:.2f}".format(center.x(), center.y()))
         self.lblPreviewStatusScale.setText("1 : {:,}".format(int(round(scale))))
         self.lblPreviewStatusCrs.setText(crs_text)
@@ -2144,7 +1949,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def load_xyz_terrain(self):
         choice = self.cmbTerrainSourceChoice.currentData()
         if not choice:
-            self.lblStatus.setText("地形ソースを選択してください。")
+            self.lblStatus.setText("Select a terrain source.")
             return
         if choice[0] == "layer":
             layer_id = choice[1]
@@ -2152,17 +1957,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if idx >= 0:
                 self.cmbTileLayer.setCurrentIndex(idx)
                 self._refresh_preview_canvas()
-                self.lblStatus.setText("既存ラスタレイヤを地形として設定しました。")
+                self.lblStatus.setText("Raster layer set as terrain source.")
             else:
-                self.lblStatus.setText("選択したレイヤが利用できません。")
+                self.lblStatus.setText("Selected layer is unavailable.")
             return
         if choice[0] == "xyz":
             url = choice[1]
             name = choice[2]
             uri = "type=xyz&url={}".format(url)
-            layer = QgsRasterLayer(uri, "地形XYZ ({})".format(name), "wms")
+            layer = QgsRasterLayer(uri, "Terrain XYZ ({})".format(name), "wms")
             if not layer.isValid():
-                self.lblStatus.setText("保存済みXYZの読み込みに失敗しました。")
+                self.lblStatus.setText("Failed to load saved XYZ source.")
                 return
             QgsProject.instance().addMapLayer(layer)
             self._refresh_layer_combos()
@@ -2170,7 +1975,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if idx >= 0:
                 self.cmbTileLayer.setCurrentIndex(idx)
             self._refresh_preview_canvas()
-            self.lblStatus.setText("保存済みXYZを読み込みました。")
+            self.lblStatus.setText("Saved XYZ source loaded.")
 
     # ------------------------------------------------------------------ #
     #  地形解析                                                            #
@@ -2236,10 +2041,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 (4.0, QColor( 26, 150,  65), "4"),
             ],
             "integrated_risk_index": [
-                (0.0, QColor( 60, 180,  60), "低 0"),
-                (2.0, QColor(255, 220,   0), "中 2"),
-                (3.0, QColor(255, 130,   0), "高 3"),
-                (5.0, QColor(200,   0,   0), "最高 5"),
+                (0.0, QColor( 60, 180,  60), "Low 0"),
+                (2.0, QColor(255, 220,   0), "Mid 2"),
+                (3.0, QColor(255, 130,   0), "High 3"),
+                (5.0, QColor(200,   0,   0), "Max 5"),
             ],
         }
 
@@ -2249,41 +2054,41 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             "tc": {
                 "log": False,
                 "colors": [
-                    (QColor(255, 255, 220), "短（出口付近）"),
-                    (QColor(180, 210, 140), "中"),
-                    (QColor( 50, 120,  50), "長（山頂付近）"),
+                    (QColor(255, 255, 220), "Short (near outlet)"),
+                    (QColor(180, 210, 140), "Mid"),
+                    (QColor( 50, 120,  50), "Long (near summit)"),
                 ],
             },
             "twi": {
                 "log": False,
                 "colors": [
-                    (QColor(255, 255, 200), "低"),
-                    (QColor( 70, 130, 230), "中"),
-                    (QColor(  0,  50, 180), "高"),
+                    (QColor(255, 255, 200), "Low"),
+                    (QColor( 70, 130, 230), "Mid"),
+                    (QColor(  0,  50, 180), "High"),
                 ],
             },
             "flow_peak": {
                 "log": True,
                 "colors": [
-                    (QColor(255, 235, 230), "低"),
-                    (QColor(220,  70,  40), "中"),
-                    (QColor(150,   0,   0), "高"),
+                    (QColor(255, 235, 230), "Low"),
+                    (QColor(220,  70,  40), "Mid"),
+                    (QColor(150,   0,   0), "High"),
                 ],
             },
             "flow_mean": {
                 "log": True,
                 "colors": [
-                    (QColor(255, 240, 220), "低"),
-                    (QColor(235, 120,  30), "中"),
-                    (QColor(170,  50,   0), "高"),
+                    (QColor(255, 240, 220), "Low"),
+                    (QColor(235, 120,  30), "Mid"),
+                    (QColor(170,  50,   0), "High"),
                 ],
             },
             "flow_vtotal": {
                 "log": True,
                 "colors": [
-                    (QColor(255, 228, 232), "低"),
-                    (QColor(210,  50,  80), "中"),
-                    (QColor(130,   0,  45), "高"),
+                    (QColor(255, 228, 232), "Low"),
+                    (QColor(210,  50,  80), "Mid"),
+                    (QColor(130,   0,  45), "High"),
                 ],
             },
         }
@@ -2408,7 +2213,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _cycle_flow_buffer(self):
         """流量レイヤーのバッファ（滲み）表現を off→弱→強→off と循環する。"""
         states = ["off", "weak", "strong"]
-        labels = {"off": "バッファ：切", "weak": "バッファ：弱", "strong": "バッファ：強"}
+        labels = {
+            "off":    "Buffer: Off",
+            "weak":   "Buffer: Low",
+            "strong": "Buffer: High",
+        }
         cur = self._flow_buffer_state
         nxt = states[(states.index(cur) + 1) % len(states)]
         self._flow_buffer_state = nxt
@@ -2485,7 +2294,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             out.FlushCache()
             out = None
 
-            blur_lyr = QgsRasterLayer(mem_path, f"{lyr.name()} 滲み")
+            blur_lyr = QgsRasterLayer(mem_path, f"{lyr.name()} blur")
             if not blur_lyr.isValid():
                 continue
 
@@ -2515,31 +2324,31 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     # (base_name, label, kind, ext)  ← 解析番号プレフィクスは _toggle_terrain_layer で付加
     _TERRAIN_PATTERNS = {
         "stability": [
-            ("stability_fs",  "斜面安定FS", "raster", ".tif"),
+            ("stability_fs",  "Slope Stability FS", "raster", ".tif"),
         ],
         "valley": [
-            ("valley_zones",  "沢地形", "vector", ".gpkg"),
+            ("valley_zones",  "Valley Terrain", "vector", ".gpkg"),
         ],
         "wetland": [
-            ("twi",  "湿潤地形", "raster", ".tif"),
+            ("twi",  "Wetland Terrain", "raster", ".tif"),
         ],
         "flow": [
-            ("flow_peak",   "ピーク流量：Qp[m³/s]",  "raster", ".tif"),
-            ("flow_mean",   "平均流量：Qm[m³/s]",    "raster", ".tif"),
-            ("flow_vtotal", "総流量体積：V[m³]",      "raster", ".tif"),
+            ("flow_peak",   "Peak Flow: Qp[m³/s]",   "raster", ".tif"),
+            ("flow_mean",   "Mean Flow: Qm[m³/s]",   "raster", ".tif"),
+            ("flow_vtotal", "Total Flow Vol.: V[m³]", "raster", ".tif"),
         ],
         "integrated": [
-            ("integrated_risk_index", "総合リスク指標", "raster", ".tif"),
-            ("integrated_high_risk",  "重点箇所",       "vector", ".gpkg"),
+            ("integrated_risk_index", "Overall Risk Index", "raster", ".tif"),
+            ("integrated_high_risk",  "High Risk Areas",    "vector", ".gpkg"),
         ],
     }
 
     _BTN_LABELS = {
-        "stability": ("斜面安定",   None),
-        "valley":    ("沢地形",     None),
-        "wetland":   ("湿潤地形",   None),
-        "flow":      ("流量推測",   None),
-        "integrated":("総合リスク", None),
+        "stability": ("Slope Stability",  None),
+        "valley":    ("Valley Terrain",   None),
+        "wetland":   ("Wetland Terrain",  None),
+        "flow":      ("Flow Estimation",  None),
+        "integrated":("Overall Risk",     None),
     }
 
     # レイヤパネル内の順序: 値が大きいほど上（描画上位）
@@ -2651,7 +2460,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         base_label = self._BTN_LABELS[key][0]
 
         if not analysis_number:
-            self.lblLoadStatus.setText("解析番号を選択してください")
+            self.lblLoadStatus.setText("Select an analysis run")
             btn.blockSignals(True)
             btn.setChecked(False)
             btn.blockSignals(False)
@@ -2667,7 +2476,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 available.append((color_name, label, kind, path))
 
         if not available:
-            self.lblLoadStatus.setText("ファイルなし")
+            self.lblLoadStatus.setText("No file")
             btn.blockSignals(True)
             btn.setChecked(False)
             btn.blockSignals(False)
@@ -2750,13 +2559,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if self.preview_canvas is not None:
                 self._zoom_preview_to_layer_if_needed(lyr)
             self._zoom_preview_to_analysis_extent_if_available()
-            status = f"{label}（{next_state + 1}/{n}）を表示しました。" if n > 1 else f"{label}を表示しました。"
+            status = f"Showing {label} ({next_state + 1}/{n})." if n > 1 else f"Showing {label}."
             self.lblLoadStatus.setText(status)
             # 流量レイヤー切替後にバッファ状態を引き継ぐ
             if key == "flow" and self._flow_buffer_state != "off":
                 self._apply_flow_buffer()
         else:
-            self.lblLoadStatus.setText(f"読込エラー: {label}")
+            self.lblLoadStatus.setText(f"Load error: {label}")
             self._terrain_cycle_state[key] = current  # 状態を戻す
 
         btn.blockSignals(True)
@@ -2771,7 +2580,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         if checked:
             analysis_number = self.cmbAnalysisNumber.currentData()
             if not analysis_number:
-                self.lblLoadStatus.setText("解析番号を選択してください")
+                self.lblLoadStatus.setText("Select an analysis run")
                 btn_map = {
                     "stability":  self.chkLoadStability,
                     "valley":     self.chkLoadValley,
@@ -2820,16 +2629,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self._refresh_preview_canvas()
             self._zoom_preview_to_analysis_extent_if_available()
             if added:
-                names = "、".join(added)
+                names = ", ".join(added)
                 n_added = len(added)
                 n_total = len(self._TERRAIN_PATTERNS[key])
                 if n_added > 1 or n_total > 1:
-                    status = f"{names}（{n_added}/{n_total}）を表示しました。"
+                    status = f"Showing {names} ({n_added}/{n_total})."
                 else:
-                    status = f"{names}を表示しました。"
+                    status = f"Showing {names}."
                 self.lblLoadStatus.setText(status)
             else:
-                self.lblLoadStatus.setText("ファイルなし")
+                self.lblLoadStatus.setText("No file")
         else:
             ids = self._loaded_terrain_layers.pop(key, [])
             proj = QgsProject.instance()
@@ -2847,8 +2656,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self._terrain_loader = None
             self.txtDemPath.clear()
             self.txtDemPath.setToolTip("")
-            self.lblDemInfo.setText("未設定")
-            self.btnBrowseDem.setText("参照")
+            self.lblDemInfo.setText("Not set")
+            self.btnBrowseDem.setText("Browse")
             return
         initial_dir = ""
         dlg = DemBrowserDialog(self.preview_canvas, initial_dir=initial_dir, parent=self)
@@ -2857,16 +2666,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if not path:
                 return
             _gsi_labels = {
-                DemBrowserDialog.GSI_DEM1A_SENTINEL:  ("国土地理院 DEM1A (1m)",  "DEM1A 1m メッシュをキャンバス範囲で取得"),
-                DemBrowserDialog.GSI_DEM5A_SENTINEL:  ("国土地理院 DEM5A (5m)",  "DEM5A 5m メッシュをキャンバス範囲で取得"),
-                DemBrowserDialog.GSI_DEM10B_SENTINEL: ("国土地理院 DEM10B (10m)", "DEM10B 10m メッシュをキャンバス範囲で取得"),
+                DemBrowserDialog.GSI_DEM1A_SENTINEL:  ("GSI DEM1A (1m)",  "Fetch DEM1A 1m tiles for canvas extent"),
+                DemBrowserDialog.GSI_DEM5A_SENTINEL:  ("GSI DEM5A (5m)",  "Fetch DEM5A 5m tiles for canvas extent"),
+                DemBrowserDialog.GSI_DEM10B_SENTINEL: ("GSI DEM10B (10m)", "Fetch DEM10B 10m tiles for canvas extent"),
             }
             if path in _gsi_labels:
                 display, tooltip = _gsi_labels[path]
                 self._dem_path = path
                 self.txtDemPath.setText(display)
-                self.txtDemPath.setToolTip(f"国土地理院 標高タイル ({tooltip})")
-                self.btnBrowseDem.setText("解除")
+                self.txtDemPath.setToolTip(f"GSI elevation tile ({tooltip})")
+                self.btnBrowseDem.setText("Clear")
                 self._load_gsi_dem(path)
             else:
                 # ローカルファイル（従来処理）
@@ -2906,7 +2715,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         sources, fname_prefix = _SOURCE_MAP.get(sentinel, _SOURCE_MAP[_S.GSI_DEM5A_SENTINEL])
 
         if self.preview_canvas is None or self.preview_canvas.extent().isEmpty():
-            self.lblDemInfo.setText("⚠ キャンバスに表示範囲がありません。地図を表示してから再試行してください。")
+            self.lblDemInfo.setText("⚠ No extent on preview canvas. Display a map and try again.")
             return
 
         canvas_ext = self.preview_canvas.extent()
@@ -2915,7 +2724,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         xform = QgsCoordinateTransform(canvas_crs, wgs84, QgsProject.instance())
         ext84 = xform.transformBoundingBox(canvas_ext)
 
-        self.lblDemInfo.setText("国土地理院タイル取得中…")
+        self.lblDemInfo.setText("Fetching GSI elevation tiles...")
         QtWidgets.QApplication.processEvents()
 
         gsi_loader = GSITileDEMLoader()
@@ -2931,8 +2740,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         if gsi_loader.data is None or _np.all(_np.isnan(gsi_loader.data)):
             errs = getattr(gsi_loader, "last_errors", [])
-            detail = errs[0] if errs else "範囲外または通信エラー"
-            self.lblDemInfo.setText(f"⚠ タイル取得失敗: {detail}")
+            detail = errs[0] if errs else "out of range or connection error"
+            self.lblDemInfo.setText(f"⚠ Tile fetch failed: {detail}")
             return
 
         # GeoTIFF として保存
@@ -2941,13 +2750,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         tif_path = os.path.join(out_dir, f"{fname_prefix}_{ts}.tif")
 
-        self.lblDemInfo.setText("GeoTIFF に変換中…")
+        self.lblDemInfo.setText("Converting to GeoTIFF...")
         QtWidgets.QApplication.processEvents()
 
         try:
             save_as_geotiff(gsi_loader, tif_path)
         except Exception as e:
-            self.lblDemInfo.setText(f"⚠ GeoTIFF 保存エラー: {e}")
+            self.lblDemInfo.setText(f"⚠ GeoTIFF save error: {e}")
             return
 
         # 標準 DEMLoader で読み直す
@@ -2966,6 +2775,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         if ext is None or ext.isEmpty():
             ext = self._get_analysis_extent()
         if ext is None or ext.isEmpty():
+            return
+        # 解析範囲がすでにプレビュー内に見えている場合はズームしない
+        if self.preview_canvas.extent().intersects(ext):
             return
         _prev = getattr(self, "_syncing", False)
         self._syncing = True
@@ -3030,9 +2842,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         home = QgsProject.instance().homePath()
         if home:
             out = os.path.join(home, "forestry_operations_lite")
-            self.lblOutDir.setPath("出力先: ", out)
+            self.lblOutDir.setPath("Output: ", out)
         else:
-            self.lblOutDir.setPath("出力先: プロジェクト未保存（保存後に確定）", "")
+            self.lblOutDir.setPath("Output: (save project first)", "")
 
     def _terrain_output_dir(self):
         """プロジェクトフォルダ/forestry_operations_lite を返す。未保存時はフォールバック。"""
@@ -3106,7 +2918,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         current = self.cmbAnalysisNumber.currentData()
         self.cmbAnalysisNumber.blockSignals(True)
         self.cmbAnalysisNumber.clear()
-        self.cmbAnalysisNumber.addItem("解析番号を選択", None)
+        self.cmbAnalysisNumber.addItem("Select run", None)
         numbers = self._scan_analysis_numbers()
         for num in numbers:
             self.cmbAnalysisNumber.addItem(num, num)
@@ -3141,7 +2953,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _create_terrain_group(self, analysis_number: str):
         """QGIS レイヤパネルに解析グループを作成する（折り畳み状態）"""
         root = QgsProject.instance().layerTreeRoot()
-        group = root.insertGroup(0, f"解析 {analysis_number}")
+        group = root.insertGroup(0, f"Run {analysis_number}")
         group.setExpanded(False)
         group.setCustomProperty(self._GROUP_PROP, "1")
         self._terrain_layer_group = group
@@ -3221,47 +3033,47 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         if lbl is None:
             return
         if not analysis_number:
-            lbl.setText("解析番号を選択すると条件を表示します")
+            lbl.setText("Select a run to view conditions")
             return
         out_dir = self._terrain_output_dir()
         params_path = os.path.join(out_dir, analysis_number, "params.json")
         if not os.path.exists(params_path):
-            lbl.setText("条件データなし（旧解析）")
+            lbl.setText("No condition data (legacy run)")
             return
         try:
             import json as _json
             with open(params_path, "r", encoding="utf-8") as f:
                 p = _json.load(f)
         except Exception:
-            lbl.setText("条件ファイル読み込みエラー")
+            lbl.setText("Error reading condition file")
             return
         parts = []
         analyses = p.get("analyses", [])
         if "flow" in analyses:
             parts.append(
-                f"流量: 継続{p.get('duration_h','-')}h・"
-                f"強度{p.get('rainfall_mmh','-')}mm/h・"
-                f"総量{p.get('total_mm','-')}mm"
+                f"Flow: {p.get('duration_h','-')}h · "
+                f"{p.get('rainfall_mmh','-')}mm/h · "
+                f"total {p.get('total_mm','-')}mm"
             )
         if "stability" in analyses:
             parts.append(
-                f"安定: φ{p.get('phi_deg','-')}°・"
-                f"C{p.get('c_kpa','-')}kPa・"
-                f"深{p.get('z_m','-')}m・"
-                f"飽和{p.get('m_sat','-')}"
+                f"Stability: φ{p.get('phi_deg','-')}° · "
+                f"C={p.get('c_kpa','-')}kPa · "
+                f"z={p.get('z_m','-')}m · "
+                f"m={p.get('m_sat','-')}"
             )
         if "valley" in analyses:
             parts.append(
-                f"沢: TWI閾値{p.get('twi_thresh','-')}・"
-                f"最小面積{p.get('min_area','-')}㎡"
+                f"Valley: TWI≥{p.get('twi_thresh','-')} · "
+                f"min area {p.get('min_area','-')} m²"
             )
-        lbl.setText("\n".join(parts) if parts else "条件なし")
+        lbl.setText("\n".join(parts) if parts else "No conditions")
 
     def _load_dem_info(self):
         path = self._dem_path
         if not path:
-            self.lblDemInfo.setText("未設定")
-            self.btnBrowseDem.setText("参照")
+            self.lblDemInfo.setText("Not set")
+            self.btnBrowseDem.setText("Browse")
             return
         try:
             from .terrain.dem_loader import DEMLoader
@@ -3270,9 +3082,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lblDemInfo.setText(loader.info_text())
             self._terrain_loader = loader
         except Exception as e:
-            self.lblDemInfo.setText(f"エラー: {e}")
+            self.lblDemInfo.setText(f"Error: {e}")
             self._terrain_loader = None
-        self.btnBrowseDem.setText("クリア")
+        self.btnBrowseDem.setText("Clear")
 
     def _on_browse_dsm(self):
         if self._dsm_path:
@@ -3281,8 +3093,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self._dsm_loader = None
             self.txtDsmPath.clear()
             self.txtDsmPath.setToolTip("")
-            self.lblDsmInfo.setText("未設定")
-            self.btnBrowseDsm.setText("参照")
+            self.lblDsmInfo.setText("Not set")
+            self.btnBrowseDsm.setText("Browse")
             self._update_flow_coef_state()
             return
         dlg = DemBrowserDialog(self.preview_canvas, "", self)
@@ -3297,9 +3109,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _load_dsm_info(self):
         path = self._dsm_path
         if not path:
-            self.lblDsmInfo.setText("未設定")
+            self.lblDsmInfo.setText("Not set")
             self._dsm_loader = None
-            self.btnBrowseDsm.setText("参照")
+            self.btnBrowseDsm.setText("Browse")
             self._update_flow_coef_state()
             return
         try:
@@ -3309,9 +3121,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lblDsmInfo.setText(loader.info_text())
             self._dsm_loader = loader
         except Exception as e:
-            self.lblDsmInfo.setText(f"エラー: {e}")
+            self.lblDsmInfo.setText(f"Error: {e}")
             self._dsm_loader = None
-        self.btnBrowseDsm.setText("クリア")
+        self.btnBrowseDsm.setText("Clear")
         self._update_flow_coef_state()
 
     def _update_flow_coef_state(self):
@@ -3320,7 +3132,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         for w in (self.spinRunoff, self.spinVelocityCoef):
             w.setEnabled(not has_dsm)
             w.setToolTip(
-                "DSM/DTM設定時はCS（樹冠高さ）から自動計算されます" if has_dsm
+                "Auto-calculated from canopy height when DSM/DTM is set" if has_dsm
                 else w.toolTip()
             )
 
@@ -3330,7 +3142,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.chkValley.isChecked(),
             self.chkFlow.isChecked(),
         ]):
-            self.lblAnalysisStatus.setText("解析種別を1つ以上選択してください。")
+            self.lblAnalysisStatus.setText("Select at least one analysis type.")
             return
 
         # GSI DEM ソースの場合は解析ごとに現在のキャンバス範囲で再取得・変換
@@ -3341,7 +3153,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         )
         if getattr(self, "_dem_path", "") in _GSI_SENTINELS:
             self._terrain_loader = None  # 古いデータをクリアしてから再取得
-            self.lblAnalysisStatus.setText("国土地理院タイル取得中…")
+            self.lblAnalysisStatus.setText("Fetching GSI elevation tiles...")
             QtWidgets.QApplication.processEvents()
             self._load_gsi_dem(self._dem_path)
 
@@ -3350,7 +3162,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self._load_dem_info()
             loader = getattr(self, "_terrain_loader", None)
         if loader is None:
-            self.lblAnalysisStatus.setText("DEM ファイルを指定してください。")
+            self.lblAnalysisStatus.setText("Specify a DEM file.")
             return
 
         out_dir = self._terrain_output_dir()
@@ -3369,7 +3181,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             dem = loader.clip_to_extent(ext.xMinimum(), ext.yMinimum(),
                                         ext.xMaximum(), ext.yMaximum())
         except Exception as e:
-            self.lblAnalysisStatus.setText(f"クリップ失敗: {e}")
+            self.lblAnalysisStatus.setText(f"Clip failed: {e}")
             return
 
         # 解析シーケンス番号を決定（ファイル保存前に確定）
@@ -3378,7 +3190,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         tmp_prefix = f"{seq}0"
 
         self.btnRunAnalysis.setEnabled(False)
-        self.lblAnalysisStatus.setText("解析中…")
+        self.lblAnalysisStatus.setVisible(False)
+        self.progressAnalysis.setVisible(True)
         QtWidgets.QApplication.processEvents()
 
         saved = []
@@ -3405,13 +3218,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 )
                 p = rw.save_raster(fs, dem.gt, dem.crs_wkt, out_dir,
                                    f"{tmp_prefix}_stability_fs", overwrite=True)
-                saved.append(("斜面安定FS", p, "raster"))
+                saved.append(("Slope Stability FS", p, "raster"))
                 mask = (fs < self.spinFsThresh.value()) & ~np.isnan(fs)
                 if mask.any():
                     p2 = rw.mask_to_polygons(mask, dem.gt, dem.crs_wkt,
                                              out_dir, f"{tmp_prefix}_unstable_zones",
                                              overwrite=True)
-                    saved.append(("不安定域", p2, "vector"))
+                    saved.append(("Unstable zones", p2, "vector"))
 
             # ① 沢地形判定
             if self.chkValley.isChecked():
@@ -3426,7 +3239,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     p2 = rw.mask_to_polygons(vmask, dem.gt, dem.crs_wkt,
                                              out_dir, f"{tmp_prefix}_valley_zones",
                                              overwrite=True)
-                    saved.append(("沢地形", p2, "vector"))
+                    saved.append(("Valley Terrain", p2, "vector"))
 
             # ③ 流量推測（修正合理式 + 到達時間 Tc ルーティング）
             if self.chkFlow.isChecked():
@@ -3476,16 +3289,18 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 int_result = ti.build_integrated_index(
                     out_dir, analysis_prefix=f"{tmp_prefix}_")
                 if int_result["integrated_risk_index"]:
-                    saved.append(("総合リスク指標", int_result["integrated_risk_index"], "raster"))
+                    saved.append(("Overall Risk Index", int_result["integrated_risk_index"], "raster"))
                 if int_result["integrated_high_risk"]:
-                    saved.append(("重点箇所", int_result["integrated_high_risk"], "vector"))
+                    saved.append(("High Risk Areas", int_result["integrated_high_risk"], "vector"))
             except FileNotFoundError:
                 pass  # 対象ラスタなし（単独の湧水のみ解析時など）
             except Exception as e_int:
-                self.lblAnalysisStatus.setText(f"統合リスク生成エラー: {e_int}")
+                self.lblAnalysisStatus.setText(f"Integrated risk error: {e_int}")
 
         except Exception as e:
-            self.lblAnalysisStatus.setText(f"解析エラー: {e}")
+            self.progressAnalysis.setVisible(False)
+            self.lblAnalysisStatus.setVisible(True)
+            self.lblAnalysisStatus.setText(f"Analysis error: {e}")
             self.btnRunAnalysis.setEnabled(True)
             return
         finally:
@@ -3558,8 +3373,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         self._update_analysis_condition_label(analysis_number)
         names = ", ".join(n for n, _, _ in saved)
+        self.progressAnalysis.setVisible(False)
+        self.lblAnalysisStatus.setVisible(True)
         self.lblAnalysisStatus.setText(
-            f"完了 [{analysis_number}]: {names}"
+            f"Done [{analysis_number}]: {names}"
         )
         if self.iface is not None:
             self.iface.mapCanvas().refresh()
@@ -3765,18 +3582,18 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         path = s.value("dem_path", "")
         if path:
             _gsi_labels = {
-                DemBrowserDialog.GSI_DEM1A_SENTINEL:  ("国土地理院 DEM1A (1m)",   "DEM1A 1m メッシュをキャンバス範囲で取得"),
-                DemBrowserDialog.GSI_DEM5A_SENTINEL:  ("国土地理院 DEM5A (5m)",   "DEM5A 5m メッシュをキャンバス範囲で取得"),
-                DemBrowserDialog.GSI_DEM10B_SENTINEL: ("国土地理院 DEM10B (10m)", "DEM10B 10m メッシュをキャンバス範囲で取得"),
+                DemBrowserDialog.GSI_DEM1A_SENTINEL:  ("GSI DEM1A (1m)",   "Fetch DEM1A 1m tiles for canvas extent"),
+                DemBrowserDialog.GSI_DEM5A_SENTINEL:  ("GSI DEM5A (5m)",   "Fetch DEM5A 5m tiles for canvas extent"),
+                DemBrowserDialog.GSI_DEM10B_SENTINEL: ("GSI DEM10B (10m)", "Fetch DEM10B 10m tiles for canvas extent"),
             }
             if path in _gsi_labels:
                 # GSI センチネルの場合: 表示ラベルを復元し、タイル取得は解析時に実行
                 display, tooltip = _gsi_labels[path]
                 self._dem_path = path
                 self.txtDemPath.setText(display)
-                self.txtDemPath.setToolTip(f"国土地理院 標高タイル ({tooltip})")
-                self.btnBrowseDem.setText("解除")
-                self.lblDemInfo.setText("解析実行時にキャンバス範囲で取得します")
+                self.txtDemPath.setToolTip(f"GSI elevation tile ({tooltip})")
+                self.btnBrowseDem.setText("Clear")
+                self.lblDemInfo.setText("Extent will be fetched at analysis time")
             else:
                 self._dem_path = path
                 self.txtDemPath.setText(os.path.basename(path))
@@ -3792,7 +3609,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         _fb = s.value("flow_buffer_state", "off")
         if _fb in ("off", "weak", "strong"):
             self._flow_buffer_state = _fb
-            _fb_labels = {"off": "バッファ：切", "weak": "バッファ：弱", "strong": "バッファ：強"}
+            _fb_labels = {
+                "off":    "Buffer: Off",
+                "weak":   "Buffer: Low",
+                "strong": "Buffer: High",
+            }
             self.btnFlowBuffer.setText(_fb_labels[_fb])
             self.btnFlowBuffer.setStyleSheet(
                 ("font-size:8pt; padding:1px 2px;"

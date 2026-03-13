@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forestry Operations Lite — ヘルプ</title>
+<style>
+  body { font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", sans-serif;
+         font-size: 14px; line-height: 1.7; color: #333; max-width: 860px;
+         margin: 0 auto; padding: 24px 32px; }
+  h1   { font-size: 1.4em; border-bottom: 2px solid #4a7c4e; padding-bottom: 6px; color: #2d5a30; }
+  h2   { font-size: 1.15em; margin-top: 2em; border-left: 4px solid #4a7c4e;
+         padding-left: 10px; color: #2d5a30; }
+  h3   { font-size: 1em; margin-top: 1.4em; color: #444; }
+  table{ border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th   { background: #e8f0e8; text-align: left; padding: 6px 10px;
+         border: 1px solid #c0d4c0; font-size: 0.9em; }
+  td   { padding: 5px 10px; border: 1px solid #d4e4d4; font-size: 0.9em; vertical-align: top; }
+  code { background: #f4f4f4; padding: 1px 5px; border-radius: 3px; font-size: 0.88em; }
+  .note{ background: #fffbe6; border-left: 3px solid #e6c800;
+         padding: 8px 12px; margin: 10px 0; font-size: 0.9em; }
+  .sec { margin-bottom: 2.5em; }
+  ul   { padding-left: 1.4em; }
+  li   { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Forestry Operations Lite — ヘルプ</h1>
+
+<!-- ============================================================ -->
+<div class="sec">
+<h2>データ設定ヒント</h2>
+
+<h3>DEM / DSM/DTM データ</h3>
+<ul>
+  <li>DEM は汎用データか、地形解析を行う箇所のデータを選択してください。</li>
+  <li>DSM/DTM データは地形解析を行う範囲のデータを選択してください。</li>
+  <li>標高ソースは、地表データの DEM データ設定と範囲を同じくするデータを選んでください。</li>
+</ul>
+
+<h3>TIF / ZIP の配置</h3>
+<table>
+  <tr><th>パターン</th><th>操作</th></tr>
+  <tr>
+    <td>単体 TIF</td>
+    <td>そのままファイルを選択</td>
+  </tr>
+  <tr>
+    <td>ZIP 1 枚（TIF 入り）</td>
+    <td>ZIP を直接選択</td>
+  </tr>
+  <tr>
+    <td>複数 ZIP 結合</td>
+    <td>同一地域の複数 ZIP を 1 つのフォルダに配置し、そのフォルダを選択。<br>
+        親フォルダに <code>merged_&lt;フォルダ名&gt;.tif</code> が自動生成されます。</td>
+  </tr>
+  <tr>
+    <td>結合済み TIF の再利用</td>
+    <td>生成された <code>merged_*.tif</code> を直接選択することで再結合を省けます。</td>
+  </tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div class="sec">
+<h2>パラメータ設定ヒント</h2>
+
+<h3>斜面安定（無限斜面モデル）</h3>
+<p>無限斜面モデルで斜面安定指数（FS）を算出します。<br>
+FS は傾斜角・内部摩擦角・粘着力・土壌深度・飽和率から計算されます。<br>
+<strong>FS &lt; 1.0：崩壊危険　/ FS &lt; FS閾値：要注意</strong><br>
+いずれのパラメータも「硬い層までの表土」の性質を入力します。</p>
+
+<table>
+  <tr><th>パラメータ</th><th>目安・現場での確認方法</th></tr>
+  <tr>
+    <td><strong>内部摩擦角 φ'</strong><br>表土粒子の噛み合わせ</td>
+    <td>
+      現場で土を手に取り握って確認。<br>
+      ・握ると形が残るが水を含むとドロッと崩れる → φ 20〜28°<br>
+      　（細かい砂・粘土質・雨後に表面が流れた跡のある斜面）<br>
+      ・握ると固まるが砕ける → φ 30〜35°<br>
+      　（一般的な杉・檜植林地の山土・壌土）<br>
+      ・握っても形にならずざらざらする → φ 38°〜<br>
+      　（礫・岩屑混じり・尾根筋・岩盤に近い層）
+    </td>
+  </tr>
+  <tr>
+    <td><strong>粘着力 c'</strong><br>表土の粘り・団結力</td>
+    <td>
+      ・砂質で根系の浅い若齢林 → 0 kPa<br>
+      ・礫混じり壌土・中齢林 → 5 kPa<br>
+      ・有機質を含む粘性土 → 10〜20 kPa
+    </td>
+  </tr>
+  <tr>
+    <td><strong>土壌深度 z</strong><br>表土の厚さ</td>
+    <td>
+      バックホウや鉄芯で掘削・刺込み、層の変わり目（色・硬さ・粒径が変わる箇所）まで計測。
+      硬い層が滑り面の候補となります。
+    </td>
+  </tr>
+  <tr>
+    <td><strong>飽和率 m</strong></td>
+    <td>
+      ・0.5 = 半分濡れた状態（平常時）<br>
+      ・0.9 = 大雨後の状態
+    </td>
+  </tr>
+  <tr>
+    <td><strong>FS 閾値</strong></td>
+    <td>
+      1.5 以下を危険、2.5 以下を要注意など、基準を変えて分布の変化を確認。<br>
+      現場試験値がある場合はそちらを優先してください。
+    </td>
+  </tr>
+</table>
+
+<h3>沢地形（TWI）</h3>
+<p>TWI（地形湿潤指数）= ln(A / tan(β)) で湿潤帯を識別します。<br>
+値が大きいほど水が集まりやすい谷・低地を示します。</p>
+
+<table>
+  <tr><th>パラメータ</th><th>考え方</th></tr>
+  <tr>
+    <td><strong>TWI 閾値</strong></td>
+    <td>
+      設定値以下を乾燥地形としてフィルタリング。<br>
+      8.0 にすると湿りやすい谷部を中心に抽出。値を上げると乾燥地とみなす箇所が増え、
+      湿潤地が拾えなくなります。
+    </td>
+  </tr>
+  <tr>
+    <td><strong>最小集水面積</strong></td>
+    <td>小さい水みちを除外する下限サイズ。小さい値ほど細かい沢地形も検出されます。</td>
+  </tr>
+</table>
+
+<h3>流量推測（修正合理式・到達時間考慮）</h3>
+<p>修正合理式＋到達時間（Tc）ルーティングで流量を推定します。<br>
+<code>Q = (1/360) × C × i × A_eff　　A_eff = A × min(1, T/Tc)</code><br>
+継続時間 T が Tc より短い集水域は流量が抑制されます。</p>
+
+<table>
+  <tr><th>パラメータ</th><th>考え方</th></tr>
+  <tr>
+    <td><strong>i_peak（最大降雨強度）</strong></td>
+    <td>50 mm/h で「1時間 50mm の豪雨」を想定</td>
+  </tr>
+  <tr>
+    <td><strong>流出係数 C</strong></td>
+    <td>0.8 なら雨の約 8 割が地表流として計算されます</td>
+  </tr>
+  <tr>
+    <td><strong>総降水量</strong></td>
+    <td>100 mm で降り始めから終わりまで合計 100 mm のケース</td>
+  </tr>
+  <tr>
+    <td><strong>継続時間 T</strong></td>
+    <td>6 h で 6 時間続く降雨として平均流量・総流量を計算</td>
+  </tr>
+  <tr>
+    <td><strong>流速係数</strong></td>
+    <td>
+      林地 0.3 / 草地 0.6 / 舗装面 1.5 m/s が目安。<br>
+      DSM/DTM を設定した場合、流出係数・流速係数は樹冠高さから自動計算。
+    </td>
+  </tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div class="sec">
+<h2>出力ファイル一覧</h2>
+
+<table>
+  <tr><th>ファイル名</th><th>内容</th></tr>
+  <tr><td><code>twi.tif</code></td><td>排水・湧水・ぬかるみ（地形湿潤指数）</td></tr>
+  <tr><td><code>stability_fs.tif</code></td><td>斜面安定性（FS ラスタ）</td></tr>
+  <tr><td><code>integrated_risk_index.tif</code></td><td>総合リスク指標（0〜6）</td></tr>
+  <tr><td><code>integrated_high_risk.gpkg</code></td><td>重点箇所ポリゴン</td></tr>
+  <tr><td><code>valley_zones.gpkg</code></td><td>沢形状・集水地形ベクター</td></tr>
+  <tr><td><code>flow_peak.tif</code></td><td>ピーク流量 Qp [m³/s]</td></tr>
+  <tr><td><code>flow_mean.tif</code></td><td>平均流量 Qm [m³/s]</td></tr>
+  <tr><td><code>flow_vtotal.tif</code></td><td>総流量体積 V [m³]</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div class="sec">
+<h2>機能説明</h2>
+
+<h3>斜面安定</h3>
+<p>無限斜面モデルによる安定性係数 FS を算出。FS &lt; 1.0 で崩壊リスク、FS &lt; 1.5 で注意域。
+土質パラメータ（φ・c・γ）と地形勾配・土層深から計算。</p>
+
+<h3>沢地形</h3>
+<p>DEM から集水地形・沢筋を抽出したベクターデータ。
+路網や作業道計画での水系との干渉確認に使用。</p>
+
+<h3>湿潤地形</h3>
+<p>地形湿潤指数（TWI）ラスタ。値が高いほど水が集まりやすく排水不良・
+地盤軟弱・ぬかるみリスクが高い。</p>
+
+<h3>流量推測</h3>
+<p>修正合理式（Q = CiA/360）による各セルのピーク・平均流量と総流量体積を推計。
+DSM 設定時は樹冠高から流出係数を地点ごとに可変。</p>
+
+<h3>総合リスク</h3>
+<p>FS・TWI・流量ピークを統合した加算型リスク指標（0〜6）。
+複数の危険因子が重なる箇所を「重点箇所」ポリゴンで抽出。</p>
+</div>
+
+<hr>
+<p style="font-size:0.8em;color:#888;text-align:center;">
+  Forestry Operations Lite &nbsp;|&nbsp; Developed by Avid Tree Work
+</p>
+
+</body>
+</html>
