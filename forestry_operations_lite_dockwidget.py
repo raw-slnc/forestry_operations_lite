@@ -1135,6 +1135,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             "DEM source selection",
             "  • GSI tiles (Japan): auto-fetched from canvas extent. No download needed.",
             "  • Local file: must be in a projected CRS (metres). Reproject if in EPSG:4326.",
+            "  • Copernicus GLO-30: free account required at OpenTopography to download.",
             "",
             "Reproject in QGIS (if needed)",
             "  1. Raster → Projections → Warp (Reproject)",
@@ -1143,6 +1144,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             "     lon 132–138° → EPSG:32654",
             "     lon 138–144° → EPSG:32655",
             "  3. Resampling: Bilinear  →  Save & use the output file",
+            "",
+            "Multiple ZIPs (same region)",
+            "  • Place all ZIPs in one folder → select that folder.",
+            "  • merged_<folder>.tif is auto-generated in the parent folder.",
+            "  • To reuse: select the generated merged_*.tif directly.",
         ):
             _tl = QtWidgets.QLabel(_t)
             _tl.setWordWrap(True)
