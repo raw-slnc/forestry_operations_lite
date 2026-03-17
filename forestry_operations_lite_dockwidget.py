@@ -832,8 +832,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._preview_has_layers = False
         self._post_init_scheduled = False
 
-        self.btnLoadTerrain.clicked.connect(self.load_xyz_terrain)
-
         self._apply_japanese_base_labels()
         self._build_extended_ui()
         self._connect_extended_signals()
@@ -1056,21 +1054,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._dem_path = ""
         self._dsm_path = ""
 
-        # ── ソースの設定（tabDataSettings へ）──────────────────────────
-        # 地形ソースウィジェット（シグナルは _setup_terrain_source_controls で接続）
-        self.lblTerrainSourceChoice = QtWidgets.QLabel("Terrain Source")
-        self.cmbTerrainSourceChoice = QtWidgets.QComboBox()
         # .ui 由来の旧テキストフィールドを非表示
         for _w in (self.lblTileUrl, self.txtTileUrl, self.btnLoadTerrain):
             _w.hide()
-
-        self.grpSourceSettings = QtWidgets.QGroupBox("Source Settings")
-        src_lay = QtWidgets.QGridLayout(self.grpSourceSettings)
-        src_lay.setVerticalSpacing(5)
-        src_lay.addWidget(self.lblTerrainSourceChoice,           0, 0)
-        src_lay.addWidget(self.cmbTerrainSourceChoice,           0, 1)
-        src_lay.addWidget(self.lblStatus,                        1, 0, 1, 2)
-        src_lay.setColumnStretch(1, 1)
 
         self.leftTabs = QtWidgets.QTabWidget(self.leftPane)
 
@@ -1086,7 +1072,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         _ds_scroll.setWidget(_ds_inner)
         ds_layout = QtWidgets.QVBoxLayout(_ds_inner)
         ds_layout.addWidget(self.grpDem)
-        ds_layout.addWidget(self.grpSourceSettings)
         ds_layout.addWidget(self.grpLayers)
 
         grpHint = QtWidgets.QGroupBox("Data Setup")
@@ -1234,7 +1219,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.mainSplitter.setStretchFactor(1, 1)
         self.mainSplitter.setSizes([480, 720])
         self.verticalLayout.addWidget(self.mainSplitter)
-        self._setup_terrain_source_controls()
 
     def _build_terrain_tab(self, parent):
         scroll = QtWidgets.QScrollArea(parent)
@@ -1534,63 +1518,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._set_combo_data(self.cmbBackgroundLayer, bg_data)
         self._set_combo_data(self.cmbTileLayer, tile_data)
         self._set_combo_data(self.cmbGpkgLayer, gpkg_data)
-        self._refresh_terrain_source_choices()
         self._restore_layer_combos_if_unset()
         if self.preview_canvas is not None:
             if self.preview_canvas.width() == 0 or self.preview_canvas.height() == 0:
                 self._pending_apply_layer_display = True
             else:
                 self.apply_layer_display()
-
-    def _setup_terrain_source_controls(self):
-        # ウィジェットは _build_extended_ui で作成・配置済み。
-        # 地形ソース選択変更時はタイルレイヤへ自動反映しない（手動適用のみ）。
-        self._refresh_terrain_source_choices()
-
-    def _saved_xyz_connections(self):
-        settings = QSettings()
-        pairs = []
-        for root in ["qgis/connections-xyz", "Qgis/connections-xyz"]:
-            settings.beginGroup(root)
-            for name in settings.childGroups():
-                settings.beginGroup(name)
-                url = str(settings.value("url", "")).strip()
-                settings.endGroup()
-                if url:
-                    pairs.append((name, url))
-            settings.endGroup()
-        return list(dict.fromkeys(pairs))
-
-    def _refresh_terrain_source_choices(self):
-        if not hasattr(self, "cmbTerrainSourceChoice"):
-            return
-        previous = self.cmbTerrainSourceChoice.currentData()
-        self.cmbTerrainSourceChoice.blockSignals(True)
-        self.cmbTerrainSourceChoice.clear()
-        self.cmbTerrainSourceChoice.addItem("Select source...", None)
-
-        terrain_ids = {
-            lid
-            for ids in getattr(self, "_loaded_terrain_layers", {}).values()
-            for lid in ids
-        }
-        for layer in QgsProject.instance().mapLayers().values():
-            if layer.type() == layer.RasterLayer and layer.id() not in terrain_ids:
-                self.cmbTerrainSourceChoice.addItem(
-                    layer.name(), ("layer", layer.id())
-                )
-        for name, url in self._saved_xyz_connections():
-            self.cmbTerrainSourceChoice.addItem(
-                "[XYZ] {}".format(name), ("xyz", url, name)
-            )
-
-        idx = self.cmbTerrainSourceChoice.findData(previous)
-        if idx >= 0:
-            self.cmbTerrainSourceChoice.setCurrentIndex(idx)
-        self.cmbTerrainSourceChoice.blockSignals(False)
-
-        if self.cmbTerrainSourceChoice.count() <= 1:
-            self.lblStatus.setText("No raster layer or saved XYZ source found.")
 
     @staticmethod
     def _set_combo_data(combo, data):
@@ -2054,37 +1987,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self._initializing = False
 
         self._refresh_preview_canvas()
-
-    def load_xyz_terrain(self):
-        choice = self.cmbTerrainSourceChoice.currentData()
-        if not choice:
-            self.lblStatus.setText("Select a terrain source.")
-            return
-        if choice[0] == "layer":
-            layer_id = choice[1]
-            idx = self.cmbTileLayer.findData(layer_id)
-            if idx >= 0:
-                self.cmbTileLayer.setCurrentIndex(idx)
-                self._refresh_preview_canvas()
-                self.lblStatus.setText("Raster layer set as terrain source.")
-            else:
-                self.lblStatus.setText("Selected layer is unavailable.")
-            return
-        if choice[0] == "xyz":
-            url = choice[1]
-            name = choice[2]
-            uri = "type=xyz&url={}".format(url)
-            layer = QgsRasterLayer(uri, "Terrain XYZ ({})".format(name), "wms")
-            if not layer.isValid():
-                self.lblStatus.setText("Failed to load saved XYZ source.")
-                return
-            QgsProject.instance().addMapLayer(layer)
-            self._refresh_layer_combos()
-            idx = self.cmbTileLayer.findData(layer.id())
-            if idx >= 0:
-                self.cmbTileLayer.setCurrentIndex(idx)
-            self._refresh_preview_canvas()
-            self.lblStatus.setText("Saved XYZ source loaded.")
 
     # ------------------------------------------------------------------ #
     #  地形解析                                                            #
@@ -2789,6 +2691,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             else:
                 # ローカルファイル（従来処理）
                 self._dem_path = path
+                self._dem_actual_path = path  # 実パスと一致
                 self.txtDemPath.setText(os.path.basename(path))
                 self.txtDemPath.setToolTip(path)
                 if not dlg.filter_active():
@@ -2902,6 +2805,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         dem_loader = DEMLoader()
         dem_loader.load(tif_path)
         self._terrain_loader = dem_loader
+        self._dem_actual_path = tif_path  # 実ファイルパス（params.json 用）
         # _dem_path は sentinel のまま維持（GSI ソースを追跡するため）
 
         self.txtDemPath.setToolTip(tif_path)
@@ -3330,6 +3234,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         self.btnRunAnalysis.setEnabled(False)
         self.lblAnalysisStatus.setVisible(False)
+        self.progressAnalysis.setRange(0, 100)
+        self.progressAnalysis.setValue(5)
         self.progressAnalysis.setVisible(True)
         QtWidgets.QApplication.processEvents()
 
@@ -3340,11 +3246,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             import numpy as np
 
             slope = ta.compute_slope_deg(dem.data, dem.cell_size)
+            self.progressAnalysis.setValue(15)
+            QtWidgets.QApplication.processEvents()
 
             if self.chkStability.isChecked() or self.chkValley.isChecked() \
                     or self.chkFlow.isChecked():
                 fdir = ta.d8_flow_direction(dem.data)
+                self.progressAnalysis.setValue(25)
+                QtWidgets.QApplication.processEvents()
                 accum = ta.flow_accumulation(dem.data, fdir)
+                self.progressAnalysis.setValue(45)
+                QtWidgets.QApplication.processEvents()
 
             # ④ 斜面安定解析
             if self.chkStability.isChecked():
@@ -3364,6 +3276,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                                              out_dir, f"{tmp_prefix}_unstable_zones",
                                              overwrite=True)
                     saved.append(("Unstable zones", p2, "vector"))
+                self.progressAnalysis.setValue(60)
+                QtWidgets.QApplication.processEvents()
 
             # ① 沢地形判定
             if self.chkValley.isChecked():
@@ -3379,6 +3293,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                                              out_dir, f"{tmp_prefix}_valley_zones",
                                              overwrite=True)
                     saved.append(("Valley Terrain", p2, "vector"))
+                self.progressAnalysis.setValue(70)
+                QtWidgets.QApplication.processEvents()
 
             # ③ 流量推測（修正合理式 + 到達時間 Tc ルーティング）
             if self.chkFlow.isChecked():
@@ -3394,14 +3310,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     # C は上流域の面積加重平均を使用（修正合理式の理論的要件）
                     c_accum = ta.flow_accumulation(dem.data, fdir, weight=c_local)
                     runoff_coef = c_accum / np.maximum(accum, 1.0)
+                    self.progressAnalysis.setValue(65)
+                    QtWidgets.QApplication.processEvents()
                 else:
                     runoff_coef = self.spinRunoff.value()
                     velocity_coef = self.spinVelocityCoef.value()
+                self.progressAnalysis.setValue(75)
+                QtWidgets.QApplication.processEvents()
                 local_tt = ta.compute_travel_time(
                     dem.data, fdir, dem.cell_size,
                     velocity_coef=velocity_coef,
                 )
                 tc = ta.compute_tc(dem.data, fdir, local_tt)
+                self.progressAnalysis.setValue(85)
+                QtWidgets.QApplication.processEvents()
                 Q_peak, Q_mean, V_total = ta.flow_routing_3metrics(
                     accum, tc, dem.cell_size,
                     duration_h=self.spinDuration.value(),
@@ -3423,6 +3345,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 saved.append(("V[m³]", p3, "raster"))
 
             # 統合リスク指標（FS/TWI/流量のいずれかがあれば自動生成）
+            self.progressAnalysis.setValue(90)
+            QtWidgets.QApplication.processEvents()
             try:
                 from .terrain import integration as ti
                 int_result = ti.build_integrated_index(
@@ -3438,6 +3362,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         except Exception as e:
             self.progressAnalysis.setVisible(False)
+            self.progressAnalysis.setRange(0, 0)
             self.lblAnalysisStatus.setVisible(True)
             self.lblAnalysisStatus.setText(f"Analysis error: {e}")
             self.btnRunAnalysis.setEnabled(True)
@@ -3456,12 +3381,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         # 解析条件を params.json に保存
         import json as _json
-        _params = {"analyses": [
-            k for k, chk in [("stability", self.chkStability),
-                              ("valley",    self.chkValley),
-                              ("flow",      self.chkFlow)]
-            if chk.isChecked()
-        ]}
+        _params = {
+            "dem_path": getattr(self, "_dem_actual_path", None) or getattr(self, "_dem_path", ""),
+            "analyses": [
+                k for k, chk in [("stability", self.chkStability),
+                                  ("valley",    self.chkValley),
+                                  ("flow",      self.chkFlow)]
+                if chk.isChecked()
+            ],
+        }
         if self.chkFlow.isChecked():
             _params.update({
                 "duration_h":    self.spinDuration.value(),
@@ -3512,7 +3440,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         self._update_analysis_condition_label(analysis_number)
         names = ", ".join(n for n, _, _ in saved)
+        self.progressAnalysis.setValue(100)
         self.progressAnalysis.setVisible(False)
+        self.progressAnalysis.setRange(0, 0)
         self.lblAnalysisStatus.setVisible(True)
         self.lblAnalysisStatus.setText(
             f"Done [{analysis_number}]: {names}"
@@ -3541,7 +3471,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # ── 地表データ ──
         s.setValue("dem_path", self._dem_path)
         s.setValue("dsm_path", self._dsm_path)
-        s.setValue("terrain_source_choice", self.cmbTerrainSourceChoice.currentData() or "")
         s.setValue("flow_buffer_state", self._flow_buffer_state)
 
         # ── レイヤー設定（layer ID） ──
@@ -3744,7 +3673,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.txtDsmPath.setText(os.path.basename(dsm_path))
             self.txtDsmPath.setToolTip(dsm_path)
             self._load_dsm_info()
-        restore_combo(self.cmbTerrainSourceChoice, "terrain_source_choice")
         _fb = s.value("flow_buffer_state", "off")
         if _fb in ("off", "weak", "strong"):
             self._flow_buffer_state = _fb
