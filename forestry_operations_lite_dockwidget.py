@@ -254,6 +254,11 @@ class DemBrowserDialog(QtWidgets.QDialog):
     # Copernicus GLO-30 センチネル値
     COPERNICUS_GLO30_SENTINEL = "__COPERNICUS_GLO30__"
 
+    # AWS Terrarium タイルソースを示すセンチネル値（全球）
+    TERRARIUM_FINE_SENTINEL     = "__TERRARIUM_FINE__"
+    TERRARIUM_STANDARD_SENTINEL = "__TERRARIUM_STD__"
+    TERRARIUM_WIDE_SENTINEL     = "__TERRARIUM_WIDE__"
+
     # (sentinel, リスト表示名, ダウンロードURL, 情報テキスト)
     _COPERNICUS_ITEMS = [
         ("__COPERNICUS_GLO30__",
@@ -262,6 +267,22 @@ class DemBrowserDialog(QtWidgets.QDialog):
          "Copernicus DEM GLO-30 — 30m global coverage. Free, attribution required (© DLR/ESA).\n"
          "⚠ 30m resolution: suitable for regional overview only. Not recommended for detailed slope / flow analysis.\n"
          "Download GeoTIFF → reproject to UTM → load as local file."),
+    ]
+
+    # (sentinel, リスト表示名, 情報テキスト)
+    _TERRARIUM_ITEMS = [
+        ("__TERRARIUM_FINE__",
+         "🌐  Terrarium  ~2m grid  (fine, slow for large areas)",
+         "AWS Terrain Tiles (Mapzen Terrarium) ~2m — Global coverage. Free, no registration.\n"
+         "Suitable for small areas. Extent will be automatically fetched from the preview canvas."),
+        ("__TERRARIUM_STD__",
+         "🌐  Terrarium  ~5m grid  (standard)",
+         "AWS Terrain Tiles (Mapzen Terrarium) ~5m — Global coverage. Free, no registration.\n"
+         "Extent will be automatically fetched from the preview canvas."),
+        ("__TERRARIUM_WIDE__",
+         "🌐  Terrarium  ~10m grid  (wide area)",
+         "AWS Terrain Tiles (Mapzen Terrarium) ~10m — Global coverage. Free, no registration.\n"
+         "Suitable for large-area analysis. Extent will be automatically fetched from the preview canvas."),
     ]
 
     # (sentinel, リスト表示名, 情報テキスト)
@@ -331,6 +352,21 @@ class DemBrowserDialog(QtWidgets.QDialog):
             sec.setFont(f2)
             self._list.addItem(sec)
         for sentinel, label, _ in (self._GSI_ITEMS if self._canvas_overlaps_japan() else []):
+            item = QtWidgets.QListWidgetItem(label)
+            item.setData(Qt.UserRole, sentinel)
+            f = QFont(); f.setBold(True)
+            item.setFont(f)
+            item.setForeground(QColor("#1a5276"))
+            self._list.addItem(item)
+
+        # ── AWS Terrarium タイル（全球・常時表示）──
+        sec_ter = QtWidgets.QListWidgetItem("── Global DEM Tiles (AWS Terrarium) ──")
+        sec_ter.setFlags(Qt.NoItemFlags)
+        sec_ter.setForeground(QColor("#1a5276"))
+        f5 = QFont(); f5.setBold(True)
+        sec_ter.setFont(f5)
+        self._list.addItem(sec_ter)
+        for sentinel, label, _ in self._TERRARIUM_ITEMS:
             item = QtWidgets.QListWidgetItem(label)
             item.setData(Qt.UserRole, sentinel)
             f = QFont(); f.setBold(True)
@@ -447,6 +483,14 @@ class DemBrowserDialog(QtWidgets.QDialog):
         for sentinel, _label, info_text in self._GSI_ITEMS:
             if path == sentinel:
                 self._lbl_info.setText(info_text + "  Extent will be automatically fetched from the preview canvas.")
+                self._btn_ok.setEnabled(True)
+                self._btn_open_url.setVisible(False)
+                self._selected_url = None
+                return
+        # AWS Terrarium タイルソース
+        for sentinel, _label, info_text in self._TERRARIUM_ITEMS:
+            if path == sentinel:
+                self._lbl_info.setText(info_text)
                 self._btn_ok.setEnabled(True)
                 self._btn_open_url.setVisible(False)
                 self._selected_url = None
@@ -950,7 +994,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.lblPreviewStatus = QtWidgets.QLabel("---")
         self.lblPreviewStatusScale = QtWidgets.QLabel("---")
         self.lblPreviewStatusCrs = QtWidgets.QLabel("---")
-        for _l in (self.lblPreviewStatus, self.lblPreviewStatusScale, self.lblPreviewStatusCrs):
+        self.lblPreviewStatusArea = QtWidgets.QLabel("---")
+        for _l in (self.lblPreviewStatus, self.lblPreviewStatusScale,
+                   self.lblPreviewStatusCrs, self.lblPreviewStatusArea):
             _l.setStyleSheet(_ps)
             _l.setFixedHeight(20)
         # ステータスバー
@@ -962,9 +1008,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._lbl_center_prefix = QtWidgets.QLabel("Center:")
         self._lbl_scale_prefix  = QtWidgets.QLabel("Scale:")
         self._lbl_crs_prefix    = QtWidgets.QLabel("CRS:")
+        self._lbl_area_prefix   = QtWidgets.QLabel("Area:")
         for _prefix_lbl, _val in (
             (self._lbl_center_prefix, self.lblPreviewStatus),
             (self._lbl_scale_prefix,  self.lblPreviewStatusScale),
+            (self._lbl_area_prefix,   self.lblPreviewStatusArea),
             (self._lbl_crs_prefix,    self.lblPreviewStatusCrs),
         ):
             _prefix_lbl.setStyleSheet(_ts)
@@ -1134,6 +1182,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             "  • Place all ZIPs in one folder → select that folder.",
             "  • merged_<folder>.tif is auto-generated in the parent folder.",
             "  • To reuse: select the generated merged_*.tif directly.",
+            "",
+            "Global analysis — CRS recommendations",
+            "  • Set project CRS to the UTM zone covering your area.",
+            "  • UTM is defined up to ±84° latitude. Beyond ±70° accuracy degrades.",
+            "  • Areas above ±70° (Arctic/Antarctic) are outside the intended use range.",
+            "  • South America example: EPSG:32718 (Zone 18S) or EPSG:32719 (Zone 19S).",
+            "  • AWS Terrarium tiles work worldwide but resolution is ~30 m equivalent.",
         ):
             _tl = QtWidgets.QLabel(_t)
             _tl.setWordWrap(True)
@@ -1547,6 +1602,27 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.lblPreviewStatus.setText("{:.2f}, {:.2f}".format(center.x(), center.y()))
         self.lblPreviewStatusScale.setText("1 : {:,}".format(int(round(scale))))
         self.lblPreviewStatusCrs.setText(crs_text)
+        # 面積（独立表示）
+        try:
+            import math as _math
+            ext = self.preview_canvas.extent()
+            w, h = ext.width(), ext.height()
+            if crs.isValid() and crs.isGeographic():
+                cy = (ext.yMinimum() + ext.yMaximum()) / 2.0
+                mx = 111320.0 * _math.cos(_math.radians(abs(cy)))
+                area_m2 = (w * mx) * (h * 111320.0)
+            else:
+                area_m2 = w * h
+            area_ha = area_m2 / 1e4
+            if area_ha >= 100:
+                area_text = "{:.0f} ha".format(area_ha)
+            elif area_ha >= 1:
+                area_text = "{:.1f} ha".format(area_ha)
+            else:
+                area_text = "{:.2f} ha".format(area_ha)
+        except Exception:
+            area_text = "---"
+        self.lblPreviewStatusArea.setText(area_text)
 
     def _setup_canvas_sync(self):
         if self.iface is not None:
@@ -2523,9 +2599,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 for mp in self._flow_buffer_mem_paths:
                     _gdal.Unlink(mp)
                 self._flow_buffer_mem_paths = []
-                # メインキャンバスが自動再描画されない場合に備えて明示的にリフレッシュ
-                if self.iface is not None:
-                    self.iface.mapCanvas().refresh()
             # 排他ペアを復元（stability ↔ integrated）
             partner = self._EXCLUSIVE.get(key)
             if partner and partner in self._exclusive_hidden:
@@ -2533,6 +2606,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self._terrain_cycle_state[partner] = saved - 1
                 self._cycle_terrain_layer(partner)
             self._refresh_preview_canvas()
+            # レイヤ削除後にメインキャンバスを明示的にリフレッシュ
+            if self.iface is not None:
+                self.iface.mapCanvas().refresh()
             return
 
         # ファイルを読み込んで表示
@@ -2676,16 +2752,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             path = dlg.selected_path()
             if not path:
                 return
-            _gsi_labels = {
-                DemBrowserDialog.GSI_DEM1A_SENTINEL:  ("GSI DEM1A (1m)",  "Fetch DEM1A 1m tiles for canvas extent"),
-                DemBrowserDialog.GSI_DEM5A_SENTINEL:  ("GSI DEM5A (5m)",  "Fetch DEM5A 5m tiles for canvas extent"),
-                DemBrowserDialog.GSI_DEM10B_SENTINEL: ("GSI DEM10B (10m)", "Fetch DEM10B 10m tiles for canvas extent"),
+            _tile_labels = {
+                DemBrowserDialog.GSI_DEM1A_SENTINEL:       ("GSI DEM1A (1m)",      "Fetch DEM1A 1m tiles for canvas extent"),
+                DemBrowserDialog.GSI_DEM5A_SENTINEL:       ("GSI DEM5A (5m)",      "Fetch DEM5A 5m tiles for canvas extent"),
+                DemBrowserDialog.GSI_DEM10B_SENTINEL:      ("GSI DEM10B (10m)",    "Fetch DEM10B 10m tiles for canvas extent"),
+                DemBrowserDialog.TERRARIUM_FINE_SENTINEL:     ("Terrarium (~2m)",   "Fetch Terrarium ~2m tiles for canvas extent"),
+                DemBrowserDialog.TERRARIUM_STANDARD_SENTINEL: ("Terrarium (~5m)",   "Fetch Terrarium ~5m tiles for canvas extent"),
+                DemBrowserDialog.TERRARIUM_WIDE_SENTINEL:     ("Terrarium (~10m)",  "Fetch Terrarium ~10m tiles for canvas extent"),
             }
-            if path in _gsi_labels:
-                display, tooltip = _gsi_labels[path]
+            if path in _tile_labels:
+                display, tooltip = _tile_labels[path]
                 self._dem_path = path
                 self.txtDemPath.setText(display)
-                self.txtDemPath.setToolTip(f"GSI elevation tile ({tooltip})")
+                self.txtDemPath.setToolTip(f"Elevation tile ({tooltip})")
                 self.btnBrowseDem.setText("Clear")
                 self._load_gsi_dem(path)
             else:
@@ -2736,16 +2815,26 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         # sentinel → (sources リスト, ファイル名プレフィクス)
         _S = DemBrowserDialog
+        _TERRARIUM_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
         _SOURCE_MAP = {
             _S.GSI_DEM1A_SENTINEL:  (
-                [("https://cyberjapandata.gsi.go.jp/xyz/dem1a_png/{z}/{x}/{y}.png", 17, "DEM1A 1m")],
+                [("https://cyberjapandata.gsi.go.jp/xyz/dem1a_png/{z}/{x}/{y}.png", 17, "DEM1A 1m",   "gsi")],
                 "gsi_dem1a"),
             _S.GSI_DEM5A_SENTINEL:  (
-                [("https://cyberjapandata.gsi.go.jp/xyz/dem5a_png/{z}/{x}/{y}.png", 15, "DEM5A 5m")],
+                [("https://cyberjapandata.gsi.go.jp/xyz/dem5a_png/{z}/{x}/{y}.png", 15, "DEM5A 5m",   "gsi")],
                 "gsi_dem5a"),
             _S.GSI_DEM10B_SENTINEL: (
-                [("https://cyberjapandata.gsi.go.jp/xyz/dem_png/{z}/{x}/{y}.png",   14, "DEM10B 10m")],
+                [("https://cyberjapandata.gsi.go.jp/xyz/dem_png/{z}/{x}/{y}.png",   14, "DEM10B 10m", "gsi")],
                 "gsi_dem10b"),
+            _S.TERRARIUM_FINE_SENTINEL:     (
+                [(_TERRARIUM_URL, 14, "Terrarium ~2m",  "terrarium")],
+                "terrarium_fine"),
+            _S.TERRARIUM_STANDARD_SENTINEL: (
+                [(_TERRARIUM_URL, 13, "Terrarium ~5m",  "terrarium")],
+                "terrarium_std"),
+            _S.TERRARIUM_WIDE_SENTINEL:     (
+                [(_TERRARIUM_URL, 12, "Terrarium ~10m", "terrarium")],
+                "terrarium_wide"),
         }
         sources, fname_prefix = _SOURCE_MAP.get(sentinel, _SOURCE_MAP[_S.GSI_DEM5A_SENTINEL])
 
@@ -2759,7 +2848,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         xform = QgsCoordinateTransform(canvas_crs, wgs84, QgsProject.instance())
         ext84 = xform.transformBoundingBox(canvas_ext)
 
-        self.lblDemInfo.setText("Fetching GSI elevation tiles...")
+        _is_terrarium = sentinel in (
+            DemBrowserDialog.TERRARIUM_FINE_SENTINEL,
+            DemBrowserDialog.TERRARIUM_STANDARD_SENTINEL,
+            DemBrowserDialog.TERRARIUM_WIDE_SENTINEL,
+        )
+        _fetch_msg = "Fetching Terrarium elevation tiles..." if _is_terrarium else "Fetching GSI elevation tiles..."
+        self.lblDemInfo.setText(_fetch_msg)
         QtWidgets.QApplication.processEvents()
 
         gsi_loader = GSITileDEMLoader()
@@ -3188,15 +3283,18 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lblAnalysisStatus.setText("Select at least one analysis type.")
             return
 
-        # GSI DEM ソースの場合は解析ごとに現在のキャンバス範囲で再取得・変換
-        _GSI_SENTINELS = (
+        # タイルソースの場合は解析ごとに現在のキャンバス範囲で再取得・変換
+        _TILE_SENTINELS = (
             DemBrowserDialog.GSI_DEM1A_SENTINEL,
             DemBrowserDialog.GSI_DEM5A_SENTINEL,
             DemBrowserDialog.GSI_DEM10B_SENTINEL,
+            DemBrowserDialog.TERRARIUM_FINE_SENTINEL,
+            DemBrowserDialog.TERRARIUM_STANDARD_SENTINEL,
+            DemBrowserDialog.TERRARIUM_WIDE_SENTINEL,
         )
-        if getattr(self, "_dem_path", "") in _GSI_SENTINELS:
+        if getattr(self, "_dem_path", "") in _TILE_SENTINELS:
             self._terrain_loader = None  # 古いデータをクリアしてから再取得
-            self.lblAnalysisStatus.setText("Fetching GSI elevation tiles...")
+            self.lblAnalysisStatus.setText("Fetching elevation tiles...")
             QtWidgets.QApplication.processEvents()
             self._load_gsi_dem(self._dem_path)
 
@@ -3229,8 +3327,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         # 解析シーケンス番号を決定（ファイル保存前に確定）
         seq = self._next_seq(self.chkOverwrite.isChecked())
-        # 暫定プレフィクス: ファイル数が確定するまで 0 を使う
-        tmp_prefix = f"{seq}0"
+        # 隠し一時フォルダ（解析完了後に1回だけリネーム → Thunar inotify を最小化）
+        import shutil as _shutil
+        tmp_folder = os.path.join(out_dir, f".tmp_{seq}")
+        if os.path.exists(tmp_folder):      # 中断残骸をクリア
+            _shutil.rmtree(tmp_folder)
+        os.makedirs(tmp_folder)
 
         self.btnRunAnalysis.setEnabled(False)
         self.lblAnalysisStatus.setVisible(False)
@@ -3267,13 +3369,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     z_m=self.spinZm.value(),
                     m=self.spinMSat.value(),
                 )
-                p = rw.save_raster(fs, dem.gt, dem.crs_wkt, out_dir,
-                                   f"{tmp_prefix}_stability_fs", overwrite=True)
+                p = rw.save_raster(fs, dem.gt, dem.crs_wkt, tmp_folder,
+                                   "stability_fs", overwrite=True)
                 saved.append(("Slope Stability FS", p, "raster"))
                 mask = (fs < self.spinFsThresh.value()) & ~np.isnan(fs)
                 if mask.any():
                     p2 = rw.mask_to_polygons(mask, dem.gt, dem.crs_wkt,
-                                             out_dir, f"{tmp_prefix}_unstable_zones",
+                                             tmp_folder, "unstable_zones",
                                              overwrite=True)
                     saved.append(("Unstable zones", p2, "vector"))
                 self.progressAnalysis.setValue(60)
@@ -3282,15 +3384,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             # ① 沢地形判定
             if self.chkValley.isChecked():
                 twi = ta.compute_twi(accum, slope, dem.cell_size)
-                p = rw.save_raster(twi, dem.gt, dem.crs_wkt, out_dir,
-                                   f"{tmp_prefix}_twi", overwrite=True)
+                p = rw.save_raster(twi, dem.gt, dem.crs_wkt, tmp_folder,
+                                   "twi", overwrite=True)
                 saved.append(("TWI", p, "raster"))
                 min_cells = self.spinMinArea.value() / (dem.cell_size ** 2)
                 vmask = (twi >= self.spinTwiThresh.value()) \
                         & (accum >= min_cells) & ~np.isnan(twi)
                 if vmask.any():
                     p2 = rw.mask_to_polygons(vmask, dem.gt, dem.crs_wkt,
-                                             out_dir, f"{tmp_prefix}_valley_zones",
+                                             tmp_folder, "valley_zones",
                                              overwrite=True)
                     saved.append(("Valley Terrain", p2, "vector"))
                 self.progressAnalysis.setValue(70)
@@ -3331,17 +3433,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     runoff_coef=runoff_coef,
                     total_mm=self.spinTotalRainfall.value(),
                 )
-                p0 = rw.save_raster(tc, dem.gt, dem.crs_wkt, out_dir,
-                                    f"{tmp_prefix}_tc", overwrite=True)
+                p0 = rw.save_raster(tc, dem.gt, dem.crs_wkt, tmp_folder,
+                                    "tc", overwrite=True)
                 saved.append(("Tc[h]", p0, "raster"))
-                p1 = rw.save_raster(Q_peak, dem.gt, dem.crs_wkt, out_dir,
-                                    f"{tmp_prefix}_flow_peak", overwrite=True)
+                p1 = rw.save_raster(Q_peak, dem.gt, dem.crs_wkt, tmp_folder,
+                                    "flow_peak", overwrite=True)
                 saved.append(("Qp[m³/s]", p1, "raster"))
-                p2 = rw.save_raster(Q_mean, dem.gt, dem.crs_wkt, out_dir,
-                                    f"{tmp_prefix}_flow_mean", overwrite=True)
+                p2 = rw.save_raster(Q_mean, dem.gt, dem.crs_wkt, tmp_folder,
+                                    "flow_mean", overwrite=True)
                 saved.append(("Qm[m³/s]", p2, "raster"))
-                p3 = rw.save_raster(V_total, dem.gt, dem.crs_wkt, out_dir,
-                                    f"{tmp_prefix}_flow_vtotal", overwrite=True)
+                p3 = rw.save_raster(V_total, dem.gt, dem.crs_wkt, tmp_folder,
+                                    "flow_vtotal", overwrite=True)
                 saved.append(("V[m³]", p3, "raster"))
 
             # 統合リスク指標（FS/TWI/流量のいずれかがあれば自動生成）
@@ -3350,7 +3452,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             try:
                 from .terrain import integration as ti
                 int_result = ti.build_integrated_index(
-                    out_dir, analysis_prefix=f"{tmp_prefix}_")
+                    tmp_folder, analysis_prefix="")
                 if int_result["integrated_risk_index"]:
                     saved.append(("Overall Risk Index", int_result["integrated_risk_index"], "raster"))
                 if int_result["integrated_high_risk"]:
@@ -3373,13 +3475,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if _dsm is not None:
                 _dsm.data = None
 
-        # ── ファイル数が確定したのでサブフォルダに移動 ──
+        # ── ファイル数が確定したので解析番号を決定し tmp_folder を1回だけリネーム ──
         N = len(saved)
         analysis_number = self._format_analysis_number(seq, N)
         folder = os.path.join(out_dir, analysis_number)
-        os.makedirs(folder, exist_ok=True)
 
-        # 解析条件を params.json に保存
+        # 解析条件を params.json に保存（リネーム前に tmp_folder へ書き込む）
         import json as _json
         _params = {
             "dem_path": getattr(self, "_dem_actual_path", None) or getattr(self, "_dem_path", ""),
@@ -3412,23 +3513,18 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 "min_area":   self.spinMinArea.value(),
             })
         try:
-            with open(os.path.join(folder, "params.json"), "w", encoding="utf-8") as _f:
+            with open(os.path.join(tmp_folder, "params.json"), "w", encoding="utf-8") as _f:
                 _json.dump(_params, _f, ensure_ascii=False, indent=2)
         except Exception:
             pass
 
-        final_saved = []
-        for label, old_path, kind in saved:
-            basename = os.path.basename(old_path)
-            # basename は "{seq}0_{name}.ext" → "{name}.ext"（5文字プレフィクスを除去）
-            new_name = basename[5:]
-            new_path = os.path.join(folder, new_name)
-            try:
-                os.rename(old_path, new_path)
-                final_saved.append((label, new_path, kind))
-            except Exception:
-                final_saved.append((label, old_path, kind))
-        saved = final_saved
+        # tmp_folder を最終フォルダ名に一括リネーム（inotify イベントを1回に集約）
+        if os.path.exists(folder):
+            _shutil.rmtree(folder)
+        os.rename(tmp_folder, folder)
+        # saved のパスを新フォルダに更新
+        saved = [(label, os.path.join(folder, os.path.basename(p)), kind)
+                 for label, p, kind in saved]
 
         # 解析番号コンボを更新して新番号を選択（解析完了後は最新が当該番号なのでそのまま）
         self._refresh_analysis_combo(select_latest=False)
@@ -3649,17 +3745,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # ── 地表データ ──
         path = s.value("dem_path", "")
         if path:
-            _gsi_labels = {
-                DemBrowserDialog.GSI_DEM1A_SENTINEL:  ("GSI DEM1A (1m)",   "Fetch DEM1A 1m tiles for canvas extent"),
-                DemBrowserDialog.GSI_DEM5A_SENTINEL:  ("GSI DEM5A (5m)",   "Fetch DEM5A 5m tiles for canvas extent"),
-                DemBrowserDialog.GSI_DEM10B_SENTINEL: ("GSI DEM10B (10m)", "Fetch DEM10B 10m tiles for canvas extent"),
+            _tile_labels = {
+                DemBrowserDialog.GSI_DEM1A_SENTINEL:       ("GSI DEM1A (1m)",    "Fetch DEM1A 1m tiles for canvas extent"),
+                DemBrowserDialog.GSI_DEM5A_SENTINEL:       ("GSI DEM5A (5m)",    "Fetch DEM5A 5m tiles for canvas extent"),
+                DemBrowserDialog.GSI_DEM10B_SENTINEL:      ("GSI DEM10B (10m)",  "Fetch DEM10B 10m tiles for canvas extent"),
+                DemBrowserDialog.TERRARIUM_FINE_SENTINEL:     ("Terrarium (~2m)",  "Fetch Terrarium ~2m tiles for canvas extent"),
+                DemBrowserDialog.TERRARIUM_STANDARD_SENTINEL: ("Terrarium (~5m)",  "Fetch Terrarium ~5m tiles for canvas extent"),
+                DemBrowserDialog.TERRARIUM_WIDE_SENTINEL:     ("Terrarium (~10m)", "Fetch Terrarium ~10m tiles for canvas extent"),
             }
-            if path in _gsi_labels:
-                # GSI センチネルの場合: 表示ラベルを復元し、タイル取得は解析時に実行
-                display, tooltip = _gsi_labels[path]
+            if path in _tile_labels:
+                # タイルセンチネルの場合: 表示ラベルを復元し、タイル取得は解析時に実行
+                display, tooltip = _tile_labels[path]
                 self._dem_path = path
                 self.txtDemPath.setText(display)
-                self.txtDemPath.setToolTip(f"GSI elevation tile ({tooltip})")
+                self.txtDemPath.setToolTip(f"Elevation tile ({tooltip})")
                 self.btnBrowseDem.setText("Clear")
                 self.lblDemInfo.setText("Extent will be fetched at analysis time")
             else:

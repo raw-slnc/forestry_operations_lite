@@ -2,7 +2,7 @@
 name=Forestry Operations Lite
 qgisMinimumVersion=3.16
 description=Terrain analysis for forestry sites: DEM/DSM loading, slope, TWI, stability index, and flow accumulation.
-version=0.1.2
+version=0.1.3
 author=Hideharu Masai
 email=hideharumasai@void.mints.ne.jp
 
@@ -12,7 +12,8 @@ tracker=https://github.com/raw-slnc/forestry_operations_lite/issues
 repository=https://github.com/raw-slnc/forestry_operations_lite
 
 hasProcessingProvider=no
-changelog=0.1.2 - DEM browser: add Copernicus GLO-30 link (global), hide GSI tiles outside Japan, auto UTM reproject after GSI tile fetch, CRS warning and Tips accordion in Data Setup
+changelog=0.1.3 - Global DEM support: AWS Terrarium tiles (worldwide, no registration); geographic CRS cell_size meter conversion (cos-lat correction); Web Mercator high-latitude distortion fix; analysis output written to hidden temp folder then single rename to reduce file manager wait; preview status bar shows area (ha); fix main canvas not refreshing when hiding analysis layers
+    0.1.2 - DEM browser: add Copernicus GLO-30 link (global), hide GSI tiles outside Japan, auto UTM reproject after GSI tile fetch, CRS warning and Tips accordion in Data Setup
     0.1.1 - UI overhaul: English UI, parameter tabs restructured (1 item/row with hints), layout spacing fixed, tab height auto-fit
     0.1.0 - Initial release
 

@@ -24,13 +24,13 @@ class DEMLoader:
         """ファイルを開いてメタデータのみ読み込む（ピクセルデータは読まない）。
         info_text() および clip_to_extent() はこの状態で動作する。"""
         if not HAS_GDAL:
-            raise RuntimeError("GDAL が利用できません")
+            raise RuntimeError("GDAL is not available")
         if not os.path.exists(path):
-            raise FileNotFoundError(f"ファイルが見つかりません: {path}")
+            raise FileNotFoundError(f"File not found: {path}")
 
         self._ds = gdal.Open(path, gdal.GA_ReadOnly)
         if self._ds is None:
-            raise RuntimeError(f"DEM を開けません: {path}")
+            raise RuntimeError(f"Cannot open DEM: {path}")
 
         self.path = path
         band = self._ds.GetRasterBand(1)
@@ -38,6 +38,18 @@ class DEMLoader:
         self.gt = self._ds.GetGeoTransform()
         self.crs_wkt = self._ds.GetProjection()
         self.cell_size = abs(self.gt[1])
+
+        # 地理座標系（度単位）の場合は中心緯度でメートル換算
+        try:
+            from osgeo import osr
+            srs = osr.SpatialReference(wkt=self.crs_wkt)
+            if srs.IsGeographic():
+                center_lat = self.gt[3] + self.gt[5] * self._ds.RasterYSize / 2
+                meters_per_deg = 111320.0 * math.cos(math.radians(abs(center_lat)))
+                self.cell_size = abs(self.gt[1]) * meters_per_deg
+        except Exception:
+            pass
+
         self.data = None
         return self
 
@@ -47,7 +59,7 @@ class DEMLoader:
         if self.data is not None:
             return self
         if self._ds is None:
-            raise RuntimeError("ファイルが開かれていません。open_metadata を先に呼んでください")
+            raise RuntimeError("File not open. Call open_metadata first.")
         band = self._ds.GetRasterBand(1)
         self.data = band.ReadAsArray().astype(np.float64)
         if self.nodata is not None:
@@ -98,23 +110,23 @@ class DEMLoader:
 
     def info_text(self):
         if self._ds is None:
-            return "未設定"
+            return "Not set"
         rows = self._ds.RasterYSize
         cols = self._ds.RasterXSize
         try:
             from osgeo import osr
             srs = osr.SpatialReference(wkt=self.crs_wkt)
             auth = srs.GetAuthorityCode(None)
-            crs_str = f"EPSG:{auth}" if auth else "不明CRS"
+            crs_str = f"EPSG:{auth}" if auth else "Unknown CRS"
         except Exception:
-            crs_str = "不明CRS"
-        return f"{cols}×{rows} px  |  {self.cell_size:.2f}m メッシュ  |  {crs_str}"
+            crs_str = "Unknown CRS"
+        return f"{cols}×{rows} px  |  {self.cell_size:.2f} m/px  |  {crs_str}"
 
     def clip_to_extent(self, xmin, ymin, xmax, ymax):
         """プレビュー可視範囲（DEM CRS 座標）でクリップ。新DEMLoaderを返す。
         open_metadata 後（data=None の状態）でも動作する。"""
         if self._ds is None:
-            raise RuntimeError("DEM が読み込まれていません")
+            raise RuntimeError("DEM is not loaded")
 
         inv_gt = gdal.InvGeoTransform(self.gt)
 
@@ -134,7 +146,7 @@ class DEMLoader:
         r1 = min(self._ds.RasterYSize, r1)
 
         if c1 <= c0 or r1 <= r0:
-            raise ValueError("クリップ範囲がDEM範囲外です")
+            raise ValueError("Clip extent is outside DEM bounds")
 
         band = self._ds.GetRasterBand(1)
         data = band.ReadAsArray(c0, r0, c1 - c0, r1 - r0).astype(np.float64)
@@ -171,11 +183,19 @@ class GSITileDEMLoader:
     TILE_SIZE = 256
 
     # 解像度優先順: 1m → 5m → 10m
-    # (url_template, zoom, label)
+    # (url_template, zoom, label, encoding)
     TILE_SOURCES = [
-        ("https://cyberjapandata.gsi.go.jp/xyz/dem1a_png/{z}/{x}/{y}.png", 17, "DEM1A 1m"),
-        ("https://cyberjapandata.gsi.go.jp/xyz/dem5a_png/{z}/{x}/{y}.png", 15, "DEM5A 5m"),
-        ("https://cyberjapandata.gsi.go.jp/xyz/dem_png/{z}/{x}/{y}.png",   14, "DEM10B 10m"),
+        ("https://cyberjapandata.gsi.go.jp/xyz/dem1a_png/{z}/{x}/{y}.png", 17, "DEM1A 1m",   "gsi"),
+        ("https://cyberjapandata.gsi.go.jp/xyz/dem5a_png/{z}/{x}/{y}.png", 15, "DEM5A 5m",   "gsi"),
+        ("https://cyberjapandata.gsi.go.jp/xyz/dem_png/{z}/{x}/{y}.png",   14, "DEM10B 10m", "gsi"),
+    ]
+
+    # AWS Terrain Tiles (Mapzen/Terrarium) — 全球、登録不要
+    # (url_template, zoom, label, encoding)
+    TERRARIUM_SOURCES = [
+        ("https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png", 14, "Terrarium ~2m",  "terrarium"),
+        ("https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png", 13, "Terrarium ~5m",  "terrarium"),
+        ("https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png", 12, "Terrarium ~10m", "terrarium"),
     ]
 
     def __init__(self):
@@ -207,14 +227,15 @@ class GSITileDEMLoader:
     # ── タイル取得 ────────────────────────────────────────────────────
 
     @staticmethod
-    def _fetch_tile_array(url):
+    def _fetch_tile_array(url, encoding="gsi"):
         """URL の PNG タイルを取得し (256, 256) の標高 numpy 配列を返す。
+        encoding: "gsi" = 国土地理院形式, "terrarium" = Mapzen/AWS Terrarium 形式
         失敗時は (None, エラー文字列) を返す。"""
         import urllib.request
         from qgis.PyQt.QtGui import QImage
 
         if not url.startswith(("https://", "http://")):
-            return None, f"不正なURLスキーム: {url}"
+            return None, f"Invalid URL scheme: {url}"
         try:
             req = urllib.request.Request(
                 url,
@@ -223,12 +244,12 @@ class GSITileDEMLoader:
             with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
                 raw = resp.read()
         except Exception as e:
-            return None, f"通信エラー: {e}"
+            return None, f"Connection error: {e}"
 
         try:
             img = QImage()
             if not img.loadFromData(raw):
-                return None, "PNG デコード失敗"
+                return None, "PNG decode failed"
             img = img.convertToFormat(QImage.Format_ARGB32)
 
             ptr = img.bits()
@@ -237,17 +258,25 @@ class GSITileDEMLoader:
                 ptr.setsize(nbytes)
             buf = np.frombuffer(bytes(ptr), dtype=np.uint8).reshape((256, 256, 4))
             # ARGB32 リトルエンディアン: byte0=B, byte1=G, byte2=R, byte3=A
-            r = buf[:, :, 2].astype(np.uint32)
-            g = buf[:, :, 1].astype(np.uint32)
-            b = buf[:, :, 0].astype(np.uint32)
-            u = r * 65536 + g * 256 + b
+            r = buf[:, :, 2].astype(np.float64)
+            g = buf[:, :, 1].astype(np.float64)
+            b = buf[:, :, 0].astype(np.float64)
 
-            arr = np.where(u == 0x800000, np.nan,
-                  np.where(u <  0x800000, u.astype(np.float64) * 0.01,
-                           (u.astype(np.int32) - 0x1000000).astype(np.float64) * 0.01))
+            if encoding == "terrarium":
+                # Mapzen Terrarium: elevation = R * 256 + G + B / 256 - 32768
+                arr = r * 256.0 + g + b / 256.0 - 32768.0
+            else:
+                # 国土地理院形式: RGB 24bit → 0.01m 精度
+                u = (r.astype(np.uint32) * 65536
+                     + g.astype(np.uint32) * 256
+                     + b.astype(np.uint32))
+                arr = np.where(u == 0x800000, np.nan,
+                      np.where(u <  0x800000, u.astype(np.float64) * 0.01,
+                               (u.astype(np.int32) - 0x1000000).astype(np.float64) * 0.01))
+
             return arr.astype(np.float64), None
         except Exception as e:
-            return None, f"画像処理エラー: {e}"
+            return None, f"Image processing error: {e}"
 
     # ── 範囲取得 ──────────────────────────────────────────────────────
 
@@ -264,13 +293,19 @@ class GSITileDEMLoader:
         self.last_errors = []
         self._used_source_label = None
         result = None
-        for tile_url, tile_zoom, label in (sources or self.TILE_SOURCES):
+        for item in (sources or self.TILE_SOURCES):
+            # 3-tuple (後方互換) または 4-tuple (encoding付き)
+            if len(item) == 4:
+                tile_url, tile_zoom, label, encoding = item
+            else:
+                tile_url, tile_zoom, label = item
+                encoding = "gsi"
             result = self._fetch_tiles(lon_min, lat_min, lon_max, lat_max,
-                                       tile_url, tile_zoom)
+                                       tile_url, tile_zoom, encoding)
             if result is not None and not np.all(np.isnan(result[0])):
                 self._used_source_label = label
                 break
-            self.last_errors.append(f"{label} 取得失敗 → 次の解像度へ")
+            self.last_errors.append(f"{label} fetch failed → trying next resolution")
         if result is None or np.all(np.isnan(result[0])):
             return self
         total_arr, zoom_used, x0, y0 = result
@@ -299,14 +334,18 @@ class GSITileDEMLoader:
                       'PARAMETER["false_northing",0],UNIT["metre",1],' \
                       'AUTHORITY["EPSG","3857"]]'
 
+        # Web Mercator の px_m は赤道基準。高緯度ほど実地上距離は短くなるため cos(lat) で補正
+        center_lat = (lat_min + lat_max) / 2
+        corrected_cell_size = px_m * math.cos(math.radians(abs(center_lat)))
+
         self.data      = total_arr
         self.gt        = (x_origin, px_m, 0.0, y_origin, 0.0, -px_m)
         self.crs_wkt   = crs_wkt
-        self.cell_size = px_m
+        self.cell_size = corrected_cell_size
         self.nodata    = None
         return self
 
-    def _fetch_tiles(self, lon_min, lat_min, lon_max, lat_max, tile_url, zoom):
+    def _fetch_tiles(self, lon_min, lat_min, lon_max, lat_max, tile_url, zoom, encoding="gsi"):
         """指定URLとzoomでタイルを取得し (total_arr, zoom, x0, y0) を返す。全失敗時None。"""
         max_tile = 2 ** zoom - 1
         TS = self.TILE_SIZE
@@ -325,9 +364,9 @@ class GSITileDEMLoader:
         MAX_PIXELS = 100_000_000
         if nx * ny * TS * TS > MAX_PIXELS:
             raise MemoryError(
-                f"取得範囲が広すぎます（タイル数: {nx * ny}、"
-                f"ピクセル数: {nx * TS:,} × {ny * TS:,}）。\n"
-                f"ズームレベルを下げるか、キャンバスの表示範囲を狭めてから再試行してください。"
+                f"Extent too large (tiles: {nx * ny}, "
+                f"pixels: {nx * TS:,} × {ny * TS:,}).\n"
+                f"Zoom in or reduce the canvas extent and try again."
             )
 
         total_arr = np.full((ny * TS, nx * TS), np.nan, dtype=np.float64)
@@ -335,7 +374,7 @@ class GSITileDEMLoader:
         for iy, ty in enumerate(range(y0, y1 + 1)):
             for ix, tx in enumerate(range(x0, x1 + 1)):
                 url = tile_url.format(z=zoom, x=tx, y=ty)
-                tile, err = self._fetch_tile_array(url)
+                tile, err = self._fetch_tile_array(url, encoding)
                 if tile is not None:
                     total_arr[iy * TS:(iy + 1) * TS,
                               ix * TS:(ix + 1) * TS] = tile
@@ -383,11 +422,11 @@ class GSITileDEMLoader:
 
     def info_text(self):
         if self.data is None:
-            return "未取得"
+            return "Not fetched"
         rows, cols = self.data.shape
         px_m = abs(self.gt[1]) if self.gt else 0
-        src = getattr(self, "_used_source_label", "国土地理院標高タイル")
-        return f"{cols}×{rows} px  |  国土地理院 {src}  |  EPSG:3857  |  {px_m:.1f} m/px"
+        src = getattr(self, "_used_source_label", "Elevation Tile")
+        return f"{cols}×{rows} px  |  {src}  |  EPSG:3857  |  {px_m:.1f} m/px"
 
 
 # ── GeoTIFF 変換ユーティリティ ──────────────────────────────────────────────
@@ -405,9 +444,9 @@ def save_as_geotiff(loader, output_path):
     output_path : 成功時は保存先パス文字列
     """
     if not HAS_GDAL:
-        raise RuntimeError("GDAL が利用できません")
+        raise RuntimeError("GDAL is not available")
     if loader.data is None or loader.gt is None:
-        raise ValueError("loader に data または gt が設定されていません")
+        raise ValueError("loader has no data or gt set")
 
     from osgeo import osr
 
