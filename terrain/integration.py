@@ -53,7 +53,7 @@ def _prefixed_path(out_dir, prefix, name, ext):
 def _read_raster(path):
     ds = gdal.Open(path, gdal.GA_ReadOnly)
     if ds is None:
-        raise RuntimeError(f"ラスタを開けません: {path}")
+        raise RuntimeError(f"Cannot open raster: {path}")
     band = ds.GetRasterBand(1)
     arr = band.ReadAsArray().astype(np.float64)
     nodata = band.GetNoDataValue()
@@ -83,9 +83,9 @@ def build_integrated_index(
       Flow: >=flow_caution => +1, >=2*flow_caution => +2
     """
     if not HAS_GDAL:
-        raise RuntimeError("GDAL が利用できません")
+        raise RuntimeError("GDAL is not available")
     if not os.path.isdir(out_dir):
-        raise FileNotFoundError(f"出力ディレクトリが見つかりません: {out_dir}")
+        raise FileNotFoundError(f"Output directory not found: {out_dir}")
 
     if analysis_prefix:
         fs_path   = _prefixed_path(out_dir, analysis_prefix, "stability_fs",  ".tif")
@@ -97,7 +97,7 @@ def build_integrated_index(
         flow_path = _latest_path(out_dir, ["flow_peak.tif", "flow_peak_*.tif"])
 
     if fs_path is None and twi_path is None and flow_path is None:
-        raise FileNotFoundError("統合対象ラスタが見つかりません（FS/TWI/flow）")
+        raise FileNotFoundError("No rasters found for integration (FS/TWI/flow)")
 
     base = None
     for p in (fs_path, twi_path, flow_path):
@@ -184,9 +184,9 @@ def build_multiplicative_index(
     出力ファイル: {prefix}integrated_risk_multiplicative.tif
     """
     if not HAS_GDAL:
-        raise RuntimeError("GDAL が利用できません")
+        raise RuntimeError("GDAL is not available")
     if not os.path.isdir(out_dir):
-        raise FileNotFoundError(f"出力ディレクトリが見つかりません: {out_dir}")
+        raise FileNotFoundError(f"Output directory not found: {out_dir}")
 
     if analysis_prefix:
         fs_path   = _prefixed_path(out_dir, analysis_prefix, "stability_fs", ".tif")
@@ -198,7 +198,7 @@ def build_multiplicative_index(
         flow_path = _latest_path(out_dir, ["flow_peak.tif", "flow_peak_*.tif"])
 
     if fs_path is None and twi_path is None and flow_path is None:
-        raise FileNotFoundError("統合対象ラスタが見つかりません（FS/TWI/flow）")
+        raise FileNotFoundError("No rasters found for integration (FS/TWI/flow)")
 
     base = None
     for p in (fs_path, twi_path, flow_path):

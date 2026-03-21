@@ -36,7 +36,7 @@ def _resolve_path(out_dir, name, ext, overwrite):
 def save_raster(data, gt, crs_wkt, out_dir, name_prefix, overwrite=False):
     """numpy配列をGeoTIFF(LZW圧縮)として保存。保存パスを返す"""
     if not HAS_GDAL:
-        raise RuntimeError("GDAL が利用できません")
+        raise RuntimeError("GDAL is not available")
     os.makedirs(out_dir, exist_ok=True)
     path = _resolve_path(out_dir, name_prefix, ".tif", overwrite)
     if overwrite and os.path.exists(path):
@@ -63,7 +63,7 @@ def mask_to_polygons(binary_mask, gt, crs_wkt, out_dir, layer_name, overwrite=Fa
     保存パスを返す。
     """
     if not HAS_GDAL:
-        raise RuntimeError("GDAL が利用できません")
+        raise RuntimeError("GDAL is not available")
     os.makedirs(out_dir, exist_ok=True)
     rows, cols = binary_mask.shape
 
@@ -107,7 +107,7 @@ def values_to_points(data, threshold_gt, gt, crs_wkt, out_dir, layer_name, overw
     保存パスを返す。
     """
     if not HAS_GDAL:
-        raise RuntimeError("GDAL が利用できません")
+        raise RuntimeError("GDAL is not available")
     os.makedirs(out_dir, exist_ok=True)
     path = _resolve_path(out_dir, layer_name, ".gpkg", overwrite)
     if overwrite and os.path.exists(path):

@@ -18,6 +18,31 @@ import urllib.request
 import urllib.error
 import zipfile
 import xml.etree.ElementTree as ET
+import subprocess
+import sys
+
+
+def _ensure_laspy():
+    """laspy が無ければ自動インストールする。失敗時は RuntimeError を送出。"""
+    try:
+        import laspy  # noqa: F401
+        return
+    except ImportError:
+        pass
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "laspy"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        import laspy  # noqa: F401
+    except Exception as e:
+        raise RuntimeError(
+            "Failed to install laspy automatically.\n"
+            "Please run the following command in OSGeo4W Shell:\n"
+            "  pip install laspy\n"
+            f"Details: {e}"
+        )
 
 BUCKET_URL = "https://virtual-shizuoka.s3.ap-northeast-1.amazonaws.com"
 TILE_W = 400   # タイル幅 X(northing) [m]
@@ -159,6 +184,7 @@ def _set_tif_epsg(tif_path: str, epsg: int):
 
 def _set_las_epsg(las_path: str, epsg: int):
     """LAS ファイルに VLR が未設定の場合に EPSG コードの WKT CRS VLR を追加して上書き保存。"""
+    _ensure_laspy()
     import laspy
     from osgeo import osr
     las = laspy.read(las_path)
@@ -341,6 +367,7 @@ def las_to_dsm(las_path: str, out_path: str, cell_size: float = 0.5):
     """LAS ファイルから DSM（最大値グリッド）を GeoTIFF として保存。
     CRS は EPSG:6676（Virtual Shizuoka 標準）固定。
     """
+    _ensure_laspy()
     import laspy
     import numpy as np
     from osgeo import gdal, osr

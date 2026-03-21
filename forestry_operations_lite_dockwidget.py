@@ -3742,7 +3742,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
           Open in WODMI後    → 全off（DEM/DSM変更で Export が復活）
         """
         import qgis.utils
-        has_wodmi = "webodm_importer" in qgis.utils.plugins
+        has_wodmi = any("webodm_importer" in k for k in qgis.utils.plugins)
 
         # WODMIプラグインがない場合はすべて無効
         if not has_wodmi:
@@ -3977,7 +3977,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         if not zip_path or not os.path.isfile(zip_path):
             return
 
-        wodmi = qgis.utils.plugins.get("webodm_importer")
+        _wodmi_key = next((k for k in qgis.utils.plugins if "webodm_importer" in k), None)
+        wodmi = qgis.utils.plugins.get(_wodmi_key) if _wodmi_key else None
         if not wodmi:
             return
 
