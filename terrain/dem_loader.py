@@ -280,7 +280,7 @@ class GSITileDEMLoader:
 
     # ── 範囲取得 ──────────────────────────────────────────────────────
 
-    def fetch_for_extent(self, lon_min, lat_min, lon_max, lat_max, sources=None):
+    def fetch_for_extent(self, lon_min, lat_min, lon_max, lat_max, sources=None, cancel_cb=None):
         """WGS84 経緯度範囲のタイルをダウンロードして numpy 配列に組み立てる。
         sources を省略すると TILE_SOURCES（1m→5m→10m）の順で自動フォールバックする。
 
@@ -289,9 +289,12 @@ class GSITileDEMLoader:
         lon_min, lat_min, lon_max, lat_max : float  WGS84 範囲
         sources : list of (url_template, zoom, label) | None
             省略時は TILE_SOURCES を使用。ルート計算など特定解像度を指定する場合に渡す。
+        cancel_cb : callable | None
+            呼び出すと True を返す場合、タイル取得をキャンセルする。
         """
         self.last_errors = []
         self._used_source_label = None
+        self._cancelled = False
         result = None
         for item in (sources or self.TILE_SOURCES):
             # 3-tuple (後方互換) または 4-tuple (encoding付き)
@@ -301,8 +304,11 @@ class GSITileDEMLoader:
                 tile_url, tile_zoom, label = item
                 encoding = "gsi"
             result = self._fetch_tiles(lon_min, lat_min, lon_max, lat_max,
-                                       tile_url, tile_zoom, encoding)
-            if result is not None and not np.all(np.isnan(result[0])):
+                                       tile_url, tile_zoom, encoding, cancel_cb=cancel_cb)
+            if result is None:  # キャンセルされた
+                self._cancelled = True
+                return self
+            if not np.all(np.isnan(result[0])):
                 self._used_source_label = label
                 break
             self.last_errors.append(f"{label} fetch failed → trying next resolution")
@@ -345,8 +351,9 @@ class GSITileDEMLoader:
         self.nodata    = None
         return self
 
-    def _fetch_tiles(self, lon_min, lat_min, lon_max, lat_max, tile_url, zoom, encoding="gsi"):
-        """指定URLとzoomでタイルを取得し (total_arr, zoom, x0, y0) を返す。全失敗時None。"""
+    def _fetch_tiles(self, lon_min, lat_min, lon_max, lat_max, tile_url, zoom, encoding="gsi", cancel_cb=None):
+        """指定URLとzoomでタイルを取得し (total_arr, zoom, x0, y0) を返す。
+        キャンセル時は None を返す。"""
         max_tile = 2 ** zoom - 1
         TS = self.TILE_SIZE
 
@@ -373,6 +380,8 @@ class GSITileDEMLoader:
 
         for iy, ty in enumerate(range(y0, y1 + 1)):
             for ix, tx in enumerate(range(x0, x1 + 1)):
+                if cancel_cb is not None and cancel_cb():
+                    return None  # キャンセル
                 url = tile_url.format(z=zoom, x=tx, y=ty)
                 tile, err = self._fetch_tile_array(url, encoding)
                 if tile is not None:
