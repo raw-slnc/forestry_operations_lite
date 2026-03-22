@@ -22,6 +22,9 @@ FORM_CLASS, _ = uic.loadUiType(
 )
 
 
+class _StopAnalysis(Exception):
+    """解析キャンセル用の内部例外。"""
+    pass
 
 
 class _ElidedPathLabel(QtWidgets.QLabel):
@@ -1501,6 +1504,40 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         _ac_lay.addWidget(self.lblAnalysisCondition)
         lay.addWidget(self.grpAnalysisCondition)
 
+        # --- 解析制限 ---
+        grpAreaLimit = QtWidgets.QGroupBox("Area Limit")
+        grpAreaLimit.setStyleSheet(
+            "QGroupBox{border:1px solid #ccc;border-radius:3px;margin-top:6px;padding:4px;}"
+            "QGroupBox::title{subcontrol-origin:margin;left:6px;}"
+        )
+        _al_lay = QtWidgets.QHBoxLayout(grpAreaLimit)
+        _al_lay.setContentsMargins(4, 2, 4, 4)
+        _al_lay.setSpacing(4)
+        # 左カラム
+        _al_left = QtWidgets.QWidget()
+        _al_left_lay = QtWidgets.QHBoxLayout(_al_left)
+        _al_left_lay.setContentsMargins(0, 0, 0, 0)
+        _al_left_lay.setSpacing(4)
+        _al_left_lay.addWidget(QtWidgets.QLabel("Warn above"))
+        self.cmbAreaLimit = QtWidgets.QComboBox()
+        for _ha_val, _ha_lbl in [(30, "30"), (50, "50"), (150, "150"), (300, "300"),
+                                  (800, "800"), (1500, "1500"), (2000, "2000"),
+                                  (0, "No Limit")]:
+            self.cmbAreaLimit.addItem(_ha_lbl, _ha_val)
+        self.cmbAreaLimit.setCurrentIndex(1)  # デフォルト: 50ha
+        _al_left_lay.addWidget(self.cmbAreaLimit)
+        _al_left_lay.addWidget(QtWidgets.QLabel("ha"))
+        _al_left.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        _al_lay.addWidget(_al_left, 2)
+        # 右カラム（Stop ボタン）
+        self.btnStopAnalysis = QtWidgets.QPushButton("Stop")
+        self.btnStopAnalysis.setEnabled(False)
+        self.btnStopAnalysis.setStyleSheet(
+            "QPushButton:enabled{background:#c0392b;color:white;border-radius:3px;}"
+            "QPushButton:disabled{color:#aaa;}"
+        )
+        _al_lay.addWidget(self.btnStopAnalysis, 1)
+        lay.addWidget(grpAreaLimit)
 
         # --- 出力 ---
         grpOut = QtWidgets.QGroupBox("Output")
@@ -1588,6 +1625,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.btnOpenWodmi.clicked.connect(self._on_open_wodmi)
         self.btnVsCancel.clicked.connect(self._on_vs_cancel)
         self.btnRunAnalysis.clicked.connect(self._run_terrain_analysis)
+        self.btnStopAnalysis.clicked.connect(self._on_stop_analysis)
         self.chkLoadStability.clicked.connect(lambda: self._cycle_terrain_layer("stability"))
         self.chkLoadValley.clicked.connect(lambda: self._cycle_terrain_layer("valley"))
         self.chkLoadWetland.clicked.connect(lambda: self._cycle_terrain_layer("wetland"))
@@ -4008,6 +4046,32 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lblAnalysisStatus.setText("Select at least one analysis type.")
             return
 
+        # ── 解析面積チェック（プレビューキャンバス範囲） ──
+        _limit_ha = self.cmbAreaLimit.currentData()
+        if _limit_ha and _limit_ha > 0:
+            try:
+                import math as _math
+                _ext = self.preview_canvas.extent()
+                _crs = self.preview_canvas.mapSettings().destinationCrs()
+                _w, _h = _ext.width(), _ext.height()
+                if _crs.isValid() and _crs.isGeographic():
+                    _cy = (_ext.yMinimum() + _ext.yMaximum()) / 2.0
+                    _mx = 111320.0 * _math.cos(_math.radians(abs(_cy)))
+                    _area_ha = (_w * _mx) * (_h * 111320.0) / 1e4
+                else:
+                    _area_ha = _w * _h / 1e4
+                if _area_ha > _limit_ha:
+                    _reply = QtWidgets.QMessageBox.warning(
+                        self, "Area Warning",
+                        f"Analysis area is {_area_ha:.0f} ha, "
+                        f"which exceeds the warning limit of {_limit_ha} ha.\n\nContinue?",
+                        QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel,
+                    )
+                    if _reply != QtWidgets.QMessageBox.Ok:
+                        return
+            except Exception:
+                pass
+
         # タイルソースの場合は解析ごとに現在のキャンバス範囲で再取得・変換
         _TILE_SENTINELS = (
             DemBrowserDialog.GSI_DEM1A_SENTINEL,
@@ -4082,12 +4146,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             _shutil.rmtree(tmp_folder)
         os.makedirs(tmp_folder)
 
+        self._cancel_analysis = False
         self.btnRunAnalysis.setEnabled(False)
+        self.btnStopAnalysis.setEnabled(True)
         self.lblAnalysisStatus.setVisible(False)
         self.progressAnalysis.setRange(0, 100)
         self.progressAnalysis.setValue(5)
         self.progressAnalysis.setVisible(True)
         QtWidgets.QApplication.processEvents()
+
+        def _pe():
+            QtWidgets.QApplication.processEvents()
+            if self._cancel_analysis:
+                raise _StopAnalysis()
 
         saved = []
         try:
@@ -4097,16 +4168,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
             slope = ta.compute_slope_deg(dem.data, dem.cell_size)
             self.progressAnalysis.setValue(15)
-            QtWidgets.QApplication.processEvents()
+            _pe()
 
             if self.chkStability.isChecked() or self.chkValley.isChecked() \
                     or self.chkFlow.isChecked():
                 fdir = ta.d8_flow_direction(dem.data)
                 self.progressAnalysis.setValue(25)
-                QtWidgets.QApplication.processEvents()
+                _pe()
                 accum = ta.flow_accumulation(dem.data, fdir)
                 self.progressAnalysis.setValue(45)
-                QtWidgets.QApplication.processEvents()
+                _pe()
 
             # ④ 斜面安定解析
             if self.chkStability.isChecked():
@@ -4127,7 +4198,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                                              overwrite=True)
                     saved.append(("Unstable zones", p2, "vector"))
                 self.progressAnalysis.setValue(60)
-                QtWidgets.QApplication.processEvents()
+                _pe()
 
             # ① 沢地形判定
             if self.chkValley.isChecked():
@@ -4144,7 +4215,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                                              overwrite=True)
                     saved.append(("Valley Terrain", p2, "vector"))
                 self.progressAnalysis.setValue(70)
-                QtWidgets.QApplication.processEvents()
+                _pe()
 
             # ③ 流量推測（修正合理式 + 到達時間 Tc ルーティング）
             if self.chkFlow.isChecked():
@@ -4161,19 +4232,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     c_accum = ta.flow_accumulation(dem.data, fdir, weight=c_local)
                     runoff_coef = c_accum / np.maximum(accum, 1.0)
                     self.progressAnalysis.setValue(65)
-                    QtWidgets.QApplication.processEvents()
+                    _pe()
                 else:
                     runoff_coef = self.spinRunoff.value()
                     velocity_coef = self.spinVelocityCoef.value()
                 self.progressAnalysis.setValue(75)
-                QtWidgets.QApplication.processEvents()
+                _pe()
                 local_tt = ta.compute_travel_time(
                     dem.data, fdir, dem.cell_size,
                     velocity_coef=velocity_coef,
                 )
                 tc = ta.compute_tc(dem.data, fdir, local_tt)
                 self.progressAnalysis.setValue(85)
-                QtWidgets.QApplication.processEvents()
+                _pe()
                 Q_peak, Q_mean, V_total = ta.flow_routing_3metrics(
                     accum, tc, dem.cell_size,
                     duration_h=self.spinDuration.value(),
@@ -4196,7 +4267,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
             # 統合リスク指標（FS/TWI/流量のいずれかがあれば自動生成）
             self.progressAnalysis.setValue(90)
-            QtWidgets.QApplication.processEvents()
+            _pe()
             try:
                 from .terrain import integration as ti
                 int_result = ti.build_integrated_index(
@@ -4207,15 +4278,29 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     saved.append(("High Risk Areas", int_result["integrated_high_risk"], "vector"))
             except FileNotFoundError:
                 pass  # 対象ラスタなし（単独の湧水のみ解析時など）
+            except _StopAnalysis:
+                raise
             except Exception as e_int:
                 self.lblAnalysisStatus.setText(f"Integrated risk error: {e_int}")
 
+        except _StopAnalysis:
+            self.progressAnalysis.setVisible(False)
+            self.progressAnalysis.setRange(0, 0)
+            self.lblAnalysisStatus.setVisible(True)
+            self.lblAnalysisStatus.setText("Analysis cancelled.")
+            self.btnRunAnalysis.setEnabled(True)
+            self.btnStopAnalysis.setEnabled(False)
+            import shutil as _shutil
+            if os.path.exists(tmp_folder):
+                _shutil.rmtree(tmp_folder)
+            return
         except Exception as e:
             self.progressAnalysis.setVisible(False)
             self.progressAnalysis.setRange(0, 0)
             self.lblAnalysisStatus.setVisible(True)
             self.lblAnalysisStatus.setText(f"Analysis error: {e}")
             self.btnRunAnalysis.setEnabled(True)
+            self.btnStopAnalysis.setEnabled(False)
             return
         finally:
             # DSM ピクセルデータを解放（メタデータ・GDALハンドルは保持）
@@ -4294,6 +4379,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         if self.iface is not None:
             self.iface.mapCanvas().refresh()
         self.btnRunAnalysis.setEnabled(True)
+        self.btnStopAnalysis.setEnabled(False)
+
+    def _on_stop_analysis(self):
+        self._cancel_analysis = True
 
     # ── 設定の保存・復元 ──────────────────────────────────────────
 
@@ -4345,6 +4434,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         s.setValue("chk_stability",       self.chkStability.isChecked())
         s.setValue("chk_valley",          self.chkValley.isChecked())
         s.setValue("chk_flow",            self.chkFlow.isChecked())
+        s.setValue("area_limit_idx",      self.cmbAreaLimit.currentIndex())
 
         # ── 解析パラメータ ──
         s.setValue("spin_phi_deg",     self.spinPhiDeg.value())
@@ -4564,6 +4654,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.chkStability.setChecked(    b("chk_stability",   True))
         self.chkValley.setChecked(       b("chk_valley",      True))
         self.chkFlow.setChecked(         b("chk_flow",        False))
+        self.cmbAreaLimit.setCurrentIndex(i("area_limit_idx", 1))
 
         # ── 解析パラメータ ──
         self.spinPhiDeg.setValue(    f("spin_phi_deg",     35.0))
