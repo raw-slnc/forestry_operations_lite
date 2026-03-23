@@ -2556,6 +2556,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                         pos = i + 1  # 元レイヤーの直下
                         break
                 group.insertChildNode(pos, QgsLayerTreeLayer(blur_lyr))
+                node = group.findLayer(blur_lyr.id())
+                if node:
+                    node.setExpanded(False)
 
             self._flow_buffer_layer_ids.append(blur_lyr.id())
             self._flow_buffer_mem_paths.append(mem_path)
@@ -2634,6 +2637,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     insert_pos += 1
                     break
         group.insertChildNode(insert_pos, QgsLayerTreeLayer(lyr))
+        node = group.findLayer(lyr.id())
+        if node:
+            node.setExpanded(False)
 
     # stability ↔ integrated の排他ペア
     _EXCLUSIVE = {"stability": "integrated", "integrated": "stability"}
@@ -4499,8 +4505,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         s.beginGroup(self._SK)
 
         # ── 地表データ ──
-        s.setValue("dem_path", self._dem_path)
-        s.setValue("dsm_path", self._dsm_path)
+        # VS Shizuoka ソースはセッション固有（S3取得）のため保存しない
+        _vs_sentinels = (DemBrowserDialog.VS_LP_GRID_SENTINEL,
+                         DemBrowserDialog.VS_LP_GROUND_SENTINEL)
+        s.setValue("dem_path", "" if self._dem_path in _vs_sentinels else self._dem_path)
+        s.setValue("dsm_path", "" if self._dsm_path in _vs_sentinels else self._dsm_path)
         s.setValue("flow_buffer_state", self._flow_buffer_state)
 
         # ── レイヤー設定（layer ID） ──
