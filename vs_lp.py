@@ -4,13 +4,22 @@
   08{folder}{XX:02d}{AA:02d}
     folder : 2文字 (例 OE, NE, MC ...)
     XX     : 4km×3km ブロック内の列(個位)・行(十位)
-    AA     : 400m×300m タイルの列(個位)・行(十位)
+    AA     : タイルの列(個位)・行(十位)
 
-座標 (EPSG:6676, メートル単位):
+座標 (EPSG:6676, メートル単位) ── 標準フォーマット (2019〜2021, 2025 確認済み):
+    タイルサイズ: 400m × 300m、AA は単純行列（tens=行, units=列）
     x_center = folder_x0 + (XX%10)*4000 + (AA%10)*400 + 200
     y_center = folder_y0 - (XX//10)*3000 - (AA//10)*300 - 150
     folder_x0 = (ord(folder[1]) - ord('E')) * 40000
     folder_y0 = -(ord(folder[0]) - ord('M') + 2) * 30000
+
+【注意】2022年データ（LD/MD フォルダで確認）はタイル仕様が異なる:
+    タイルサイズ: 1000m × 750m、AA は 2 階層 Z 曲線エンコード
+      tens桁 = 2×2 サブブロック (1=左上, 2=右上, 3=左下, 4=右下)
+      units桁 = サブブロック内位置 (1=左上, 2=右上, 3=左下, 4=右下)
+    そのため tile_bbox() / tiles_for_extent() の座標計算は 2022 年データと
+    一致しない。新年度のデータを追加する際は実タイルをダウンロードして
+    サイズと AA エンコードを必ず実測確認すること。
 """
 
 import os
@@ -48,11 +57,18 @@ BUCKET_URL = "https://virtual-shizuoka.s3.ap-northeast-1.amazonaws.com"
 TILE_W = 400   # タイル幅 X(northing) [m]
 TILE_H = 300   # タイル高 Y(easting) [m]
 
-# 全リターンLAS(LP/Original)を提供する年度（LP/Groundは全年度で提供）
-YEARS_WITH_ORIGINAL = (2021, 2025)
+# LP データのリターン種別（実測確認済み、2025年時点）:
+#   2021, 2025: Original（全リターン）と Ground（地面フィルタ済み）が別パスで提供
+#               Ground は ~53〜100 bytes/m² → 地面点のみ（DSM計算不可）
+#               Original は ~1000〜4000 bytes/m² → 全リターン（DSM計算可）
+#   2019, 2020, 2022: Original パスなし。Ground が全リターン結合データを提供
+#               Ground は ~860〜2200 bytes/m² → 全リターン（DSM計算可）
+# → DSM 生成には Original（2021/2025）または Ground（2019/2020/2022）のどちらを使っても良い
+YEARS_WITH_ORIGINAL = (2021, 2025)  # LP/Original パスが存在する年度
 
 # 年度試行順（新しい順）
-_YEAR_PRIORITY = (2025, 2022, 2021, 2020, 2019)
+_YEAR_PRIORITY = (2025, 2022, 2021, 2020, 2019)           # Ground/Original 用
+_YEAR_PRIORITY_GRID = (2025, 2022, 2021, 2020, 2019)       # Grid 用
 
 
 # ── 座標計算 ──────────────────────────────────────────────────────────────────
@@ -76,7 +92,17 @@ def tile_bbox(code: str):
 
 
 def tiles_for_extent(xmin: float, ymin: float, xmax: float, ymax: float) -> set:
-    """EPSG:6676 bbox に重複するタイルコードセットを返す（未確認含む）。"""
+    """EPSG:6676 bbox に重複するタイルコードセットを返す（未確認含む）。
+
+    年度によりタイル仕様が異なるため、両方式の候補コードを生成して返す。
+    実在確認は resolve_years() に委ねる。
+
+    方式 A — 標準 400m×300m 単純行列 (2019〜2021, 2025 確認済み):
+        AA tens=行, units=列。AA は 00〜99 の範囲。
+    方式 B — 1000m×750m Z曲線 (2022/LD・MD で確認):
+        4×4 グリッドを 2×2 サブブロック 2 階層で符号化。AA は 11〜44。
+        今後の年度でこの方式が再登場する可能性があるため両方生成する。
+    """
     codes = set()
     for c1 in "LMNOP":
         for c2 in "BCDEF":
@@ -93,16 +119,39 @@ def tiles_for_extent(xmin: float, ymin: float, xmax: float, ymax: float) -> set:
                 for xc in range(xc_min, xc_max + 1):
                     xx_base_x = x0 + xc * 4000
                     xx_base_y = y0 - yr * 3000
+                    xx = yr * 10 + xc
+
+                    # ── 方式 A: 400m×300m 単純行列 ──────────────────────────
                     ac_min = max(0, int((xmin - xx_base_x) / TILE_W))
                     ac_max = min(9, int((xmax - xx_base_x) / TILE_W))
                     ar_min = max(0, int((xx_base_y - ymax) / TILE_H))
                     ar_max = min(9, int((xx_base_y - ymin) / TILE_H))
-                    xx = yr * 10 + xc
                     for ar in range(ar_min, ar_max + 1):
                         for ac in range(ac_min, ac_max + 1):
                             aa = ar * 10 + ac
                             codes.add(f"08{folder}{xx:02d}{aa:02d}")
-    return codes
+
+                    # ── 方式 B: 1000m×750m Z曲線 (2022年形式) ───────────────
+                    # 4×4 グリッド (gc=列0-3, gr=行0-3) を Z曲線で AA に変換
+                    gc_min = max(0, int((xmin - xx_base_x) / 1000))
+                    gc_max = min(3, int((xmax - xx_base_x) / 1000))
+                    gr_min = max(0, int((xx_base_y - ymax) / 750))
+                    gr_max = min(3, int((xx_base_y - ymin) / 750))
+                    for gr in range(gr_min, gr_max + 1):
+                        for gc in range(gc_min, gc_max + 1):
+                            # サブブロック (2×2) → t (1-4)
+                            t = (gr // 2) * 2 + (gc // 2) + 1
+                            # サブブロック内位置 → u (1-4)
+                            u = (gr % 2) * 2 + (gc % 2) + 1
+                            aa = t * 10 + u
+                            codes.add(f"08{folder}{xx:02d}{aa:02d}")
+    # 生成した全候補（方式A・B混在）を方式A座標で実際の重複確認し絞り込む。
+    # 方式Bが生成した候補が方式Aタイルとして範囲外に存在した場合に
+    # 誤ってダウンロードされる問題を防ぐ。
+    return {
+        c for c in codes
+        if (lambda b: b[2] > xmin and b[0] < xmax and b[3] > ymin and b[1] < ymax)(tile_bbox(c))
+    }
 
 
 # ── S3 ヘルパー ───────────────────────────────────────────────────────────────
@@ -126,10 +175,27 @@ def _s3_list_xx(year: int, folder: str, xx: str, lp_type: str = "Grid") -> set:
         return set()
 
 
+def _s3_head_check(year: int, code: str, lp_type: str = "Grid") -> bool:
+    """指定タイルが S3 に存在するか HEAD リクエストで確認。
+    ListBucket 権限が無効な場合の _s3_list_xx フォールバック用。"""
+    folder = code[2:4]
+    xx = code[4:6]
+    url = f"{BUCKET_URL}/{year}/LP/{lp_type}/08/{folder}/{xx}/{code}.zip"
+    req = urllib.request.Request(url, method="HEAD")
+    try:
+        with urllib.request.urlopen(req, timeout=10):
+            return True
+    except Exception:
+        return False
+
+
 # ── 年度解決 ──────────────────────────────────────────────────────────────────
 
 def resolve_years(codes: set, progress_cb=None, lp_type: str = "Grid") -> dict:
     """コードセット → {code: year} （S3 LISTをXX単位でバッチ処理、新年度優先）。
+
+    S3 LIST（ListBucket）が無効化されている場合、未解決タイルに対して
+    HEAD リクエストで個別確認するフォールバックを行う。
 
     Args:
         codes: タイルコードセット
@@ -148,11 +214,12 @@ def resolve_years(codes: set, progress_cb=None, lp_type: str = "Grid") -> dict:
         key = (code[2:4], code[4:6])
         groups.setdefault(key, set()).add(code)
 
+    priority = _YEAR_PRIORITY_GRID if lp_type == "Grid" else _YEAR_PRIORITY
     done = 0
     total = len(groups)
     for (folder, xx), batch in groups.items():
         left = set(batch)
-        for year in _YEAR_PRIORITY:
+        for year in priority:
             if not left:
                 break
             found = _s3_list_xx(year, folder, xx, lp_type)
@@ -160,6 +227,17 @@ def resolve_years(codes: set, progress_cb=None, lp_type: str = "Grid") -> dict:
             for code in hits:
                 result[code] = year
             left -= hits
+
+        # LIST で解決できなかったタイルは HEAD で個別確認
+        # （ListBucket が無効化されている環境でのフォールバック）
+        if left:
+            for code in list(left):
+                for year in priority:
+                    if _s3_head_check(year, code, lp_type):
+                        result[code] = year
+                        left.discard(code)
+                        break
+
         done += 1
         if progress_cb:
             progress_cb(done, total)
@@ -205,7 +283,7 @@ def _set_las_epsg(las_path: str, epsg: int):
 # ── ダウンロード ──────────────────────────────────────────────────────────────
 
 def _download(url: str, dest: str):
-    with urllib.request.urlopen(url, timeout=120) as r, open(dest, "wb") as f:
+    with urllib.request.urlopen(url, timeout=600) as r, open(dest, "wb") as f:
         while True:
             chunk = r.read(65536)
             if not chunk:
@@ -214,18 +292,44 @@ def _download(url: str, dest: str):
 
 
 def _xyz_to_tif(txt_path: str, out_dir: str, cell_size: float = 0.5) -> str:
-    """VS LP/Grid の X Y Z テキストファイルを GeoTIFF（EPSG:6676）に変換。"""
+    """VS LP/Grid の X Y Z テキストファイルを GeoTIFF（EPSG:6676）に変換。
+
+    対応フォーマット（2025年時点）:
+      旧形式 (2019〜2020): スペース区切り 3列「X Y Z」
+          例: -65199.75 -130200.25 33.40
+      新形式 (2021〜):    カンマ区切り 4〜5列「ID,X,Y,Z[,flag]」
+          例: 1,-65199.75,-130200.25,33.40,1
+    フォーマットは先頭の有効行から自動判定する。
+    今後カラム構成・区切り文字が変わった場合はこの関数を修正すること。
+    """
     import numpy as np
     from osgeo import gdal, osr
 
     xs, ys, zs = [], [], []
+    fmt = None  # "old": スペース区切り X Y Z  /  "new": カンマ区切り ID,X,Y,Z[,flag]
     with open(txt_path, encoding="utf-8") as f:
         for line in f:
-            parts = line.split()
-            if len(parts) == 3:
-                xs.append(float(parts[0]))
-                ys.append(float(parts[1]))
-                zs.append(float(parts[2]))
+            line = line.strip()
+            if not line:
+                continue
+            # 先頭の有効行でフォーマットを決定
+            if fmt is None:
+                fmt = "new" if "," in line else "old"
+            try:
+                if fmt == "new":
+                    parts = line.split(",")
+                    if len(parts) >= 4:          # ID, X, Y, Z [, flag]
+                        xs.append(float(parts[1]))
+                        ys.append(float(parts[2]))
+                        zs.append(float(parts[3]))
+                else:
+                    parts = line.split()
+                    if len(parts) == 3:          # X Y Z
+                        xs.append(float(parts[0]))
+                        ys.append(float(parts[1]))
+                        zs.append(float(parts[2]))
+            except ValueError:
+                continue
 
     x = np.asarray(xs, dtype=np.float64)
     y = np.asarray(ys, dtype=np.float64)
@@ -302,7 +406,13 @@ def _extract_tif(zip_path: str, out_dir: str) -> str:
 
 
 def download_grid_tif(code: str, year: int, out_dir: str, lp_type: str = "Grid") -> str:
-    """LP/{lp_type} ZIP をダウンロード→展開→GeoTIFF パスを返す。"""
+    """LP/{lp_type} ZIP をダウンロード→展開→GeoTIFF パスを返す。
+    同タイルコードの TIF が既に out_dir に存在する場合は再利用する。"""
+    # 既存 TIF キャッシュチェック
+    tif_cache = os.path.join(out_dir, f"{code}.tif")
+    if os.path.isfile(tif_cache):
+        return tif_cache
+
     folder = code[2:4]
     xx = code[4:6]
     url = f"{BUCKET_URL}/{year}/LP/{lp_type}/08/{folder}/{xx}/{code}.zip"
@@ -334,7 +444,12 @@ def merge_tifs(tif_paths: list, out_path: str):
 
 def download_las(code: str, year: int, out_dir: str, lp_type: str = "Ground") -> str:
     """LP/{lp_type} ZIP をダウンロード→LAS ファイルパスを返す。
-    lp_type: "Ground"（地面フィルタ済み、全年度）または "Original"（全リターン、2021/2025のみ）
+
+    lp_type:
+        "Original" — 全リターン LAS（2021/2025 のみ提供）
+        "Ground"   — 2021/2025 は地面フィルタ済み（DSM計算不可）
+                     2019/2020/2022 は全リターン結合データ（DSM計算可）
+
     同タイルコードの LAS が既に out_dir に存在する場合は再利用する。
     """
     # 既存 LAS キャッシュチェック（{code} で始まる .las ファイル）

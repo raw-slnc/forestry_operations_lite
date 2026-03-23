@@ -70,6 +70,45 @@ class _ElidedPathLabel(QtWidgets.QLabel):
         super().mousePressEvent(event)
 
 
+class CrosshairOverlay(QtWidgets.QWidget):
+    """プレビューキャンバス中央に十字線を描画する透明オーバーレイ。"""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setGeometry(parent.rect())
+        parent.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if obj is self.parent() and event.type() == QEvent.Resize:
+            self.setGeometry(self.parent().rect())
+        return False
+
+    def paintEvent(self, event):
+        from qgis.PyQt.QtGui import QPainter, QPen, QColor
+        painter = QPainter(self)
+        w, h = self.width(), self.height()
+        cx, cy = w // 2, h // 2
+        x1, x2 = w // 5, w * 4 // 5
+        # 影
+        pen_shadow = QPen(QColor(0, 0, 0, 80), 1)
+        painter.setPen(pen_shadow)
+        painter.drawLine(cx + 1, 0, cx + 1, h)
+        painter.drawLine(0, cy + 1, w, cy + 1)
+        # 本線（白）
+        pen = QPen(QColor(255, 255, 255, 180), 1)
+        painter.setPen(pen)
+        painter.drawLine(cx, 0, cx, h)
+        painter.drawLine(0, cy, w, cy)
+        # 縦分割線（黄色、1/5・4/5）
+        pen_y = QPen(QColor(255, 220, 0, 180), 1)
+        painter.setPen(pen_y)
+        painter.drawLine(x1, 0, x1, h)
+        painter.drawLine(x2, 0, x2, h)
+        painter.end()
+
+
 class PreviewPanTool(QgsMapToolPan):
     """プレビューキャンバス用デフォルトツール。
     ドラッグでパン、スクロールホイールでズーム（QgsMapToolPan の標準機能）に加え、
@@ -491,7 +530,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
             else:  # dsm
                 _vs_section("── VIRTUAL SHIZUOKA DSM (Shizuoka) ──")
-                _vs_item("🌿  VS LP/Ground → DSM  0.5m  (Shizuoka, auto-fetch)", self.VS_LP_GROUND_SENTINEL)
+                _vs_item("🌿  VS LP → DSM  0.5m  (Shizuoka, auto-fetch)", self.VS_LP_GROUND_SENTINEL)
 
     # ── アイテム選択 ─────────────────────────────────────────────
 
@@ -518,12 +557,13 @@ class DemBrowserDialog(QtWidgets.QDialog):
             self._btn_open_url.setVisible(False)
             self._selected_url = None
             return
-        # VS LP/Ground 自動取得 → DSM 変換
+        # VS LP 自動取得 → DSM 変換
         if path == self.VS_LP_GROUND_SENTINEL:
             self._lbl_info.setText(
-                "Virtual Shizuoka LP/Ground → DSM 0.5m — EPSG:6676, CC BY 4.0.\n"
-                "Ground-filtered LAS tiles fetched from S3 (newest year first) and converted to DSM (~200 MB/tile).\n"
-                "Coverage: Shizuoka prefecture (all areas, 2019–2025)."
+                "Virtual Shizuoka LP → DSM 0.5m — EPSG:6676, CC BY 4.0.\n"
+                "LAS tiles (all-return) fetched from S3 and converted to DSM.\n"
+                "Uses LP/Original where available (2021 中西部・2025), LP/Ground elsewhere (all-return).\n"
+                "Coverage: Shizuoka prefecture (2019–2025)."
             )
             self._btn_ok.setEnabled(True)
             self._btn_open_url.setVisible(False)
@@ -1026,6 +1066,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._pan_tool = PreviewPanTool(self.preview_canvas)
         self.preview_canvas.setMapTool(self._pan_tool)
 
+        # 中心十字線オーバーレイ
+        self._crosshair = CrosshairOverlay(self.preview_canvas)
+        self._crosshair.raise_()
+
         _ps = "QLabel{border:1px solid palette(mid);padding:0 4px;font-size:9pt;}"
         _ts = "QLabel{font-size:9pt;}"
         self.lblPreviewStatus = QtWidgets.QLabel("---")
@@ -1125,7 +1169,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.lblDemInfo = QtWidgets.QLabel("Not set")
         self.lblDemInfo.setWordWrap(True)
         dem_lay.addWidget(self.lblDemInfo,   1, 0, 1, 3)
-        dem_lay.addWidget(QtWidgets.QLabel("DSM/DTM Data"), 2, 0)
+        dem_lay.addWidget(QtWidgets.QLabel("DSM Data"), 2, 0)
         self.txtDsmPath = QtWidgets.QLineEdit()
         self.txtDsmPath.setReadOnly(True)
         self.txtDsmPath.setPlaceholderText("Select file... (optional)")
@@ -2898,7 +2942,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self.txtDemPath.setToolTip("Virtual Shizuoka LP/Grid — auto-fetch from S3 for canvas extent")
                 self.btnBrowseDem.setText("Clear")
                 self.btnBrowseDsm.setEnabled(False)
-                self.lblDsmInfo.setText("Auto: VS LP/Ground (fetching after DEM…)")
+                self.lblDsmInfo.setText("Auto: VS LP → DSM (fetching after DEM…)")
                 self._load_vs_lp_grid()  # auto_dsm=True (default)
             elif path in _tile_labels:
                 display, tooltip = _tile_labels[path]
@@ -3150,9 +3194,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             # ── 自動 DSM（VS LP/Ground）──────────────────────────────
             if auto_dsm and not self._dem_load_cancel:
                 self._dsm_path = DemBrowserDialog.VS_LP_GROUND_SENTINEL
-                self.txtDsmPath.setText("VS LP/Ground → DSM (0.5m)")
+                self.txtDsmPath.setText("VS LP → DSM (0.5m)")
                 self.txtDsmPath.setToolTip(
-                    "Virtual Shizuoka LP/Original → DSM — auto-fetch from S3 (newest year, all areas)"
+                    "Virtual Shizuoka LP → DSM — LP/Original (2021中西部・2025) or LP/Ground all-return (others)"
                 )
                 self.btnBrowseDsm.setText("")
                 self._load_vs_lp_ground(auto_mode=True)
@@ -3169,8 +3213,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.btnBrowseDem.setText("Clear" if self._dem_path else "Browse")
 
     def _load_vs_lp_ground(self, auto_mode=False):
-        """Virtual Shizuoka LP/Ground タイルをキャンバス範囲で S3 取得し LAS→DSM 変換して DSM としてロード。
-        LP/Ground は全年度・全エリア（OE含む）を提供。
+        """Virtual Shizuoka LP タイルをキャンバス範囲で S3 取得し LAS→DSM 変換して DSM としてロード。
+
+        取得優先順位:
+            1. LP/Original（全リターン）が存在する場合はそれを使用 → 2021中西部・2025
+            2. 存在しない場合は LP/Ground を使用 → 2019/2020/2021富士山東部/2022 は全リターン
+        いずれも全リターンデータのため DSM 計算に有効。
+
         auto_mode=True のとき DEM ロードの内部から呼ばれ、キャンセルは _dem_load_cancel を使う。"""
         from .vs_lp import (resolve_years, tiles_for_extent,
                             download_las, las_to_dsm, merge_tifs)
@@ -3195,6 +3244,21 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lblDsmInfo.setText("⚠ No VS LP tiles for this area.")
             return
 
+        # ── DSM 作成確認ダイアログ ───────────────────────────────────────────
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "DSM Creation",
+            "DSM creation may require a large amount of data.\n"
+            "Basic analysis is possible without LAS.\n\n"
+            "Do you want to continue DSM creation?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            self.lblDsmInfo.setText("Skipped — no LAS")
+            self._update_vs_export_buttons()
+            return
+
         # auto_mode: キャンセルは DEM 側のフラグを使う。ボタン管理は DEM 側が行う。
         def _is_cancelled():
             return self._dem_load_cancel if auto_mode else self._dsm_load_cancel
@@ -3211,9 +3275,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self.lblDsmInfo.setText(f"Checking S3… {done}/{total}")
                 QtWidgets.QApplication.processEvents()
 
-            resolved = resolve_years(codes, progress_cb=_prog, lp_type="Ground")
+            resolved_orig = resolve_years(codes, progress_cb=_prog, lp_type="Original")
+            remaining = codes - set(resolved_orig.keys())
+            resolved_ground = resolve_years(remaining, lp_type="Ground") if remaining else {}
+            resolved = {**resolved_orig, **resolved_ground}
+            resolved_lp_type = {c: "Original" for c in resolved_orig}
+            resolved_lp_type.update({c: "Ground" for c in resolved_ground})
             if not resolved:
-                self.lblDsmInfo.setText("⚠ No LP/Ground tiles available for this area.")
+                self.lblDsmInfo.setText("⚠ No VS LP tiles available for this area.")
                 return
 
             ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -3222,6 +3291,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
             dsm_tifs = []
             self._vs_las_paths = []
+            self._vs_las_urls = {}  # {basename: S3 ZIP URL}
             for i, (code, year) in enumerate(resolved.items()):
                 if _is_cancelled():
                     self.lblDsmInfo.setText("Cancelled")
@@ -3231,8 +3301,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 )
                 QtWidgets.QApplication.processEvents()
                 try:
-                    las_path = download_las(code, year, out_dir)
+                    _lp_type = resolved_lp_type[code]
+                    las_path = download_las(code, year, out_dir, lp_type=_lp_type)
                     self._vs_las_paths.append(las_path)
+                    from .vs_lp import BUCKET_URL as _BUCKET_URL
+                    _folder = code[2:4]; _xx = code[4:6]
+                    self._vs_las_urls[os.path.basename(las_path)] = (
+                        f"{_BUCKET_URL}/{year}/LP/{_lp_type}/08/{_folder}/{_xx}/{code}.zip"
+                    )
                     if _is_cancelled():
                         self.lblDsmInfo.setText("Cancelled")
                         return
@@ -3676,14 +3752,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             path = dlg.selected_path()
             self._reset_vs_export_state()
             _orig_labels = {
-                DemBrowserDialog.VS_LP_GROUND_SENTINEL: ("VS LP/Ground → DSM (0.5m)", "auto-fetch from S3 (newest year, all areas)"),
+                DemBrowserDialog.VS_LP_GROUND_SENTINEL: ("VS LP → DSM (0.5m)", "LP/Original (2021中西部・2025) or LP/Ground all-return (others)"),
             }
             if path in _orig_labels:
                 txt, tip = _orig_labels[path]
                 self._dsm_path = path
                 self.txtDsmPath.setText(txt)
                 self.txtDsmPath.setToolTip(
-                    f"Virtual Shizuoka LP/Original → DSM — {tip}"
+                    f"Virtual Shizuoka LP → DSM — {tip}"
                 )
                 self.btnBrowseDsm.setText("Clear")
                 self._load_vs_lp_ground()
@@ -3774,10 +3850,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         状態遷移:
           初期/terrain未設定  → 全off
-          DEM+DSM両方セット   → Export on / Open off / Cancel off
+          VS DEM セット       → Export on / Open off / Cancel off（DSM は任意）
           エクスポート処理中  → Export off / Open off / Cancel on
           エクスポート完了    → Export on / Open on  / Cancel off
-          Open in WODMI後    → 全off（DEM/DSM変更で Export が復活）
+          Open in WODMI後    → 全off（DEM変更で Export が復活）
         """
         import qgis.utils
         has_wodmi = any("webodm_importer" in k for k in qgis.utils.plugins)
@@ -3796,10 +3872,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         _dsm = getattr(self, "_dsm_loader", None)
         has_dem = bool(_dem and getattr(_dem, "path", None) and os.path.isfile(_dem.path))
         has_dsm = bool(_dsm and getattr(_dsm, "path", None) and os.path.isfile(_dsm.path))
-        # Export は VS Shizuoka ソース専用
-        is_vs_source = (self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL
-                        and self._dsm_path == DemBrowserDialog.VS_LP_GROUND_SENTINEL)
-        can_export = is_vs_source and has_dem and has_dsm
+        # Export は VS Shizuoka ソース専用（DSM は任意）
+        is_vs_source = (self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL)
+        can_export = is_vs_source and has_dem
         has_export = bool(self._vs_export_dir and os.path.isfile(self._vs_export_dir))
 
         if self._vs_exporting:
@@ -3826,11 +3901,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lblVsExportStatus.setToolTip(self._vs_export_dir)
 
         elif can_export:
-            # VS DEM+DSM 揃い: Export が使える
+            # VS DEM セット: Export が使える（DSM は任意）
             self.btnVsExport.setEnabled(True)
             self.btnVsExport.setToolTip(
-                "Virtual Shizuoka LP/Grid (DTM) + LP/Ground (DSM) を\n"
-                "Ortho・LAS とともに WODMI ZIP にエクスポートします。"
+                "Virtual Shizuoka LP/Grid (DTM) を WODMI ZIP にエクスポートします。\n"
+                "DSM (LAS) が読み込まれている場合は合わせてエクスポートします。"
             )
             self.btnOpenWodmi.setEnabled(False)
             self.btnOpenWodmi.setToolTip("Export first to enable")
@@ -3962,6 +4037,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lblVsExportStatus.setText("Creating ZIP…")
             QtWidgets.QApplication.processEvents()
             las_paths = [p for p in getattr(self, "_vs_las_paths", []) if os.path.isfile(p)]
+            las_urls = getattr(self, "_vs_las_urls", {})
             try:
                 with _zf.ZipFile(zip_path, "w", _zf.ZIP_DEFLATED) as zf:
                     zf.write(dtm_path, "odm_dem/dtm.tif")
@@ -3969,15 +4045,36 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                         zf.write(dsm_path, "odm_dem/dsm.tif")
                     if ortho_path:
                         zf.write(ortho_path, "odm_orthophoto/odm_orthophoto.tif")
-                    for i, las_path in enumerate(las_paths):
-                        if self._vs_export_cancel:
-                            self.lblVsExportStatus.setText("Cancelled")
-                            return
-                        self.lblVsExportStatus.setText(
-                            f"Packing LAS {i + 1}/{len(las_paths)}…")
-                        QtWidgets.QApplication.processEvents()
-                        zf.write(las_path,
-                                 f"odm_georeferencing/{os.path.basename(las_path)}")
+                    import json as _json
+                    zip_dir = os.path.dirname(zip_path)
+                    las_sources = {"las": []}
+                    for las_path in las_paths:
+                        fname = os.path.basename(las_path)
+                        rel = os.path.relpath(las_path, zip_dir)
+                        las_sources["las"].append({
+                            "filename": fname,
+                            "relative": rel,
+                        })
+                    zf.writestr("las_sources.json",
+                                _json.dumps(las_sources, ensure_ascii=False, indent=2))
+                    readme_lines = [
+                        "このZIPにLASファイルは含まれていません。",
+                        "LASファイルはlas_sources.jsonの相対パスで参照されます。",
+                        "",
+                        "LASファイルの入手先（ダウンロードURL）:",
+                    ]
+                    for p in las_paths:
+                        fname = os.path.basename(p)
+                        url = las_urls.get(fname, "（URL不明）")
+                        readme_lines.append(f"  {fname}")
+                        readme_lines.append(f"    {url}")
+                    readme_lines += [
+                        "",
+                        "注意: LASファイルを移動した場合はlas_sources.jsonの",
+                        "relativeパスを修正するか、上記URLから再取得してください。",
+                    ]
+                    zf.writestr("README_LAS_LINKS.txt",
+                                "\n".join(readme_lines))
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "VS Export", f"ZIP creation failed:\n{e}")
                 self.lblVsExportStatus.setText("—")
