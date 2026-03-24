@@ -333,13 +333,15 @@ forestry_operations_lite/
 
 ---
 
-## ライセンス
-
-GNU General Public License v2 以降
-
----
-
 ## サポート
 
 開発を応援していただけると嬉しいです。
 https://paypal.me/rawslnc
+
+## ライセンス
+
+GNU General Public License v2 以降
+
+## 作者
+
+Copyright (C) 2026 Hideharu Masai
