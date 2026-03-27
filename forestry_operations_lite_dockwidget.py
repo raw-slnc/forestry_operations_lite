@@ -4270,6 +4270,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             import numpy as np
 
             slope = ta.compute_slope_deg(dem.data, dem.cell_size)
+            # slope / SHC: FOP ゾーニング用。QGIS レイヤには追加しない。
+            rw.save_raster(slope.astype(np.float32), dem.gt, dem.crs_wkt,
+                           tmp_folder, "slope", overwrite=True)
+            shc = ta.compute_shc(dem.data, dem.cell_size)
+            rw.save_raster(shc, dem.gt, dem.crs_wkt, tmp_folder,
+                           "shc", overwrite=True)
             self.progressAnalysis.setValue(15)
             _pe()
 

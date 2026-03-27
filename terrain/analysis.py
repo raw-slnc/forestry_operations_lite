@@ -1,6 +1,8 @@
 """
 地形解析アルゴリズム群
   compute_slope_deg  : Horn法で傾斜角[度]を計算
+  compute_curvature  : 平均曲率（ラプラシアン）を計算
+  compute_shc        : SHC = 曲率の局所標準偏差（FOP用）
   d8_flow_direction  : D8流向コードを返す
   flow_accumulation  : 上流集水セル数を累積
   compute_twi        : TWI = ln(A / tan(β))
@@ -19,6 +21,42 @@ def compute_slope_deg(dem, cell_size):
     result = np.degrees(slope_rad)
     result[np.isnan(dem)] = np.nan
     return result
+
+
+def compute_curvature(dem, cell_size):
+    """
+    平均曲率（ラプラシアン近似）を計算する。
+    正値=凸地形（尾根）、負値=凹地形（谷）。
+    """
+    pad = np.pad(dem, 1, mode="edge")
+    r = (pad[1:-1, 2:] - 2.0 * dem + pad[1:-1, :-2]) / (cell_size ** 2)  # d²z/dx²
+    t = (pad[2:, 1:-1] - 2.0 * dem + pad[:-2, 1:-1]) / (cell_size ** 2)  # d²z/dy²
+    curv = -(r + t)
+    curv[np.isnan(dem)] = np.nan
+    return curv
+
+
+def compute_shc(dem, cell_size, window=5):
+    """
+    SHC（Surface Height Complexity）: 曲率の局所標準偏差。
+
+    もりぞんの災害リスク軸「地形の複雑さ」に相当する指標。
+    FOLでは可視化レイヤとしては使用せず、FOP のゾーニング計算用に
+    ラスタとして出力する。
+
+    window : 標準偏差を計算するウィンドウサイズ（奇数推奨）。デフォルト=5
+    """
+    from scipy.ndimage import generic_filter
+
+    curv = compute_curvature(dem, cell_size)
+
+    def _nanstd(v):
+        v = v[~np.isnan(v)]
+        return np.std(v) if len(v) > 1 else 0.0
+
+    shc = generic_filter(curv, _nanstd, size=window, mode="nearest")
+    shc[np.isnan(dem)] = np.nan
+    return shc.astype(np.float32)
 
 
 def d8_flow_direction(dem):
