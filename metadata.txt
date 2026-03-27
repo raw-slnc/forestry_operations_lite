@@ -13,7 +13,7 @@ repository=https://github.com/raw-slnc/forestry_operations_lite
 
 hasProcessingProvider=no
 changelog=
-    0.1.7 - Bundle laspy as vendor library (no manual installation required); add curvature and surface complexity analysis to terrain processing pipeline
+    0.1.7 - Bundle laspy as vendor library (no manual installation required); add curvature and surface complexity analysis to terrain processing pipeline; fix DEM browser not showing web sources before a local folder is set
     0.1.6 - VS LP DSM: use LP/Original (all-return) where available, fall back to LP/Ground (all-return for 2019/2020/2021-east/2022); DSM creation confirmation dialog with skip option; WODMI export enabled without DSM (VS DEM only); download timeout extended to 600s; Grid tile caching; restored 2025 to Grid year priority
     0.1.5 - Add area limit check before analysis; add Stop Analysis button to cancel mid-run; README restructured to separate general features from Shizuoka-only features
     0.1.4 - Virtual Shizuoka point cloud support and webodm_importer export (Shizuoka Prefecture, Japan)

@@ -158,7 +158,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
         self._build_ui()
         if self._current_dir and os.path.isdir(self._current_dir):
             self._txt_dir.setText(self._current_dir)
-            self._scan()
+        self._scan()
 
     # ── UI 構築 ─────────────────────────────────────────────────
 
