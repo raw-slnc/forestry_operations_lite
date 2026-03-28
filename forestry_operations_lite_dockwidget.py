@@ -1325,6 +1325,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.leftTabs.addTab(self.tabDataSettings, "Terrain Data")
         self.leftTabs.addTab(self.tabTerrain,      "Analysis")
 
+        import pathlib
+        _fol_uri = pathlib.Path(os.path.dirname(__file__), "data", "FOL.html").as_uri()
+        _corner_lnk = QtWidgets.QLabel(f'<a href="{_fol_uri}">?</a>')
+        _corner_lnk.setOpenExternalLinks(True)
+        _corner_lnk.setToolTip("Open FOL documentation")
+        _corner_lnk.setContentsMargins(0, 0, 4, 0)
+        self.leftTabs.setCornerWidget(_corner_lnk, Qt.TopRightCorner)
+
         left_layout.addWidget(self.leftTabs)
 
         # ── 解析データの表示管理（プレビュー上部・2行）────────────────
