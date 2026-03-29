@@ -4470,6 +4470,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         # tmp_folder を最終フォルダ名に一括リネーム（inotify イベントを1回に集約）
         if os.path.exists(folder):
+            # Windows ではレイヤーとして開いているファイルがロックされるため、
+            # 削除前に該当フォルダ内のレイヤーを QgsProject から除去する
+            _proj = QgsProject.instance()
+            _to_remove = [
+                lyr for lyr in _proj.mapLayers().values()
+                if lyr.dataProvider() and
+                os.path.normcase(lyr.dataProvider().dataSourceUri().split("|")[0])
+                .startswith(os.path.normcase(folder))
+            ]
+            if _to_remove:
+                _proj.removeMapLayers([lyr.id() for lyr in _to_remove])
             _shutil.rmtree(folder)
         os.rename(tmp_folder, folder)
         # saved のパスを新フォルダに更新
