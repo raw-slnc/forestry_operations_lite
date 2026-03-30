@@ -2,7 +2,7 @@
 name=Forestry Operations Lite
 qgisMinimumVersion=3.16
 description=Terrain analysis for forestry sites: DEM/DSM loading, slope, TWI, stability index, and flow accumulation.
-version=0.1.9
+version=0.2.0
 author=Hideharu Masai
 email=hideharumasai@void.mints.ne.jp
 
@@ -13,6 +13,7 @@ repository=https://github.com/raw-slnc/forestry_operations_lite
 
 hasProcessingProvider=no
 changelog=
+    0.2.0 - Auto-resample high-resolution DEM/DSM (finer than 0.2 m) to 0.5 m before analysis; resample indicator added to Area Limit section; non-VS data sources (e.g. WebODM) no longer trigger re-acquisition dialog — analysis proceeds on available data extent only; DSM is clipped to canvas extent before use to ensure correct canopy-height integration
     0.1.9 - Fix PermissionError on Windows when overwriting analysis results: release locked layers from QgsProject before deleting the output folder
     0.1.8 - Add help link (FOL.html) to Analysis tab corner
     0.1.7 - Bundle laspy as vendor library (no manual installation required); add curvature and surface complexity analysis to terrain processing pipeline; fix DEM browser not showing web sources before a local folder is set

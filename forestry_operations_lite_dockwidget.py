@@ -27,6 +27,56 @@ class _StopAnalysis(Exception):
     pass
 
 
+_RESAMPLE_THRESHOLD = 0.2   # これより細かい解像度（m）は自動リサンプル対象
+_RESAMPLE_TARGET    = 0.5   # リサンプル後の解像度（m）
+
+
+def _resample_dem(src, target_cell_size=_RESAMPLE_TARGET):
+    """DEMを指定解像度にダウンサンプルして新しい DEMLoader を返す。
+    整数倍の場合はブロック平均（NaN 対応）、非整数倍は scipy.ndimage.zoom を使用。"""
+    import numpy as np
+    from .terrain.dem_loader import DEMLoader
+
+    factor = target_cell_size / src.cell_size
+    int_factor = round(factor)
+    data = src.data
+    rows, cols = data.shape
+
+    if abs(factor - int_factor) < 0.05 and int_factor > 1:
+        # 整数倍：ブロック平均（高精度・NaN 対応）
+        r_trim = (rows // int_factor) * int_factor
+        c_trim = (cols // int_factor) * int_factor
+        d = data[:r_trim, :c_trim]
+        d_out = np.nanmean(
+            d.reshape(r_trim // int_factor, int_factor,
+                      c_trim // int_factor, int_factor),
+            axis=(1, 3),
+        )
+    else:
+        # 非整数倍：scipy zoom（NaN をノーデータ値で一時代替）
+        from scipy.ndimage import zoom as _zoom
+        d = data.copy()
+        nan_mask = np.isnan(d)
+        d[nan_mask] = 0.0
+        scale = 1.0 / factor
+        d_out = _zoom(d, scale, order=1)
+        nan_out = _zoom(nan_mask.astype(np.float32), scale, order=1)
+        d_out[nan_out > 0.5] = np.nan
+
+    actual_cell = src.cell_size * (cols / d_out.shape[1])
+    new_gt = (src.gt[0], actual_cell, 0.0, src.gt[3], 0.0, -actual_cell)
+
+    result = DEMLoader()
+    result.data = d_out
+    result.gt = new_gt
+    result.crs_wkt = src.crs_wkt
+    result.cell_size = actual_cell
+    result.nodata = src.nodata
+    result._ds = src._ds
+    result.path = src.path
+    return result
+
+
 class _ElidedPathLabel(QtWidgets.QLabel):
     """パスを省略表示し、クリックでファイルマネージャーを開くラベル。
 
@@ -1581,6 +1631,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         _al_left_lay.addWidget(QtWidgets.QLabel("ha"))
         _al_left.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
         _al_lay.addWidget(_al_left, 2)
+        # Resample インジケーター（解像度 < 0.2m のとき表示）
+        self.lblResample = QtWidgets.QLabel("Resample")
+        self.lblResample.setAlignment(Qt.AlignCenter)
+        self.lblResample.setStyleSheet(
+            "QLabel{background:#27ae60;color:white;border-radius:3px;"
+            "padding:2px 5px;font-size:8pt;}"
+        )
+        self.lblResample.setVisible(False)
+        self.lblResample.setToolTip(
+            f"解像度が {_RESAMPLE_THRESHOLD}m 未満のため、"
+            f"解析前に {_RESAMPLE_TARGET}m へ自動リサンプルします。"
+        )
+        _al_lay.addWidget(self.lblResample)
         # 右カラム（Stop ボタン）
         self.btnStopAnalysis = QtWidgets.QPushButton("Stop")
         self.btnStopAnalysis.setEnabled(False)
@@ -2920,6 +2983,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.txtDemPath.setToolTip("")
             self.lblDemInfo.setText("Not set")
             self.btnBrowseDem.setText("Browse")
+            self._update_resample_indicator()
             if _was_vs:
                 # VS LP/Grid だった場合は DSM も連動クリア
                 self._dsm_path = ""
@@ -3119,6 +3183,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         self.txtDemPath.setToolTip(tif_path)
         self.lblDemInfo.setText(dem_loader.info_text())
+        self._update_resample_indicator()
 
     def _load_vs_lp_grid(self, auto_dsm=True):
         """Virtual Shizuoka LP/Grid タイルをキャンバス範囲で S3 取得し DEM としてロード。
@@ -3204,6 +3269,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 f"year(s): {', '.join(str(y) for y in sorted(set(resolved.values())))}]"
             )
             self._vs_dem_codes = list(resolved.keys())
+            self._update_resample_indicator()
 
             # ── 自動 DSM（VS LP/Ground）──────────────────────────────
             if auto_dsm and not self._dem_load_cancel:
@@ -3741,6 +3807,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lblDemInfo.setText(f"Error: {e}")
             self._terrain_loader = None
         self.btnBrowseDem.setText("Clear")
+        self._update_resample_indicator()
 
     def _on_browse_dsm(self):
         if self._dsm_loading:
@@ -3814,6 +3881,18 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 "Auto-calculated from canopy height when DSM/DTM is set" if has_dsm
                 else w.toolTip()
             )
+
+    def _update_resample_indicator(self):
+        """terrain_loader の解像度に応じて Resample インジケーターを更新する。"""
+        loader = getattr(self, "_terrain_loader", None)
+        if loader is not None and getattr(loader, "cell_size", None) is not None \
+                and loader.cell_size < _RESAMPLE_THRESHOLD:
+            self.lblResample.setText(
+                f"Resample → {_RESAMPLE_TARGET}m"
+            )
+            self.lblResample.setVisible(True)
+        else:
+            self.lblResample.setVisible(False)
 
     # ── VS Export / WODMI 連携 ──────────────────────────────────────────────
 
@@ -4193,24 +4272,26 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             DemBrowserDialog.TERRARIUM_WIDE_SENTINEL,
             DemBrowserDialog.VS_LP_GRID_SENTINEL,
         )
-        # ── 解析範囲外チェック（タイルソースのDEMは自動再取得されるためスキップ）──
+        # ── 解析範囲外チェック ──
+        # VS LP/Ground DSM のみ再取得可能 → 範囲外なら再取得ダイアログを表示。
+        # 実データ（WebODM 等の手動ファイル）は範囲外でもダイアログなし:
+        #   clip_to_extent がデータ存在領域のみを返すため、そのまま解析を続行する。
         _dem_path_cur = getattr(self, "_dem_path", "")
-        _check_dem = (_dem_path_cur not in _TILE_SENTINELS
-                      and getattr(self, "_terrain_loader", None) is not None)
-        _check_dsm = getattr(self, "_dsm_loader", None) is not None
-        _outside = ((_check_dem and self._canvas_outside_loader(self._terrain_loader))
-                    or (_check_dsm and self._canvas_outside_loader(self._dsm_loader)))
-        if _outside:
+        _dsm_path_cur = getattr(self, "_dsm_path", "")
+        _vs_dsm_outside = (
+            _dsm_path_cur == DemBrowserDialog.VS_LP_GROUND_SENTINEL
+            and getattr(self, "_dsm_loader", None) is not None
+            and self._canvas_outside_loader(self._dsm_loader)
+        )
+        if _vs_dsm_outside:
             reply = QtWidgets.QMessageBox.question(
                 self, "解析範囲の確認",
-                "解析範囲にDEM,DSM/DTM設定外が含まれます。\n再取得しますか？",
+                "解析範囲にDSM/DTM設定外が含まれます。\n再取得しますか？",
                 QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.No,
             )
             if reply != QtWidgets.QMessageBox.Ok:
                 return
-            # 再取得（VS LP/Ground DSM のみ可能）
-            if self._dsm_path == DemBrowserDialog.VS_LP_GROUND_SENTINEL:
-                self._load_vs_lp_ground()
+            self._load_vs_lp_ground()
 
         if _dem_path_cur in _TILE_SENTINELS:
             self._terrain_loader = None  # 古いデータをクリアしてから再取得
@@ -4247,6 +4328,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         except Exception as e:
             self.lblAnalysisStatus.setText(f"Clip failed: {e}")
             return
+
+        # 解像度チェック：閾値より細かければ自動リサンプル（解除不可）
+        if dem.cell_size < _RESAMPLE_THRESHOLD:
+            self.lblAnalysisStatus.setVisible(True)
+            self.lblAnalysisStatus.setText(
+                f"Resampling {dem.cell_size:.3f}m → {_RESAMPLE_TARGET}m ..."
+            )
+            QtWidgets.QApplication.processEvents()
+            dem = _resample_dem(dem, _RESAMPLE_TARGET)
 
         # 解析シーケンス番号を決定（ファイル保存前に確定）
         seq = self._next_seq(self.chkOverwrite.isChecked())
@@ -4341,6 +4431,29 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 # ピクセルデータが未ロードなら遅延読み込み
                 if dsm_loader is not None and dsm_loader.data is None:
                     dsm_loader.read_data()
+                # DEMと同じ地理的範囲にクリップしてシェイプを合わせる
+                # （実データ/WebODM等ではフルファイルがロードされているため必要）
+                if dsm_loader is not None and dsm_loader.data is not None:
+                    try:
+                        from qgis.core import (
+                            QgsCoordinateReferenceSystem as _QgsCRS2,
+                            QgsCoordinateTransform as _QgsCT2,
+                        )
+                        _dem_crs2 = _QgsCRS2()
+                        _dem_crs2.createFromWkt(dem.crs_wkt)
+                        _dsm_crs2 = _QgsCRS2()
+                        _dsm_crs2.createFromWkt(dsm_loader.crs_wkt)
+                        _dsm_ext = ext
+                        if (_dsm_crs2.isValid() and _dem_crs2.isValid()
+                                and _dsm_crs2 != _dem_crs2):
+                            _xf2 = _QgsCT2(_dem_crs2, _dsm_crs2, QgsProject.instance())
+                            _dsm_ext = _xf2.transformBoundingBox(ext)
+                        dsm_loader = dsm_loader.clip_to_extent(
+                            _dsm_ext.xMinimum(), _dsm_ext.yMinimum(),
+                            _dsm_ext.xMaximum(), _dsm_ext.yMaximum(),
+                        )
+                    except Exception:
+                        dsm_loader = None
                 if dsm_loader is not None and dsm_loader.data is not None \
                         and dsm_loader.data.shape == dem.data.shape:
                     cs = dsm_loader.data - dem.data
