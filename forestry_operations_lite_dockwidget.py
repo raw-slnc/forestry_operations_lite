@@ -1232,6 +1232,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         dem_lay.addWidget(self.lblDsmInfo,   3, 0, 1, 3)
         self._dem_path = ""
         self._dsm_path = ""
+        self._partial_outside_warned = False   # reset when DEM changes
         self._dem_loading = False
         self._dem_load_cancel = False
         self._dsm_loading = False
@@ -2979,6 +2980,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self._dem_path = ""
             self._terrain_loader = None
             self._vs_dem_codes = []
+            self._partial_outside_warned = False
             self.txtDemPath.clear()
             self.txtDemPath.setToolTip("")
             self.lblDemInfo.setText("Not set")
@@ -3180,6 +3182,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._dem_actual_path = tif_path  # 実ファイルパス（params.json 用）
         # _dem_path は sentinel のまま維持（GSI ソースを追跡するため）
         self._vs_dem_codes = []  # 非 VS ソース: コードなし
+        self._partial_outside_warned = False
 
         self.txtDemPath.setToolTip(tif_path)
         self.lblDemInfo.setText(dem_loader.info_text())
@@ -3269,6 +3272,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 f"year(s): {', '.join(str(y) for y in sorted(set(resolved.values())))}]"
             )
             self._vs_dem_codes = list(resolved.keys())
+            self._partial_outside_warned = False
             self._update_resample_indicator()
 
             # ── 自動 DSM（VS LP/Ground）──────────────────────────────
@@ -3806,6 +3810,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         except Exception as e:
             self.lblDemInfo.setText(f"Error: {e}")
             self._terrain_loader = None
+        self._partial_outside_warned = False
         self.btnBrowseDem.setText("Clear")
         self._update_resample_indicator()
 
@@ -4323,11 +4328,35 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 from qgis.core import QgsCoordinateTransform as _QgsCT
                 _xf = _QgsCT(canvas_crs, dem_crs, QgsProject.instance())
                 ext = _xf.transformBoundingBox(ext)
+            # 部分重なり検出（タイルソースは毎回再取得のためスキップ）
+            _partial_outside = (
+                _dem_path_cur not in _TILE_SENTINELS
+                and self._canvas_outside_loader(loader)
+            )
             dem = loader.clip_to_extent(ext.xMinimum(), ext.yMinimum(),
                                         ext.xMaximum(), ext.yMaximum())
+        except ValueError:
+            # キャンバスがDEMと完全に重ならない
+            self.lblAnalysisStatus.setVisible(True)
+            self.lblAnalysisStatus.setText(
+                "No DEM data in the analysis range. Adjust the view."
+            )
+            return
         except Exception as e:
             self.lblAnalysisStatus.setText(f"Clip failed: {e}")
             return
+
+        # 部分重なり：初回のみ確認ダイアログ
+        if _partial_outside and not self._partial_outside_warned:
+            reply = QtWidgets.QMessageBox.question(
+                self, "Analysis Range",
+                "The analysis range extends beyond the DEM data.\n"
+                "Proceed with the available data only?",
+                QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel,
+            )
+            if reply != QtWidgets.QMessageBox.Ok:
+                return
+            self._partial_outside_warned = True
 
         # 解像度チェック：閾値より細かければ自動リサンプル（解除不可）
         if dem.cell_size < _RESAMPLE_THRESHOLD:
