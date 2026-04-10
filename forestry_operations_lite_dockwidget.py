@@ -4623,7 +4623,28 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             ]
             if _to_remove:
                 _proj.removeMapLayers([lyr.id() for lyr in _to_remove])
-            _shutil.rmtree(folder)
+            # Windows では removeMapLayers 後も OGR/GDAL のファイルハンドルが
+            # すぐに解放されないため、gc + processEvents でハンドル解放を促す
+            import sys as _sys
+            if _sys.platform == "win32":
+                import gc as _gc
+                import time as _time
+                from qgis.PyQt.QtCore import QCoreApplication as _QCA
+                _gc.collect()
+                _QCA.processEvents()
+                for _attempt in range(5):
+                    try:
+                        _shutil.rmtree(folder)
+                        break
+                    except PermissionError:
+                        if _attempt < 4:
+                            _time.sleep(0.3)
+                            _gc.collect()
+                            _QCA.processEvents()
+                        else:
+                            raise
+            else:
+                _shutil.rmtree(folder)
         os.rename(tmp_folder, folder)
         # saved のパスを新フォルダに更新
         saved = [(label, os.path.join(folder, os.path.basename(p)), kind)
