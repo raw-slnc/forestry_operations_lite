@@ -3,7 +3,7 @@ import os
 import shutil
 
 from qgis.PyQt import QtWidgets, uic
-from qgis.PyQt.QtCore import QEvent, QSettings, Qt, QUrl, pyqtSignal
+from qgis.PyQt.QtCore import QEvent, QSettings, QSignalBlocker, Qt, QUrl, pyqtSignal
 from qgis.PyQt.QtGui import QDesktopServices
 from qgis.core import (
     QgsCoordinateReferenceSystem,
@@ -1809,14 +1809,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     @staticmethod
     def _set_combo_data(combo, data):
         current = combo.currentData()
-        combo.blockSignals(True)
-        combo.clear()
-        for text, value in data:
-            combo.addItem(text, value)
-        index = combo.findData(current)
-        if index >= 0:
-            combo.setCurrentIndex(index)
-        combo.blockSignals(False)
+        with QSignalBlocker(combo):
+            combo.clear()
+            for text, value in data:
+                combo.addItem(text, value)
+            index = combo.findData(current)
+            if index >= 0:
+                combo.setCurrentIndex(index)
 
     def _update_preview_status(self):
         if self.preview_canvas is None:
@@ -2076,9 +2075,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def initialize_window_mode(self):
         standalone = True
         QSettings().setValue("forestry_operations_lite/standalone_window", True)
-        self.chkStandaloneWindow.blockSignals(True)
-        self.chkStandaloneWindow.setChecked(standalone)
-        self.chkStandaloneWindow.blockSignals(False)
+        with QSignalBlocker(self.chkStandaloneWindow):
+            self.chkStandaloneWindow.setChecked(standalone)
         self._apply_window_mode(standalone)
 
     def _apply_window_mode(self, checked):
@@ -2597,6 +2595,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             mem_path = f"/vsimem/flow_buf_{id(lyr)}_{state}.tif"
             drv = gdal.GetDriverByName("GTiff")
             out = drv.Create(mem_path, data.shape[1], data.shape[0], 1, gdal.GDT_Float32)
+            if out is None:
+                continue
+            # Create 成功直後に登録 — 以降の例外でも Unlink が保証される
+            self._flow_buffer_mem_paths.append(mem_path)
             out.SetGeoTransform(gt)
             out.SetProjection(wkt)
             band = out.GetRasterBand(1)
@@ -2633,7 +2635,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     node.setExpanded(False)
 
             self._flow_buffer_layer_ids.append(blur_lyr.id())
-            self._flow_buffer_mem_paths.append(mem_path)
 
         self._refresh_preview_canvas()
 
@@ -2756,21 +2757,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 proj.removeMapLayer(lid)
         self._terrain_cycle_state[key] = -1
         btn = self._btn(key)
-        btn.blockSignals(True)
-        btn.setChecked(False)
-        btn.setText(self._BTN_LABELS[key][0])
-        btn.setStyleSheet(self._BTN_STYLE_NORMAL)
-        btn.blockSignals(False)
+        with QSignalBlocker(btn):
+            btn.setChecked(False)
+            btn.setText(self._BTN_LABELS[key][0])
+            btn.setStyleSheet(self._BTN_STYLE_NORMAL)
 
     def _reset_load_buttons(self):
         """すべての読込ボタンを非表示状態にリセットする。"""
         self._terrain_cycle_state.clear()
         for key, (label, _) in self._BTN_LABELS.items():
             btn = self._btn(key)
-            btn.blockSignals(True)
-            btn.setChecked(False)
-            btn.setText(label)
-            btn.blockSignals(False)
+            with QSignalBlocker(btn):
+                btn.setChecked(False)
+                btn.setText(label)
 
     def _cycle_terrain_layer(self, key):
         """クリック毎に 非表示→ファイル1→ファイル2→...→非表示 と循環する。"""
@@ -2780,9 +2779,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         if not analysis_number:
             self.lblLoadStatus.setText("Select an analysis run")
-            btn.blockSignals(True)
-            btn.setChecked(False)
-            btn.blockSignals(False)
+            with QSignalBlocker(btn):
+                btn.setChecked(False)
             return
 
         out_dir = self._terrain_output_dir()
@@ -2796,9 +2794,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         if not available:
             self.lblLoadStatus.setText("No file")
-            btn.blockSignals(True)
-            btn.setChecked(False)
-            btn.blockSignals(False)
+            with QSignalBlocker(btn):
+                btn.setChecked(False)
             return
 
         # 現在表示中のレイヤを削除
@@ -2815,11 +2812,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         if next_state == -1:
             # 非表示状態に戻る
-            btn.blockSignals(True)
-            btn.setChecked(False)
-            btn.setText(base_label)
-            btn.setStyleSheet(self._BTN_STYLE_NORMAL)
-            btn.blockSignals(False)
+            with QSignalBlocker(btn):
+                btn.setChecked(False)
+                btn.setText(base_label)
+                btn.setStyleSheet(self._BTN_STYLE_NORMAL)
             self.lblLoadStatus.setText("")
             # 流量 OFF 時はバッファ層も非表示（state は保持）
             if key == "flow":
@@ -2887,12 +2883,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lblLoadStatus.setText(f"Load error: {label}")
             self._terrain_cycle_state[key] = current  # 状態を戻す
 
-        btn.blockSignals(True)
-        btn.setChecked(True)
-        btn.setText(base_label)
-        btn.setStyleSheet(
-            self._BTN_STYLE_BLOCKING if _blocking else self._BTN_STYLE_NORMAL)
-        btn.blockSignals(False)
+        with QSignalBlocker(btn):
+            btn.setChecked(True)
+            btn.setText(base_label)
+            btn.setStyleSheet(
+                self._BTN_STYLE_BLOCKING if _blocking else self._BTN_STYLE_NORMAL)
 
     def _toggle_terrain_layer(self, key, checked):
         """チェックON→選択解析番号のファイルを読込、OFF→該当レイヤを削除"""
@@ -2909,9 +2904,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 }
                 btn = btn_map.get(key)
                 if btn:
-                    btn.blockSignals(True)
-                    btn.setChecked(False)
-                    btn.blockSignals(False)
+                    with QSignalBlocker(btn):
+                        btn.setChecked(False)
                 return
             out_dir = self._terrain_output_dir()
             # グループがなければ作成
@@ -3600,21 +3594,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         select_latest=False: 現在の選択を維持する（解析完了後の更新など）。
         """
         current = self.cmbAnalysisNumber.currentData()
-        self.cmbAnalysisNumber.blockSignals(True)
-        self.cmbAnalysisNumber.clear()
-        self.cmbAnalysisNumber.addItem("Select run", None)
-        numbers = self._scan_analysis_numbers()
-        for num in numbers:
-            self.cmbAnalysisNumber.addItem(num, num)
-        if select_latest and numbers:
-            # 最新番号（リスト末尾）を選択して表示待機状態にする
-            self.cmbAnalysisNumber.setCurrentIndex(self.cmbAnalysisNumber.count() - 1)
-        else:
-            # 以前の選択を復元
-            idx = self.cmbAnalysisNumber.findData(current)
-            self.cmbAnalysisNumber.setCurrentIndex(idx if idx >= 0 else 0)
-        self.cmbAnalysisNumber.blockSignals(False)
-        # 選択変更を手動で通知（blockSignals 中に setCurrentIndex したため）
+        with QSignalBlocker(self.cmbAnalysisNumber):
+            self.cmbAnalysisNumber.clear()
+            self.cmbAnalysisNumber.addItem("Select run", None)
+            numbers = self._scan_analysis_numbers()
+            for num in reversed(numbers):
+                self.cmbAnalysisNumber.addItem(num, num)
+            if select_latest and numbers:
+                # 最新番号（降順先頭 = インデックス1）を選択して表示待機状態にする
+                self.cmbAnalysisNumber.setCurrentIndex(1)
+            else:
+                # 以前の選択を復元
+                idx = self.cmbAnalysisNumber.findData(current)
+                self.cmbAnalysisNumber.setCurrentIndex(idx if idx >= 0 else 0)
+        # 選択変更を手動で通知（QSignalBlocker スコープ内に setCurrentIndex したため）
         self._on_analysis_number_changed(self.cmbAnalysisNumber.currentIndex())
         # トグルボタンの有効/無効を更新
         has_data = self.cmbAnalysisNumber.count() > 1
@@ -4233,6 +4226,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._update_vs_export_buttons()
 
     def _run_terrain_analysis(self):
+        # ── 解析タイプ選択チェック ──
         if not any([
             self.chkStability.isChecked(),
             self.chkValley.isChecked(),
@@ -4267,6 +4261,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             except Exception:
                 pass
 
+        # ── DEM タイルソース再取得 / VS LP 範囲外チェック ──
         # タイルソースの場合は解析ごとに現在のキャンバス範囲で再取得・変換
         _TILE_SENTINELS = (
             DemBrowserDialog.GSI_DEM1A_SENTINEL,
@@ -4396,6 +4391,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             from .terrain import result_writer as rw
             import numpy as np
 
+            # ── 共通前処理（斜度・SHC・D8流向・流積） ──
             slope = ta.compute_slope_deg(dem.data, dem.cell_size)
             # slope / SHC: FOP ゾーニング用。QGIS レイヤには追加しない。
             rw.save_raster(slope.astype(np.float32), dem.gt, dem.crs_wkt,
@@ -4415,7 +4411,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self.progressAnalysis.setValue(45)
                 _pe()
 
-            # ④ 斜面安定解析
+            # ── 斜面安定解析 ──
             if self.chkStability.isChecked():
                 fs = ta.stability_fs(
                     slope,
@@ -4436,7 +4432,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self.progressAnalysis.setValue(60)
                 _pe()
 
-            # ① 沢地形判定
+            # ── 沢地形判定（TWI） ──
             if self.chkValley.isChecked():
                 twi = ta.compute_twi(accum, slope, dem.cell_size)
                 p = rw.save_raster(twi, dem.gt, dem.crs_wkt, tmp_folder,
@@ -4453,7 +4449,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self.progressAnalysis.setValue(70)
                 _pe()
 
-            # ③ 流量推測（修正合理式 + 到達時間 Tc ルーティング）
+            # ── 流量推測（修正合理式 + 到達時間 Tc ルーティング） ──
             if self.chkFlow.isChecked():
                 # DSM/DTM 設定時は CS（樹冠高さ）から係数を空間化
                 dsm_loader = getattr(self, "_dsm_loader", None)
@@ -4524,7 +4520,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                                     "flow_vtotal", overwrite=True)
                 saved.append(("V[m³]", p3, "raster"))
 
-            # 統合リスク指標（FS/TWI/流量のいずれかがあれば自動生成）
+            # ── 統合リスク指標（FS/TWI/流量のいずれかがあれば自動生成） ──
             self.progressAnalysis.setValue(90)
             _pe()
             try:
@@ -4650,13 +4646,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         saved = [(label, os.path.join(folder, os.path.basename(p)), kind)
                  for label, p, kind in saved]
 
+        # ── 解析完了後処理（コンボ更新・UI表示） ──
         # 解析番号コンボを更新して新番号を選択（解析完了後は最新が当該番号なのでそのまま）
         self._refresh_analysis_combo(select_latest=False)
         idx = self.cmbAnalysisNumber.findData(analysis_number)
         if idx >= 0:
-            self.cmbAnalysisNumber.blockSignals(True)
-            self.cmbAnalysisNumber.setCurrentIndex(idx)
-            self.cmbAnalysisNumber.blockSignals(False)
+            with QSignalBlocker(self.cmbAnalysisNumber):
+                self.cmbAnalysisNumber.setCurrentIndex(idx)
 
         self._update_analysis_condition_label(analysis_number)
         names = ", ".join(n for n, _, _ in saved)

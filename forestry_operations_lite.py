@@ -71,6 +71,17 @@ class ForestryOperationsLite:
             parent=self.iface.mainWindow(),
         )
 
+        try:
+            import scipy  # noqa: F401
+        except ImportError:
+            self.iface.messageBar().pushMessage(
+                "Forestry Operations Lite",
+                "scipy is not installed. Flow buffer feature will be unavailable. "
+                "Install it via: pip install scipy",
+                level=1,  # Qgis.Warning
+                duration=10,
+            )
+
     def on_close_plugin(self):
         self.dockwidget.closingPlugin.disconnect(self.on_close_plugin)
         self.plugin_is_active = False
