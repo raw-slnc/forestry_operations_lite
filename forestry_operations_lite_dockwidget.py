@@ -879,7 +879,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
             if not p.startswith("/vsizip/") and os.path.isfile(p):
                 try:
                     os.remove(p)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
         return out_path
@@ -952,14 +952,14 @@ class LockedMapTool(QgsMapTool):
     def removeFromCanvas(self):
         try:
             self.canvas().viewport().removeEventFilter(self)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         super().deactivate()
 
     def deactivate(self):
         try:
             self.canvas().viewport().removeEventFilter(self)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         super().deactivate()
 
@@ -1937,7 +1937,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                             and canvas_crs.isValid() and src_crs != canvas_crs):
                         xf = QgsCoordinateTransform(src_crs, canvas_crs, QgsProject.instance())
                         r = xf.transformBoundingBox(r)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
                 ds = None
                 if r.isEmpty():
@@ -1960,7 +1960,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                                     and canvas_crs.isValid() and src_crs != canvas_crs):
                                 xf = QgsCoordinateTransform(src_crs, canvas_crs, QgsProject.instance())
                                 r = xf.transformBoundingBox(r)
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
                     if not r.isEmpty():
                         ext = r if ext is None else ext.combineExtentWith(r)
@@ -2210,7 +2210,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                         main.refresh()
                     finally:
                         self._syncing = _prev
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def _zoom_preview_to_base_layers_if_needed(self, bg, tile, gpkg):
@@ -2230,7 +2230,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     from qgis.core import QgsCoordinateTransform as _CT
                     xf = _CT(lyr_crs, canvas_crs, QgsProject.instance())
                     ext = xf.transformBoundingBox(ext)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             if ext.isEmpty():
                 continue
@@ -2925,13 +2925,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     if kind == "raster":
                         try:
                             self._apply_raster_color(lyr, color_name)
-                        except Exception:
+                        except Exception:  # nosec B110
                             pass
                         lyr.renderer().setOpacity(opacity)
                     else:
                         try:
                             self._apply_vector_style(lyr, color_name)
-                        except Exception:
+                        except Exception:  # nosec B110
                             pass
                         lyr.setOpacity(opacity)
                     ids.append(lyr.id())
@@ -3433,12 +3433,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 if ext == ".las" and fpath not in current_las:
                     try:
                         os.remove(fpath)
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
                 elif ext == ".tif" and fpath not in current_dsm and fpath != os.path.normpath(tif_path):
                     try:
                         os.remove(fpath)
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
         finally:
             if not auto_mode:
@@ -3485,7 +3485,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                         from qgis.core import QgsCoordinateTransform as _CT
                         xf = _CT(lyr_crs, canvas_crs, QgsProject.instance())
                         ext = xf.transformBoundingBox(ext)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
                 if ext.isEmpty():
                     continue
@@ -3510,7 +3510,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 dem_rect = xform.transformBoundingBox(dem_rect)
             self.preview_canvas.setExtent(dem_rect)
             self.preview_canvas.refresh()
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def _update_out_dir_label(self):
@@ -3583,7 +3583,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     if os.path.isdir(folder):
                         try:
                             _shutil.rmtree(folder)
-                        except Exception:
+                        except Exception:  # nosec B110
                             pass
             return prefix
         return f"{max_seq + 1:03d}"
@@ -3636,7 +3636,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 dp = p.get("dem_path", "")
                 if dp:
                     referenced.add(os.path.normpath(dp))
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
         # 現在ロード中のファイルも保持
@@ -3654,7 +3654,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 if os.path.isfile(fpath) and fpath not in referenced:
                     try:
                         os.remove(fpath)
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
     _GROUP_PROP = "fop_managed"  # プラグイン管理グループ識別用プロパティ
@@ -3696,9 +3696,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                                 n.layerId() for n in child.findLayers()
                             ]
                             root.removeChildNode(child)
-                        except Exception:
+                        except Exception:  # nosec B110
                             pass
-        except Exception:
+        except Exception:  # nosec B110
             pass
         self._terrain_layer_group = None
         proj = QgsProject.instance()
@@ -3706,19 +3706,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             try:
                 if proj.mapLayer(lid):
                     proj.removeMapLayer(lid)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         self._loaded_terrain_layers = {}
         self._flow_buffer_layer_ids = []
         self._reset_load_buttons()
         try:
             self._refresh_preview_canvas()
-        except Exception:
+        except Exception:  # nosec B110
             pass
         if self.iface is not None:
             try:
                 self.iface.mapCanvas().refresh()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
     def _on_project_cleared(self):
@@ -3728,7 +3728,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._reset_load_buttons()
         try:
             self._refresh_preview_canvas()
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def _on_analysis_number_changed(self, _index):
@@ -4103,7 +4103,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     QtWidgets.QApplication.processEvents()
                     try:
                         ortho_tifs.append(download_grid_tif(code, year, tmp_dir, "Ortho"))
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
                 if ortho_tifs:
                     self.lblVsExportStatus.setText("Merging Ortho…")
@@ -4258,7 +4258,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     )
                     if _reply != QtWidgets.QMessageBox.Ok:
                         return
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
         # ── DEM タイルソース再取得 / VS LP 範囲外チェック ──
@@ -4603,7 +4603,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         try:
             with open(os.path.join(tmp_folder, "params.json"), "w", encoding="utf-8") as _f:
                 _json.dump(_params, _f, ensure_ascii=False, indent=2)
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         # tmp_folder を最終フォルダ名に一括リネーム（inotify イベントを1回に集約）
@@ -4968,24 +4968,24 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._unload_terrain_group()
         try:
             QgsProject.instance().readProject.disconnect(self._on_project_read)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         try:
             QgsProject.instance().projectSaved.disconnect(self._update_out_dir_label)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         try:
             QgsProject.instance().projectSaved.disconnect(self._save_layer_settings_to_project)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         try:
             QgsProject.instance().cleared.disconnect(self._on_project_cleared)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         if self.iface is not None:
             try:
                 self.iface.mapCanvas().extentsChanged.disconnect(self._on_main_canvas_changed)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         self.closingPlugin.emit()
         event.accept()

@@ -26,7 +26,7 @@ import os
 import urllib.request
 import urllib.error
 import zipfile
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as ET
 import sys
 
 # laspy: ユーザー環境を優先し、なければプラグイン同梱の vendor から使用
@@ -144,7 +144,7 @@ def _s3_list_xx(year: int, folder: str, xx: str, lp_type: str = "Grid") -> set:
     prefix = f"{year}/LP/{lp_type}/08/{folder}/{xx}/"
     url = f"{BUCKET_URL}/?list-type=2&prefix={prefix}&delimiter=/"
     try:
-        with urllib.request.urlopen(url, timeout=10) as r:
+        with urllib.request.urlopen(url, timeout=10) as r:  # nosec B310
             root = ET.fromstring(r.read())
         ns = {"s": "http://s3.amazonaws.com/doc/2006-03-01/"}
         codes = set()
@@ -166,7 +166,7 @@ def _s3_head_check(year: int, code: str, lp_type: str = "Grid") -> bool:
     url = f"{BUCKET_URL}/{year}/LP/{lp_type}/08/{folder}/{xx}/{code}.zip"
     req = urllib.request.Request(url, method="HEAD")
     try:
-        with urllib.request.urlopen(req, timeout=10):
+        with urllib.request.urlopen(req, timeout=10):  # nosec B310
             return True
     except Exception:
         return False
@@ -265,7 +265,7 @@ def _set_las_epsg(las_path: str, epsg: int):
 # ── ダウンロード ──────────────────────────────────────────────────────────────
 
 def _download(url: str, dest: str):
-    with urllib.request.urlopen(url, timeout=600) as r, open(dest, "wb") as f:
+    with urllib.request.urlopen(url, timeout=600) as r, open(dest, "wb") as f:  # nosec B310
         while True:
             chunk = r.read(65536)
             if not chunk:

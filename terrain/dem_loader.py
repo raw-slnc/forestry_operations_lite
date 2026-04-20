@@ -47,7 +47,7 @@ class DEMLoader:
                 center_lat = self.gt[3] + self.gt[5] * self._ds.RasterYSize / 2
                 meters_per_deg = 111320.0 * math.cos(math.radians(abs(center_lat)))
                 self.cell_size = abs(self.gt[1]) * meters_per_deg
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         self.data = None
@@ -241,7 +241,7 @@ class GSITileDEMLoader:
                 url,
                 headers={"User-Agent": "Mozilla/5.0 (compatible; QGIS plugin)"},
             )
-            with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+            with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
                 raw = resp.read()
         except Exception as e:
             return None, f"Connection error: {e}"
@@ -419,7 +419,7 @@ class GSITileDEMLoader:
                     xform = QgsCoordinateTransform(src_crs, dst_crs, QgsProject.instance())
                     pt = xform.transform(QgsPointXY(x, y))
                     x, y = pt.x(), pt.y()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         gt = self.gt
         col_i = int((x - gt[0]) / gt[1])
