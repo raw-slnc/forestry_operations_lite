@@ -29,21 +29,16 @@ import urllib.error
 import zipfile
 
 _vendor = os.path.join(os.path.dirname(__file__), "vendor")
+if _vendor not in sys.path:
+    sys.path.append(_vendor)  # vendor は末尾追加でシステム版を優先
 
-# defusedxml: ユーザー環境を優先し、なければプラグイン同梱の vendor から使用
-try:
-    from defusedxml import ElementTree as ET
-except ImportError:
-    sys.path.insert(0, _vendor)
-    from defusedxml import ElementTree as ET
+from defusedxml.ElementTree import fromstring as _defused_fromstring  # noqa: E402
 
 # laspy: ユーザー環境を優先し、なければプラグイン同梱の vendor から使用
 try:
     import laspy  # noqa: F401
 except ImportError:
-    if _vendor not in sys.path:
-        sys.path.insert(0, _vendor)
-    import laspy  # noqa: F401
+    import laspy  # noqa: F401  (vendor 経由)
 
 BUCKET_URL = "https://virtual-shizuoka.s3.ap-northeast-1.amazonaws.com"
 TILE_W = 400   # タイル幅 X(northing) [m]
@@ -154,7 +149,7 @@ def _s3_list_xx(year: int, folder: str, xx: str, lp_type: str = "Grid") -> set:
     url = f"{BUCKET_URL}/?list-type=2&prefix={prefix}&delimiter=/"
     try:
         with urllib.request.urlopen(url, timeout=10) as r:  # nosec B310
-            root = ET.fromstring(r.read())
+            root = _defused_fromstring(r.read())
         ns = {"s": "http://s3.amazonaws.com/doc/2006-03-01/"}
         codes = set()
         for item in root.findall("s:Contents", ns):
