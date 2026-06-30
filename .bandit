@@ -1,3 +1,0 @@
-[bandit]
-# vendor ディレクトリはサードパーティコードのためスキャン対象外
-exclude_dirs = vendor
