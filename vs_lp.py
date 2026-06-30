@@ -26,7 +26,10 @@ import os
 import urllib.request
 import urllib.error
 import zipfile
-from defusedxml import ElementTree as ET
+try:
+    from defusedxml import ElementTree as ET
+except ImportError:
+    import xml.etree.ElementTree as ET  # noqa: S405 — fallback for envs without defusedxml
 import sys
 
 # laspy: ユーザー環境を優先し、なければプラグイン同梱の vendor から使用

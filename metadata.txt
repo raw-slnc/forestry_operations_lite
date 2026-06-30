@@ -2,7 +2,7 @@
 name=Forestry Operations Lite
 qgisMinimumVersion=3.16
 description=Terrain analysis for forestry sites: DEM/DSM loading, slope, TWI, stability index, and flow accumulation.
-version=0.2.4
+version=0.2.5
 author=Hideharu Masai
 email=hideharumasai@void.mints.ne.jp
 
@@ -13,6 +13,7 @@ repository=https://github.com/raw-slnc/forestry_operations_lite
 
 hasProcessingProvider=no
 changelog=
+    0.2.5 - Fix ImportError on Windows QGIS: fall back to xml.etree.ElementTree when defusedxml is unavailable, restoring VS LP Grid fetch
     0.2.4 - Fix bandit security scan warnings: replace xml.etree.ElementTree with defusedxml (B405/B314); suppress false-positive urlopen scheme audits with nosec B310; suppress intentional bare-except patterns with nosec B110
     0.2.3 - Analysis run selector now sorted newest-first (descending order); replace blockSignals(True/False) pairs with QSignalBlocker to prevent signal lockout on exception; fix /vsimem/ memory leak in flow buffer: register mem_path immediately after gdal.Create() to ensure Unlink on cleanup; warn on startup if scipy is not installed
     0.2.2 - Fix persistent PermissionError on Windows when overwriting analysis results: add gc.collect() and processEvents() after layer removal to force OGR/GDAL handle release, with up to 5 retries at 0.3 s intervals
