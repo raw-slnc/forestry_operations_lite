@@ -23,20 +23,26 @@
 """
 
 import os
+import sys
 import urllib.request
 import urllib.error
 import zipfile
+
+_vendor = os.path.join(os.path.dirname(__file__), "vendor")
+
+# defusedxml: ユーザー環境を優先し、なければプラグイン同梱の vendor から使用
 try:
     from defusedxml import ElementTree as ET
 except ImportError:
-    import xml.etree.ElementTree as ET  # noqa: S405 — fallback for envs without defusedxml
-import sys
+    sys.path.insert(0, _vendor)
+    from defusedxml import ElementTree as ET
 
 # laspy: ユーザー環境を優先し、なければプラグイン同梱の vendor から使用
 try:
     import laspy  # noqa: F401
 except ImportError:
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "vendor"))
+    if _vendor not in sys.path:
+        sys.path.insert(0, _vendor)
     import laspy  # noqa: F401
 
 BUCKET_URL = "https://virtual-shizuoka.s3.ap-northeast-1.amazonaws.com"
