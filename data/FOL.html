@@ -137,6 +137,52 @@ FS は傾斜角・内部摩擦角・粘着力・土壌深度・飽和率から�
   </tr>
 </table>
 
+<h3>流向方式（Valley/TWI 専用）</h3>
+<p>TWI と沢ゾーンを計算するときの<strong>水の流し方</strong>を3方式から選べます。
+この選択は<strong>沢地形（TWI）のみ</strong>に効き、流量推測は常に D8 です。<br>
+「沢の線のくっきりさ」と「湿り分布の正確さ」のトレードオフになります。</p>
+
+<table>
+  <tr>
+    <th style="width:33%">D8（単一最急）</th>
+    <th style="width:33%">D∞（Tarboton）</th>
+    <th style="width:33%">MFD（多方向）</th>
+  </tr>
+  <tr>
+    <td><img src="fol_flow_method_example_d8.jpg" style="width:100%" alt="D8 描画例"></td>
+    <td><img src="fol_flow_method_example_dinf.jpg" style="width:100%" alt="D∞ 描画例"></td>
+    <td><img src="fol_flow_method_example_mfd.jpg" style="width:100%" alt="MFD 描画例"></td>
+  </tr>
+  <tr>
+    <td>水を1マスにだけ流す。沢が<strong>細い1本線でくっきり</strong>出るが、TWI面に<strong>縦縞のアーティファクト</strong>が出る。</td>
+    <td>隣接2マスに分けて流す。<strong>縞が出ず</strong>沢の線もそこそこ残る<strong>中間型</strong>。</td>
+    <td>下り方向すべてに分配。<strong>最もなめらかな湿り分布</strong>。沢は谷底に沿うが太く曖昧。</td>
+  </tr>
+  <tr>
+    <td>用途：<strong>水が集まる危険筋の特定</strong>（崩れやすい筋・道で避ける筋）。</td>
+    <td>用途：<strong>線も残しつつ縞のない面</strong>が欲しいとき。</td>
+    <td>用途：<strong>沢地形を面として正確に</strong>（湿り・災害リスク面）。</td>
+  </tr>
+</table>
+
+<p><strong>数値の目安（上図と同じサンプルDEM・2m・沢の量を揃えた場合：解析対象 72 ha）</strong></p>
+<table>
+  <tr><th>方式</th><th>TWI 閾値の目安</th><th>抽出された沢面積</th><th>占有率（対 72 ha）</th></tr>
+  <tr><td>D8</td><td>約 5.2</td><td>2.01 ha</td><td>2.8%</td></tr>
+  <tr><td>D∞</td><td>約 5.4</td><td>2.21 ha</td><td>3.1%</td></tr>
+  <tr><td>MFD</td><td>約 5.9</td><td>2.87 ha</td><td>4.0%</td></tr>
+</table>
+<p><strong>読み方：</strong>占有率が小さく線が細い方式（D8）＝「危険な筋」を指し示す。
+占有率が大きく面が太い方式（MFD）＝「沢地形そのもの」を面で表す。</p>
+<p>集水のスケールが方式で変わるため、<strong>同じ沢の量にするのに必要な TWI 閾値が方式ごとにズレます</strong>。
+方式を切り替えたら上の <strong>TWI 閾値</strong> を再調整してください（例：D8 で 5.2 → MFD なら 5.9 前後）。</p>
+
+<div class="note">
+  上の3枚は<strong>各方式の挙動の違いを示す説明用の描画例</strong>であり、プラグインの成果物ではありません。
+  違いを示すためだけにサンプルDEM（2mリサンプル）で描画したものです。
+  実際の出力（<code>twi.tif</code>・<code>valley_zones.gpkg</code>）は解析を実行して生成されます。
+</div>
+
 <h3>流量推測（修正合理式・到達時間考慮）</h3>
 <p>修正合理式＋到達時間（Tc）ルーティングで流量を推定します。<br>
 <code>Q = (1/360) × C × i × A_eff　　A_eff = A × min(1, T/Tc)</code><br>

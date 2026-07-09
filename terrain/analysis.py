@@ -4,7 +4,10 @@
   compute_curvature  : 平均曲率（ラプラシアン）を計算
   compute_shc        : SHC = 曲率の局所標準偏差（FOP用）
   d8_flow_direction  : D8流向コードを返す
-  flow_accumulation  : 上流集水セル数を累積
+  flow_accumulation  : 上流集水セル数を累積（D8）
+  mfd_proportions    : MFD（多方向）の分配率 (rows,cols,8) を返す
+  dinf_proportions   : D∞（Tarboton）の分配率 (rows,cols,8) を返す
+  multi_flow_accumulation : 分配率から上流集水を累積（MFD/D∞ 共通）
   compute_twi        : TWI = ln(A / tan(β))
   stability_fs       : 無限斜面安定解析（FS）
   rational_flow      : 合理式による流量推測 [m³/s]
@@ -120,6 +123,119 @@ def flow_accumulation(dem, flow_dir, weight=None):
             if 0 <= nr < rows and 0 <= nc < cols and valid_mask[nr, nc]:
                 accum[nr, nc] += accum[r, c]
 
+    return accum
+
+
+# 8近傍の順序（multi-flow 分配率 prop の第3軸インデックス → (dr, dc)）
+_NB8 = [(-1, -1), (-1, 0), (-1, 1),
+        (0, -1),           (0, 1),
+        (1, -1),  (1, 0),  (1, 1)]
+
+
+def mfd_proportions(dem, cell_size, p=1.1):
+    """MFD（Freeman/Holmgren 多方向流）の分配率を返す。
+
+    各セルの流量を「下り勾配のすべての隣接セル」へ勾配の p 乗に比例して
+    分配する。戻り値: shape (rows, cols, 8) の float32。第3軸は _NB8 の順。
+    分配先が無い（周囲がすべて同高以上）セルは全成分 0（シンク）。
+
+    p : 分配の集中度。Freeman(1991) は 1.1。大きいほど D8 に近づく。
+    """
+    rows, cols = dem.shape
+    pad = np.pad(dem, 1, constant_values=np.nan)
+    e0 = pad[1:-1, 1:-1]
+    prop = np.zeros((rows, cols, 8), dtype=np.float64)
+    for k, (dr, dc) in enumerate(_NB8):
+        nb = pad[1 + dr: rows + 1 + dr, 1 + dc: cols + 1 + dc]
+        dist = cell_size * (1.4142135623730951 if dr != 0 and dc != 0 else 1.0)
+        s = (e0 - nb) / dist
+        s = np.where(np.isnan(nb), 0.0, np.maximum(s, 0.0))
+        prop[:, :, k] = s ** p
+    total = prop.sum(axis=2)
+    nz = total > 0
+    prop[nz] /= total[nz][:, None]
+    prop[np.isnan(e0)] = 0.0
+    return prop.astype(np.float32)
+
+
+def dinf_proportions(dem, cell_size):
+    """D∞（Tarboton 1997）の分配率を返す。
+
+    各セル周囲の8つの三角facetから最急流下方向（連続角）を求め、その角度を
+    挟む隣接2セルへ角度比で分配する。戻り値: shape (rows, cols, 8) float32。
+    第3軸は _NB8 の順。流下先が無いセルは全成分 0。
+    """
+    rows, cols = dem.shape
+    pad = np.pad(dem, 1, constant_values=np.nan)
+    e0 = pad[1:-1, 1:-1]
+    diag = cell_size * 1.4142135623730951
+    ang_f = np.pi / 4.0
+    # facet = (cardinal 隣接オフセット, diagonal 隣接オフセット)
+    FACETS = [
+        ((0, 1), (-1, 1)),  ((-1, 0), (-1, 1)),  ((-1, 0), (-1, -1)), ((0, -1), (-1, -1)),
+        ((0, -1), (1, -1)), ((1, 0), (1, -1)),   ((1, 0), (1, 1)),    ((0, 1), (1, 1)),
+    ]
+    idx_of = {off: i for i, off in enumerate(_NB8)}
+
+    best_s = np.full((rows, cols), -np.inf)
+    best_r = np.zeros((rows, cols))
+    best_card = np.full((rows, cols), -1, dtype=np.int64)
+    best_diag = np.full((rows, cols), -1, dtype=np.int64)
+
+    for (cr, cc), (gr, gc) in FACETS:
+        e1 = pad[1 + cr: rows + 1 + cr, 1 + cc: cols + 1 + cc]  # cardinal
+        e2 = pad[1 + gr: rows + 1 + gr, 1 + gc: cols + 1 + gc]  # diagonal
+        s1 = (e0 - e1) / cell_size
+        s2 = (e1 - e2) / cell_size
+        r = np.arctan2(s2, s1)
+        s = np.hypot(s1, s2)
+        # 角度を [0, π/4] に拘束（範囲外は端の純方向勾配に丸める）
+        neg = r < 0
+        r = np.where(neg, 0.0, r)
+        s = np.where(neg, s1, s)
+        big = r > ang_f
+        r = np.where(big, ang_f, r)
+        s = np.where(big, (e0 - e2) / diag, s)
+
+        take = (~np.isnan(e1)) & (~np.isnan(e2)) & (s > 0) & (s > best_s)
+        best_s = np.where(take, s, best_s)
+        best_r = np.where(take, r, best_r)
+        best_card = np.where(take, idx_of[(cr, cc)], best_card)
+        best_diag = np.where(take, idx_of[(gr, gc)], best_diag)
+
+    prop = np.zeros((rows, cols, 8), dtype=np.float64)
+    has = best_card >= 0
+    rr, ccc = np.where(has)
+    frac_d = best_r[rr, ccc] / ang_f          # diagonal 側へ回す割合
+    prop[rr, ccc, best_card[rr, ccc]] = 1.0 - frac_d
+    prop[rr, ccc, best_diag[rr, ccc]] = frac_d
+    prop[np.isnan(e0)] = 0.0
+    return prop.astype(np.float32)
+
+
+def multi_flow_accumulation(dem, prop, weight=None):
+    """multi-flow 分配率 prop から上流集水を累積する（標高降順に処理）。
+
+    prop   : mfd_proportions / dinf_proportions の戻り値 (rows,cols,8)。
+    weight : None=各セル 1（集水セル数相当）。2D配列で重み付き累積。
+             上流加重平均 = multi_flow_accumulation(weight) / multi_flow_accumulation()
+    """
+    rows, cols = dem.shape
+    accum = (np.ones((rows, cols), dtype=np.float64)
+             if weight is None
+             else weight.astype(np.float64).copy())
+    valid = ~np.isnan(dem)
+    r_arr, c_arr = np.where(valid)
+    order = np.argsort(-dem[r_arr, c_arr])  # 高い順
+    for idx in order:
+        r, c = int(r_arr[idx]), int(c_arr[idx])
+        base = accum[r, c]
+        for k, (dr, dc) in enumerate(_NB8):
+            pk = prop[r, c, k]
+            if pk > 0.0:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < rows and 0 <= nc < cols and valid[nr, nc]:
+                    accum[nr, nc] += base * pk
     return accum
 
 

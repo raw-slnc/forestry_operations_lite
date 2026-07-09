@@ -1522,6 +1522,38 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         pv_lay = QtWidgets.QGridLayout(self.grpParamValley)
         pv_lay.setVerticalSpacing(2)
         pv_lay.setColumnStretch(0, 1)
+
+        # --- Flow direction method (mutually exclusive) ---
+        pv_lay.addWidget(QtWidgets.QLabel("Flow Direction Method (Valley/TWI only)"), 0, 0, 1, 2)
+        _fm_col = QtWidgets.QVBoxLayout()
+        _fm_col.setSpacing(1)
+        self.chkFlowMFD  = QtWidgets.QCheckBox("")
+        self.chkFlowDinf = QtWidgets.QCheckBox("")
+        self.chkFlowD8   = QtWidgets.QCheckBox("")
+        self._grpFlowMethod = QtWidgets.QButtonGroup(self)
+        self._grpFlowMethod.setExclusive(True)
+        _fm_defs = [
+            (self.chkFlowMFD,  "MFD", "Multi-direction · smoothest wetness surface, but valleys look fuzzy"),
+            (self.chkFlowDinf, "D∞",  "Balanced · no striping, valleys stay fairly sharp"),
+            (self.chkFlowD8,   "D8",  "Single steepest · crisp single-line channels, but wetness shows stripes"),
+        ]
+        for _chk, _name, _desc in _fm_defs:
+            self._grpFlowMethod.addButton(_chk)
+            _chk.setToolTip(_desc)
+            _row = QtWidgets.QHBoxLayout()
+            _nl = QtWidgets.QLabel(_name)           # name (left-aligned)
+            _nl.setToolTip(_desc)
+            _row.addWidget(_nl)
+            _row.addStretch(1)
+            _row.addWidget(_chk)                    # checkbox (right-aligned)
+            _fm_col.addLayout(_row)
+            _dl = QtWidgets.QLabel(_desc)           # description (next line)
+            _dl.setWordWrap(True)
+            _dl.setStyleSheet("color:#888;font-size:8pt;margin-bottom:4px;")
+            _fm_col.addWidget(_dl)
+        self.chkFlowD8.setChecked(True)   # default = current behaviour
+        pv_lay.addLayout(_fm_col, 1, 0, 1, 2)
+
         self.spinTwiThresh = QtWidgets.QDoubleSpinBox()
         self.spinTwiThresh.setRange(1, 20); self.spinTwiThresh.setValue(8.0); self.spinTwiThresh.setSingleStep(0.5)
         self.spinMinArea = QtWidgets.QDoubleSpinBox()
@@ -1531,14 +1563,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             ("Min. Catchment Area", self.spinMinArea,   "100–100000 m²  (smaller = finer stream network)"),
         ]
         for i, (en, w, hint) in enumerate(_pv_defs):
-            row = i * 2
+            row = 2 + i * 2                     # rows 0–1 used by flow-method selector
             ql = QtWidgets.QLabel(en)
             pv_lay.addWidget(ql, row, 0)
             pv_lay.addWidget(w, row, 1)
             _hl = QtWidgets.QLabel(hint)
             _hl.setStyleSheet("color:#888;font-size:8pt;margin-bottom:10px;")
             pv_lay.addWidget(_hl, row + 1, 0, 1, 2)
-        pv_lay.setRowStretch(len(_pv_defs) * 2, 1)
+        pv_lay.setRowStretch(2 + len(_pv_defs) * 2, 1)
 
         # --- 流量 パラメータ ---
         self.grpParamFlow = QtWidgets.QGroupBox("Flow (Rational Method) Parameters")
@@ -4434,13 +4466,22 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
             # ── 沢地形判定（TWI） ──
             if self.chkValley.isChecked():
-                twi = ta.compute_twi(accum, slope, dem.cell_size)
+                # Flow Direction Method（Valley/TWI 専用）の選択で集水を計算
+                if self.chkFlowMFD.isChecked():
+                    _prop = ta.mfd_proportions(dem.data, dem.cell_size)
+                    accum_v = ta.multi_flow_accumulation(dem.data, _prop)
+                elif self.chkFlowDinf.isChecked():
+                    _prop = ta.dinf_proportions(dem.data, dem.cell_size)
+                    accum_v = ta.multi_flow_accumulation(dem.data, _prop)
+                else:  # D8（既定・Flow Estimation と共通の集水）
+                    accum_v = accum
+                twi = ta.compute_twi(accum_v, slope, dem.cell_size)
                 p = rw.save_raster(twi, dem.gt, dem.crs_wkt, tmp_folder,
                                    "twi", overwrite=True)
                 saved.append(("TWI", p, "raster"))
                 min_cells = self.spinMinArea.value() / (dem.cell_size ** 2)
                 vmask = (twi >= self.spinTwiThresh.value()) \
-                        & (accum >= min_cells) & ~np.isnan(twi)
+                        & (accum_v >= min_cells) & ~np.isnan(twi)
                 if vmask.any():
                     p2 = rw.mask_to_polygons(vmask, dem.gt, dem.crs_wkt,
                                              tmp_folder, "valley_zones",

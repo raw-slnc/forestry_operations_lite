@@ -21,6 +21,25 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 
 ---
 
+## Flow Direction Method (Valley / TWI)
+
+The Valley Terrain analysis lets you choose how water flow is routed across the DEM when computing TWI and delineating valley zones. The choice is applied **to the Valley/TWI computation only** — flow estimation always uses D8. The three options trade off between a crisp channel line and a faithful wetness surface.
+
+> ℹ️ **The images below are illustrative comparisons of how each method behaves — not analysis deliverables.** They were rendered on a sample DEM (resampled to 2 m) purely to show the difference; your actual output rasters/vectors are produced by running the analysis.
+
+*Example renders on a sample DEM — for comparison only, not plugin outputs.*
+
+| D8 | D∞ | MFD |
+|---|---|---|
+| ![D8 example (sample DEM)](fol_flow_method_example_d8.jpg) | ![D∞ example (sample DEM)](fol_flow_method_example_dinf.jpg) | ![MFD example (sample DEM)](fol_flow_method_example_mfd.jpg) |
+| **Single steepest** | **D-infinity** | **Multiple flow** |
+| Water goes to one neighbour. Crisp single-line channels, but the TWI surface shows **striping artifacts**. | Flow split between two neighbours. **No striping**, valleys stay fairly sharp — a balanced middle ground. | Flow spread to all downslope cells. **Smoothest wetness surface**; valley zones follow the true valley bottom but look wider/fuzzier. |
+| Best for **pinpointing where water concentrates** (danger lines, routing roads to avoid channels). | Best when you want **both a readable line and an artifact-free surface**. | Best for reading the **valley terrain itself** as a faithful area (wetness / disaster-risk surface). |
+
+> **Note:** The TWI threshold that best separates valleys differs by method (the accumulation scale changes). Re-check the *TWI Threshold* after switching methods. In the example above, matching valley density required TWI ≈ 5.2 (D8), 5.4 (D∞), 5.9 (MFD).
+
+---
+
 ## Virtual Shizuoka Features (Shizuoka Prefecture, Japan only)
 
 These features use Virtual Shizuoka open data hosted on AWS S3 and are not available outside Shizuoka Prefecture.
@@ -191,6 +210,25 @@ https://paypal.me/rawslnc
 - 地図ロック：解析範囲にプレビューを固定しながら、メインウィンドウは自由に操作可能
 - 解析結果はQGISレイヤーパネルに解析番号グループで管理
 - プレビューステータスバーに中心座標・縮尺・面積（ha）・CRSを表示
+
+---
+
+## 沢地形の流向方式（Valley / TWI）
+
+沢地形（Valley Terrain）解析では、TWI計算と沢ゾーン抽出のときに**水の流し方（流向方式）**を選べます。この選択は**沢地形（TWI）にのみ**適用され、流量推測は常にD8です。3方式は「沢の線のくっきりさ」と「湿り分布の正確さ」のトレードオフになります。
+
+> ℹ️ **下の画像は各方式の挙動の違いを示す説明用の比較図であり、解析成果物ではありません。** 違いを示すためだけにサンプルDEM（2mリサンプル）で描画したものです。実際の出力ラスタ／ベクタは解析を実行して生成されます。
+
+*サンプルDEMでの描画例 — 比較用であり、プラグインの成果物ではありません。*
+
+| D8 | D∞ | MFD |
+|---|---|---|
+| ![D8 example (sample DEM)](fol_flow_method_example_d8.jpg) | ![D∞ example (sample DEM)](fol_flow_method_example_dinf.jpg) | ![MFD example (sample DEM)](fol_flow_method_example_mfd.jpg) |
+| **単一最急（1方向）** | **D∞（Tarboton）** | **多方向（MFD）** |
+| 水を1マスにだけ流す。沢が細い1本線でくっきり出るが、TWI面に**縦縞のアーティファクト**が出る。 | 隣接2マスに分けて流す。**縞が出ず**、沢の線もそこそこ残る中間型。 | 下り方向すべてに分配。**最もなめらかな湿り分布**。沢ゾーンは実際の谷底に沿うが太く曖昧に見える。 |
+| **水が集まる危険筋を特定**したいとき（崩れやすい筋・道で避ける筋の把握）に向く。 | **線も残しつつ縞のない面**が欲しいときに向く。 | **沢地形そのものを面として正確に**見たいとき（湿り・災害リスク面）に向く。 |
+
+> **注意：** 沢をうまく分ける最適なTWI閾値は方式ごとにズレます（集水のスケールが変わるため）。方式を切り替えたら *TWI Threshold* を再調整してください。上図では沢の量を揃えるのに TWI ≈ 5.2（D8）・5.4（D∞）・5.9（MFD）が必要でした。
 
 ---
 

@@ -2,7 +2,7 @@
 name=Forestry Operations Lite
 qgisMinimumVersion=3.16
 description=Terrain analysis for forestry sites: DEM/DSM loading, slope, TWI, stability index, and flow accumulation.
-version=0.2.6
+version=0.2.7
 author=Hideharu Masai
 email=hideharumasai@void.mints.ne.jp
 
@@ -13,6 +13,7 @@ repository=https://github.com/raw-slnc/forestry_operations_lite
 
 hasProcessingProvider=no
 changelog=
+    0.2.7 - Add flow direction method for Valley Terrain (TWI): choose D8 (single steepest), D-infinity, or MFD (multiple flow) via mutually-exclusive selector in the Valley Terrain parameters. Applies to TWI/valley delineation only; flow estimation stays D8. Help (FOL.html) and README updated with a method comparison (sample renders) and a note that the TWI threshold needs re-tuning per method
     0.2.6 - Remove .bandit config file (not used by QGIS scanner; flagged as hidden file)
     0.2.5 - Bundle defusedxml as vendor library; safe XML parsing on Windows QGIS where defusedxml is not pre-installed
     0.2.4 - Fix bandit security scan warnings: replace xml.etree.ElementTree with defusedxml (B405/B314); suppress false-positive urlopen scheme audits with nosec B310; suppress intentional bare-except patterns with nosec B110
@@ -31,7 +32,7 @@ changelog=
     0.1.1 - UI overhaul: English UI, parameter tabs restructured (1 item/row with hints), layout spacing fixed, tab height auto-fit
     0.1.0 - Initial release
 
-tags=python,forestry,terrain,dem,slope,twi,stability
+tags=python,forestry,terrain,dem,slope,twi,stability,flow direction,mfd
 
 homepage=https://github.com/raw-slnc/forestry_operations_lite
 category=Raster
