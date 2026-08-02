@@ -3799,8 +3799,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 f"m={p.get('m_sat','-')}"
             )
         if "valley" in analyses:
+            _flow_method_label = {
+                "mfd": "MFD",
+                "dinf": "D∞",
+                "d8": "D8",
+            }.get(str(p.get("flow_method", "d8")).lower(), "D8")
             parts.append(
-                f"Valley: TWI≥{p.get('twi_thresh','-')} · "
+                f"Valley: {_flow_method_label} · "
+                f"TWI≥{p.get('twi_thresh','-')} · "
                 f"min area {p.get('min_area','-')} m²"
             )
         lbl.setText("\n".join(parts) if parts else "No conditions")
@@ -4691,6 +4697,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 "fs_thresh": self.spinFsThresh.value(),
             })
         if self.chkValley.isChecked():
+            if self.chkFlowMFD.isChecked():
+                _params["flow_method"] = "mfd"
+            elif self.chkFlowDinf.isChecked():
+                _params["flow_method"] = "dinf"
+            else:
+                _params["flow_method"] = "d8"
             _params.update({
                 "twi_thresh": self.spinTwiThresh.value(),
                 "min_area":   self.spinMinArea.value(),
@@ -4818,6 +4830,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         s.setValue("chk_stability",       self.chkStability.isChecked())
         s.setValue("chk_valley",          self.chkValley.isChecked())
         s.setValue("chk_flow",            self.chkFlow.isChecked())
+        if self.chkFlowMFD.isChecked():
+            s.setValue("flow_method", "mfd")
+        elif self.chkFlowDinf.isChecked():
+            s.setValue("flow_method", "dinf")
+        else:
+            s.setValue("flow_method", "d8")
         s.setValue("area_limit_idx",      self.cmbAreaLimit.currentIndex())
 
         # ── 解析パラメータ ──
@@ -5038,6 +5056,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.chkStability.setChecked(    b("chk_stability",   True))
         self.chkValley.setChecked(       b("chk_valley",      True))
         self.chkFlow.setChecked(         b("chk_flow",        False))
+        _flow_method = str(s.value("flow_method", "d8")).lower()
+        if _flow_method == "mfd":
+            self.chkFlowMFD.setChecked(True)
+        elif _flow_method == "dinf":
+            self.chkFlowDinf.setChecked(True)
+        else:
+            self.chkFlowD8.setChecked(True)
         self.cmbAreaLimit.setCurrentIndex(i("area_limit_idx", 1))
 
         # ── 解析パラメータ ──
