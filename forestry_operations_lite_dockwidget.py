@@ -3594,25 +3594,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _next_seq(self, overwrite: bool) -> str:
         """
         次の解析シーケンス番号(3桁)を返す。
-        overwrite=True の場合は最新シーケンスのサブフォルダを丸ごと削除して同番号を返す。
+        overwrite=True の場合は最新シーケンス番号を返す。
+        既存フォルダの削除は解析実行前に行う。
         """
-        import re as _re, shutil as _shutil
         numbers = self._scan_analysis_numbers()
         if not numbers:
             return "001"
         max_seq = max(int(n[:3]) for n in numbers)
         if overwrite:
-            out_dir = self._terrain_output_dir()
-            prefix = f"{max_seq:03d}"
-            for name in os.listdir(out_dir):
-                if _re.fullmatch(r'\d{4}(\+\d+)?', name) and name[:3] == prefix:
-                    folder = os.path.join(out_dir, name)
-                    if os.path.isdir(folder):
-                        try:
-                            _shutil.rmtree(folder)
-                        except Exception:  # nosec B110
-                            pass
-            return prefix
+            return f"{max_seq:03d}"
         return f"{max_seq + 1:03d}"
 
     def _refresh_analysis_combo(self, select_latest=True):
@@ -4336,6 +4326,47 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         out_dir = self._terrain_output_dir()
 
+        def _release_folder_layers(_folder):
+            _proj = QgsProject.instance()
+            _folder_norm = os.path.normcase(os.path.normpath(_folder))
+            _remove_ids = []
+            for _lid, _lyr in list(_proj.mapLayers().items()):
+                try:
+                    _provider = _lyr.dataProvider()
+                    if not _provider:
+                        continue
+                    _src = _provider.dataSourceUri().split("|")[0]
+                    _src_norm = os.path.normcase(os.path.normpath(_src))
+                    if (_src_norm == _folder_norm or
+                            _src_norm.startswith(_folder_norm + os.sep)):
+                        _remove_ids.append(_lid)
+                except Exception:  # nosec B110
+                    pass
+            if not _remove_ids:
+                return
+            _remove_id_set = set(_remove_ids)
+            if getattr(self, "preview_canvas", None) is not None:
+                try:
+                    self.preview_canvas.setLayers([
+                        _lyr for _lyr in self.preview_canvas.layers()
+                        if _lyr.id() not in _remove_id_set
+                    ])
+                    self.preview_canvas.refresh()
+                except Exception:  # nosec B110
+                    pass
+            for _key in list(getattr(self, "_loaded_terrain_layers", {}).keys()):
+                _kept = [
+                    _lid for _lid in self._loaded_terrain_layers.get(_key, [])
+                    if _lid not in _remove_id_set
+                ]
+                if _kept:
+                    self._loaded_terrain_layers[_key] = _kept
+                else:
+                    self._loaded_terrain_layers.pop(_key, None)
+                    self._terrain_cycle_state[_key] = -1
+            _proj.removeMapLayers(_remove_ids)
+            QtWidgets.QApplication.processEvents()
+
         # プレビュー可視範囲でクリップ（キャンバスCRS → DEM CRS に変換してから渡す）
         try:
             ext = self.preview_canvas.extent()
@@ -4390,6 +4421,37 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         seq = self._next_seq(self.chkOverwrite.isChecked())
         # 隠し一時フォルダ（解析完了後に1回だけリネーム → Thunar inotify を最小化）
         import shutil as _shutil
+        if self.chkOverwrite.isChecked():
+            import re as _re
+            import gc as _gc
+            import time as _time
+            from qgis.PyQt.QtCore import QCoreApplication as _QCA
+            for name in os.listdir(out_dir):
+                if not (_re.fullmatch(r'\d{4}(\+\d+)?', name) and name[:3] == seq):
+                    continue
+                folder = os.path.join(out_dir, name)
+                if not os.path.isdir(folder):
+                    continue
+                _release_folder_layers(folder)
+                _removed = False
+                for _attempt in range(30):
+                    try:
+                        _shutil.rmtree(folder)
+                        _removed = True
+                        break
+                    except (PermissionError, OSError) as _e:
+                        _gc.collect()
+                        _QCA.processEvents()
+                        if _attempt < 29:
+                            _time.sleep(0.5)
+                        else:
+                            self.lblAnalysisStatus.setVisible(True)
+                            self.lblAnalysisStatus.setText(
+                                f"Overwrite failed: {name} is still locked. {_e}"
+                            )
+                            return
+                if not _removed:
+                    return
         tmp_folder = os.path.join(out_dir, f".tmp_{seq}")
         if os.path.exists(tmp_folder):      # 中断残骸をクリア
             _shutil.rmtree(tmp_folder)
@@ -4642,16 +4704,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # tmp_folder を最終フォルダ名に一括リネーム（inotify イベントを1回に集約）
         if os.path.exists(folder):
             # Windows ではレイヤーとして開いているファイルがロックされるため、
-            # 削除前に該当フォルダ内のレイヤーを QgsProject から除去する
-            _proj = QgsProject.instance()
-            _to_remove = [
-                lyr for lyr in _proj.mapLayers().values()
-                if lyr.dataProvider() and
-                os.path.normcase(lyr.dataProvider().dataSourceUri().split("|")[0])
-                .startswith(os.path.normcase(folder))
-            ]
-            if _to_remove:
-                _proj.removeMapLayers([lyr.id() for lyr in _to_remove])
+            # 削除前に該当フォルダ内のレイヤーをプレビュー・内部参照・QgsProject から除去する
+            _release_folder_layers(folder)
             # Windows では removeMapLayers 後も OGR/GDAL のファイルハンドルが
             # すぐに解放されないため、gc + processEvents でハンドル解放を促す
             import sys as _sys
@@ -4666,6 +4720,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                         _shutil.rmtree(folder)
                         break
                     except PermissionError:
+                        if _attempt < 4:
+                            _time.sleep(0.3)
+                            _gc.collect()
+                            _QCA.processEvents()
+                        else:
+                            raise
+                    except OSError:
                         if _attempt < 4:
                             _time.sleep(0.3)
                             _gc.collect()
