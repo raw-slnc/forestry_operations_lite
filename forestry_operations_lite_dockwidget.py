@@ -1,4 +1,3 @@
-import math
 import os
 import shutil
 
@@ -8,7 +7,6 @@ from qgis.PyQt.QtGui import QDesktopServices
 from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
-    QgsCoordinateTransformContext,
     QgsPointXY,
     QgsProject,
     QgsRasterLayer,
@@ -2146,9 +2144,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         bg   = self._get_selected_layer(self.cmbBackgroundLayer)
         tile = self._get_selected_layer(self.cmbTileLayer)
         gpkg = self._get_selected_layer(self.cmbGpkgLayer)
-        has_base_layers = any(
-            lyr is not None and lyr.isValid() for lyr in (bg, tile, gpkg)
-        )
         # レイヤー表示 ON/OFF ボタンの状態を反映
         if not getattr(self, "btnGpkgLayerVis", None) or not self.btnGpkgLayerVis.isChecked():
             gpkg = None
@@ -3992,9 +3987,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             return
 
         _dem = getattr(self, "_terrain_loader", None)
-        _dsm = getattr(self, "_dsm_loader", None)
         has_dem = bool(_dem and getattr(_dem, "path", None) and os.path.isfile(_dem.path))
-        has_dsm = bool(_dsm and getattr(_dsm, "path", None) and os.path.isfile(_dsm.path))
         # Export は VS Shizuoka ソース専用（DSM は任意）
         is_vs_source = (self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL)
         can_export = is_vs_source and has_dem
@@ -4228,7 +4221,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
     def _on_open_wodmi(self):
         """エクスポート ZIP を展開して webodm_importer パネルを開く。"""
-        import zipfile as _zf
         import qgis.utils
 
         zip_path = self._vs_export_dir

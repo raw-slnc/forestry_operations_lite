@@ -249,7 +249,6 @@ def _set_tif_epsg(tif_path: str, epsg: int):
 
 def _set_las_epsg(las_path: str, epsg: int):
     """LAS ファイルに VLR が未設定の場合に EPSG コードの WKT CRS VLR を追加して上書き保存。"""
-    import laspy
     from osgeo import osr
     las = laspy.read(las_path)
     if las.header.vlrs:
@@ -468,7 +467,6 @@ def las_to_dsm(las_path: str, out_path: str, cell_size: float = 0.5):
     """LAS ファイルから DSM（最大値グリッド）を GeoTIFF として保存。
     CRS は EPSG:6676（Virtual Shizuoka 標準）固定。
     """
-    import laspy
     import numpy as np
     from osgeo import gdal, osr
 

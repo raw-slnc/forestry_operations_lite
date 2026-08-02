@@ -1,6 +1,6 @@
-from qgis.PyQt.QtCore import QCoreApplication, QSettings, Qt, QTranslator
+from qgis.PyQt.QtCore import QCoreApplication, QSettings, QTranslator
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QToolBar
+from qgis.PyQt.QtWidgets import QAction
 
 from .forestry_operations_lite_dockwidget import ForestryOperationsLiteDockWidget
 import os.path
