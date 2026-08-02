@@ -40,7 +40,8 @@ def get_dtype_for_extra_dim(type_index: int) -> np.dtype:
         a string representing the type, can be understood by numpy
 
     """
-    assert type_index != 0, "Can't get np.dtype for type_index 0"
+    if type_index == 0:
+        raise ValueError("Can't get np.dtype for type_index 0")
     try:
         return _allowed_extra_dims_types[type_index - 1]
     except IndexError:

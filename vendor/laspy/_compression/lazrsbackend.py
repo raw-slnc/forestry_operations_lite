@@ -102,7 +102,8 @@ class LazrsPointReader(IPointReader):
         """
         This function requires the source to be at the start of the chunk table
         """
-        assert isinstance(self.decompressor, lazrs.LasZipDecompressor)
+        if not isinstance(self.decompressor, lazrs.LasZipDecompressor):
+            raise RuntimeError("Chunk table reading requires single-threaded lazrs decompressor")
         return self.decompressor.read_chunk_table_only()
 
     def read_raw_bytes(self, n: int) -> bytes:
@@ -151,9 +152,8 @@ class LazrsPointWriter(IPointWriter):
         return self.dest
 
     def write_points(self, points: PackedPointRecord) -> None:
-        assert (
-            self.compressor is not None
-        ), "Trying to write points without having written header"
+        if self.compressor is None:
+            raise RuntimeError("Trying to write points without having written header")
         points_bytes = np.frombuffer(points.array, np.uint8)
         self.compressor.compress_many(points_bytes)
 

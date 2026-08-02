@@ -167,7 +167,8 @@ def open_las(
         elif isinstance(source, bytes):
             stream = io.BytesIO(source)
         else:
-            assert source.seekable()
+            if not source.seekable():
+                raise ValueError("Expected a seekable stream for writing")
             stream = source
 
         try:

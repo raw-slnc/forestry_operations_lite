@@ -44,9 +44,8 @@ class LasAppender:
             self.points_appender = self._create_laz_backend(laz_backend)
 
         if header.version.minor >= 4 and header.number_of_evlrs > 0:
-            assert (
-                self.dest.tell() <= self.header.start_of_first_evlr
-            ), "The position is past the start of evlrs"
+            if self.dest.tell() > self.header.start_of_first_evlr:
+                raise LaspyException("The position is past the start of evlrs")
             pos = self.dest.tell()
             self.dest.seek(self.header.start_of_first_evlr, io.SEEK_SET)
             self.evlrs: Optional[VLRList] = VLRList.read_from(

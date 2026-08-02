@@ -191,7 +191,8 @@ class PackedPointRecord:
         try:
             dim_info = self.point_format.dimension_by_name(item)
             if dim_info.is_standard is False and dim_info.is_scaled:
-                assert dim_info.scales is not None and dim_info.offsets is not None
+                if dim_info.scales is None or dim_info.offsets is None:
+                    raise ValueError("Scaled extra dimension is missing scale or offset")
                 return ScaledArrayView(
                     self.array[item], dim_info.scales, dim_info.offsets
                 )

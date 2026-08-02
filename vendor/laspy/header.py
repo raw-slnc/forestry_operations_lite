@@ -39,7 +39,8 @@ SYSTEM_IDENTIFIER_LEN = 32
 
 LAS_FILE_SIGNATURE = b"LASF"
 DEFAULT_GENERATING_SOFTWARE = f"laspy {__version__}"
-assert len(DEFAULT_GENERATING_SOFTWARE) < GENERATING_SOFTWARE_LEN
+if len(DEFAULT_GENERATING_SOFTWARE) >= GENERATING_SOFTWARE_LEN:
+    raise ValueError("DEFAULT_GENERATING_SOFTWARE exceeds LAS field length")
 
 
 class Version(NamedTuple):
@@ -595,7 +596,8 @@ class LasHeader:
 
         file_sig = stream.read(4)
         # This should not be possible as _prefetch already checks this
-        assert file_sig == LAS_FILE_SIGNATURE
+        if file_sig != LAS_FILE_SIGNATURE:
+            raise LaspyException(f'Invalid file signature "{file_sig}"')
 
         header.file_source_id = int.from_bytes(
             stream.read(2), little_endian, signed=False
@@ -989,7 +991,8 @@ class LasHeader:
         eb_vlr = ExtraBytesVlr()
         for extra_dimension in extra_dimensions:
             dtype = extra_dimension.dtype
-            assert dtype is not None
+            if dtype is None:
+                raise LaspyException("Extra dimension dtype is missing")
 
             if extra_dimension.num_elements > 3 and dtype.base == np.uint8:
                 data_type = (0, extra_dimension.num_elements)

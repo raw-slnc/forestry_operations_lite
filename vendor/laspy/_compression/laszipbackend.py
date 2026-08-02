@@ -65,8 +65,10 @@ class LaszipPointReader(IPointReader):
         selection = decompression_selection.to_laszip()
         self.unzipper = laszip.LasUnZipper(source, selection)
         unzipper_header = self.unzipper.header
-        assert unzipper_header.point_data_format == header.point_format.id
-        assert unzipper_header.point_data_record_length == header.point_format.size
+        if unzipper_header.point_data_format != header.point_format.id:
+            raise LaspyException("Laszip header point format does not match LAS header")
+        if unzipper_header.point_data_record_length != header.point_format.size:
+            raise LaspyException("Laszip header point size does not match LAS header")
         self.point_size = header.point_format.size
 
     @property
@@ -99,8 +101,10 @@ class LaszipPointWriter(IPointWriter):
 
         self.zipper = laszip.LasZipper(self.dest, header_bytes)
         zipper_header = self.zipper.header
-        assert zipper_header.point_data_format == header.point_format.id
-        assert zipper_header.point_data_record_length == header.point_format.size
+        if zipper_header.point_data_format != header.point_format.id:
+            raise LaspyException("Laszip header point format does not match LAS header")
+        if zipper_header.point_data_record_length != header.point_format.size:
+            raise LaspyException("Laszip header point size does not match LAS header")
 
         header.set_compressed(True)
 
@@ -133,4 +137,5 @@ class LaszipPointWriter(IPointWriter):
             file_header.write_to(
                 self.dest, ensure_same_size=True, encoding_errors=encoding_errors
             )
-            assert self.dest.tell() == end_of_header_pos
+            if self.dest.tell() != end_of_header_pos:
+                raise LaspyException("Updated LAS header size changed unexpectedly")

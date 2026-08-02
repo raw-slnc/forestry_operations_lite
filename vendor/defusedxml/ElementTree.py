@@ -7,20 +7,24 @@
 """
 from __future__ import print_function, absolute_import
 
+import importlib
 import sys
 import warnings
-from xml.etree.ElementTree import ParseError
-from xml.etree.ElementTree import TreeBuilder as _TreeBuilder
-from xml.etree.ElementTree import parse as _parse
-from xml.etree.ElementTree import tostring
 
 from .common import PY3
 
+_stdlib_etree = importlib.import_module("xml.etree.ElementTree")  # nosec B405
+
+ParseError = _stdlib_etree.ParseError
+_TreeBuilder = _stdlib_etree.TreeBuilder
+_parse = _stdlib_etree.parse
+tostring = _stdlib_etree.tostring
+
 if PY3:
-    import importlib
+    pass
 else:
-    from xml.etree.ElementTree import XMLParser as _XMLParser
-    from xml.etree.ElementTree import iterparse as _iterparse
+    _XMLParser = _stdlib_etree.XMLParser
+    _iterparse = _stdlib_etree.iterparse
 
 
 from .common import (

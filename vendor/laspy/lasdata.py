@@ -54,8 +54,10 @@ class LasData:
                 offsets=header.offsets,
             )
         else:
-            assert np.all(header.scales, points.scales)
-            assert np.all(header.offsets, points.offsets)
+            if not np.array_equal(header.scales, points.scales):
+                raise errors.LaspyException("Point scales do not match header scales")
+            if not np.array_equal(header.offsets, points.offsets):
+                raise errors.LaspyException("Point offsets do not match header offsets")
         self.__dict__["_points"] = points
         self.points: record.ScaleAwarePointRecord
         self.header: LasHeader = header

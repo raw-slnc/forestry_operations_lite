@@ -970,9 +970,8 @@ class FilteringAction:
             raise ValueError(f"expected value found '{value_tok.value}'")
 
         comparator = cls._comparator_token_to_comparator.get(cmp_tok.kind, None)
-        assert (
-            comparator is not None
-        ), "Internal error: unhandled token to comparator conversion"
+        if comparator is None:
+            raise RuntimeError("Internal error: unhandled token to comparator conversion")
 
         return cls(
             field_name=field_name_tok.value,
@@ -1085,9 +1084,8 @@ class FilteringExpression:
                 )
 
             condition = condition_tok_to_condition.get(tok.kind, None)
-            assert (
-                condition is not None
-            ), "Internal error: unhandled convertion from token to condition"
+            if condition is None:
+                raise RuntimeError("Internal error: unhandled convertion from token to condition")
 
             rhs = cls.parse_tokens(tokens)
             return cls(
@@ -1118,9 +1116,8 @@ class FilteringExpression:
             )
 
         condition = condition_tok_to_condition.get(tok.kind, None)
-        assert (
-            condition is not None
-        ), "Internal error: unhandled convertion from token to condition"
+        if condition is None:
+            raise RuntimeError("Internal error: unhandled convertion from token to condition")
 
         rhs = cls.parse_tokens(tokens)
 
