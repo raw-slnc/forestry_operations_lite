@@ -5,7 +5,7 @@ import struct
 import typing
 from copy import deepcopy
 from datetime import date, timedelta
-from typing import BinaryIO, Iterable, List, NamedTuple, Optional, Union
+from typing import TYPE_CHECKING, BinaryIO, Iterable, List, NamedTuple, Optional, Union
 from uuid import UUID
 
 import numpy as np
@@ -26,11 +26,13 @@ from .vlrs.geotiff import create_geotiff_projection_vlrs
 from .vlrs.known import (
     ExtraBytesStruct,
     ExtraBytesVlr,
-    GeoAsciiParamsVlr,
     GeoKeyDirectoryVlr,
     WktCoordinateSystemVlr,
 )
 from .vlrs.vlrlist import VLRList
+
+if TYPE_CHECKING:
+    import pyproj
 
 logger = logging.getLogger(__name__)
 
@@ -451,8 +453,6 @@ class LasHeader:
 
             Typically, if the CRS has an EPSG code it will be supported.
         """
-        import pyproj
-
         # check and remove any existing crs vlrs
         for crs_vlr_name in (
             "WktCoordinateSystemVlr",
@@ -964,7 +964,7 @@ class LasHeader:
 
         file_sig = header_bytes[: len(LAS_FILE_SIGNATURE)]
         if not file_sig:
-            raise LaspyException(f"Source is empty")
+            raise LaspyException("Source is empty")
         if file_sig != LAS_FILE_SIGNATURE:
             raise LaspyException(f'Invalid file signature "{file_sig}"')
         if len(header_bytes) < LAS_HEADERS_SIZE["1.1"]:

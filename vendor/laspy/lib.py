@@ -152,7 +152,7 @@ def open_las(
                 read_evlrs=read_evlrs,
                 decompression_selection=decompression_selection,
             )
-        except:
+        except Exception:
             if closefd:
                 stream.close()
             raise
@@ -180,7 +180,7 @@ def open_las(
                 closefd=closefd,
                 encoding_errors=encoding_errors,
             )
-        except:
+        except Exception:
             if closefd:
                 stream.close()
             raise
@@ -199,7 +199,7 @@ def open_las(
                 laz_backend=laz_backend,
                 encoding_errors=encoding_errors,
             )
-        except:
+        except Exception:
             if closefd:
                 stream.close()
             raise
