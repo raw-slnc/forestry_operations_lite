@@ -4627,7 +4627,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             try:
                 from .terrain import integration as ti
                 int_result = ti.build_integrated_index(
-                    tmp_folder, analysis_prefix="")
+                    tmp_folder,
+                    analysis_prefix="",
+                    fs_caution=self.spinFsThresh.value(),
+                )
                 if int_result["integrated_risk_index"]:
                     saved.append(("Overall Risk Index", int_result["integrated_risk_index"], "raster"))
                 if int_result["integrated_high_risk"]:
