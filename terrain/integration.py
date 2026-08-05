@@ -81,6 +81,11 @@ def build_integrated_index(
       FS:   <1.0 => +3, <fs_caution => +2
       TWI:  >=twi_caution => +1
       Flow: >=flow_caution => +1, >=2*flow_caution => +2
+
+    High Risk Areas（高リスク域）は index>=high_risk_threshold に加えて、
+    FS<fs_caution のセルを他指標との合算を待たずに無条件で含める。
+    そうしないと fs_caution を変えても High Risk Areas の範囲が
+    実質変化しない（+2点は他指標と重ならないと index が3に届かない）ため。
     """
     if not HAS_GDAL:
         raise RuntimeError("GDAL is not available")
@@ -108,6 +113,7 @@ def build_integrated_index(
     rows, cols = base.data.shape
     index = np.zeros((rows, cols), dtype=np.float32)
     valid = np.zeros((rows, cols), dtype=bool)
+    fs_caution_mask = None
 
     if fs_path:
         fs = _read_raster(fs_path).data
@@ -115,6 +121,7 @@ def build_integrated_index(
         fs_valid = ~np.isnan(fs)
         valid |= fs_valid
         index += np.where(fs < 1.0, 3.0, np.where(fs < fs_caution, 2.0, 0.0)).astype(np.float32)
+        fs_caution_mask = fs_valid & (fs < fs_caution)
 
     if twi_path:
         twi = _read_raster(twi_path).data
@@ -141,6 +148,8 @@ def build_integrated_index(
     )
 
     high_mask = (index >= float(high_risk_threshold)) & ~np.isnan(index)
+    if fs_caution_mask is not None:
+        high_mask |= fs_caution_mask
     zone_path = None
     if high_mask.any():
         zone_path = rw.mask_to_polygons(
