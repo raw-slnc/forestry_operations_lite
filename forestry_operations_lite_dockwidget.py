@@ -89,8 +89,8 @@ class _ElidedPathLabel(QtWidgets.QLabel):
         self._prefix = ""
         # Ignored にすることで sizeHint がレイアウト幅を超えないようにする
         self.setSizePolicy(
-            QtWidgets.QSizePolicy.Ignored,
-            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
         )
 
     def setPath(self, prefix, path):
@@ -98,7 +98,7 @@ class _ElidedPathLabel(QtWidgets.QLabel):
         self._prefix = prefix
         self._path = path
         self.setToolTip(path if path else "")
-        self.setCursor(Qt.PointingHandCursor if path else Qt.ArrowCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor if path else Qt.CursorShape.ArrowCursor)
         self._update_elided()
 
     def resizeEvent(self, event):
@@ -109,11 +109,11 @@ class _ElidedPathLabel(QtWidgets.QLabel):
         fm = self.fontMetrics()
         prefix_w = fm.horizontalAdvance(self._prefix)
         avail = max(self.width() - prefix_w - 70, 20)
-        elided = fm.elidedText(self._path, Qt.ElideLeft, avail) if self._path else self._path
+        elided = fm.elidedText(self._path, Qt.TextElideMode.ElideLeft, avail) if self._path else self._path
         super().setText(self._prefix + elided)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self._path and os.path.isdir(self._path):
+        if event.button() == Qt.MouseButton.LeftButton and self._path and os.path.isdir(self._path):
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._path))
         super().mousePressEvent(event)
 
@@ -123,13 +123,13 @@ class CrosshairOverlay(QtWidgets.QWidget):
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setGeometry(parent.rect())
         parent.installEventFilter(self)
 
     def eventFilter(self, obj, event):
-        if obj is self.parent() and event.type() == QEvent.Resize:
+        if obj is self.parent() and event.type() == QEvent.Type.Resize:
             self.setGeometry(self.parent().rect())
         return False
 
@@ -167,16 +167,16 @@ class PreviewPanTool(QgsMapToolPan):
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down):
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
             ext = self.canvas().extent()
             dx = ext.width() * self._PAN_FRACTION
             dy = ext.height() * self._PAN_FRACTION
             c = self.canvas().center()
-            if key == Qt.Key_Left:
+            if key == Qt.Key.Key_Left:
                 self.canvas().setCenter(QgsPointXY(c.x() - dx, c.y()))
-            elif key == Qt.Key_Right:
+            elif key == Qt.Key.Key_Right:
                 self.canvas().setCenter(QgsPointXY(c.x() + dx, c.y()))
-            elif key == Qt.Key_Up:
+            elif key == Qt.Key.Key_Up:
                 self.canvas().setCenter(QgsPointXY(c.x(), c.y() + dy))
             else:  # Key_Down
                 self.canvas().setCenter(QgsPointXY(c.x(), c.y() - dy))
@@ -237,7 +237,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
         # ファイルリスト
         self._list = QtWidgets.QListWidget()
-        self._list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self._list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self._list.itemSelectionChanged.connect(self._on_selection_changed)
         self._list.itemDoubleClicked.connect(self._on_accept)
         layout.addWidget(self._list, 1)
@@ -258,11 +258,11 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
         # OK / Cancel
         btns = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+            QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
         btns.accepted.connect(self._on_accept)
         btns.rejected.connect(self.reject)
-        self._btn_ok = btns.button(QtWidgets.QDialogButtonBox.Ok)
+        self._btn_ok = btns.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
         self._btn_ok.setEnabled(False)
         layout.addWidget(btns)
 
@@ -444,14 +444,14 @@ class DemBrowserDialog(QtWidgets.QDialog):
         # ── GSI タイル（日本域のみ）──
         if self._canvas_overlaps_japan():
             sec = QtWidgets.QListWidgetItem("── GSI Elevation Tiles (Japan) ──────")
-            sec.setFlags(Qt.NoItemFlags)
+            sec.setFlags(Qt.ItemFlag.NoItemFlags)
             sec.setForeground(QColor("#1a5276"))
             f2 = QFont(); f2.setBold(True)
             sec.setFont(f2)
             self._list.addItem(sec)
         for sentinel, label, _ in (self._GSI_ITEMS if self._canvas_overlaps_japan() else []):
             item = QtWidgets.QListWidgetItem(label)
-            item.setData(Qt.UserRole, sentinel)
+            item.setData(Qt.ItemDataRole.UserRole, sentinel)
             f = QFont(); f.setBold(True)
             item.setFont(f)
             item.setForeground(QColor("#1a5276"))
@@ -459,21 +459,21 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
         # ── AWS Terrarium タイル（全球・常時表示）──
         sec_ter = QtWidgets.QListWidgetItem("── Global DEM Tiles (AWS Terrarium) ──")
-        sec_ter.setFlags(Qt.NoItemFlags)
+        sec_ter.setFlags(Qt.ItemFlag.NoItemFlags)
         sec_ter.setForeground(QColor("#1a5276"))
         f5 = QFont(); f5.setBold(True)
         sec_ter.setFont(f5)
         self._list.addItem(sec_ter)
         for sentinel, label, _ in self._TERRARIUM_ITEMS:
             item = QtWidgets.QListWidgetItem(label)
-            item.setData(Qt.UserRole, sentinel)
+            item.setData(Qt.ItemDataRole.UserRole, sentinel)
             f = QFont(); f.setBold(True)
             item.setFont(f)
             item.setForeground(QColor("#1a5276"))
             self._list.addItem(item)
 
         sep = QtWidgets.QListWidgetItem("── Local Files ──────────────────────")
-        sep.setFlags(Qt.NoItemFlags)
+        sep.setFlags(Qt.ItemFlag.NoItemFlags)
         sep.setForeground(QColor("#999"))
         self._list.addItem(sep)
 
@@ -498,7 +498,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
                             and not self._overlaps_canvas(fpath):
                         continue
                     item = QtWidgets.QListWidgetItem(fname)
-                    item.setData(Qt.UserRole, fpath)
+                    item.setData(Qt.ItemDataRole.UserRole, fpath)
                     self._list.addItem(item)
                     added += 1
                 if added == 0:
@@ -517,14 +517,14 @@ class DemBrowserDialog(QtWidgets.QDialog):
                     )
                     if subdirs:
                         sec_dir = QtWidgets.QListWidgetItem("── ZIP merge folders ────────────────")
-                        sec_dir.setFlags(Qt.NoItemFlags)
+                        sec_dir.setFlags(Qt.ItemFlag.NoItemFlags)
                         sec_dir.setForeground(QColor("#999"))
                         self._list.addItem(sec_dir)
                         for sname in subdirs:
                             spath = os.path.join(d, sname)
                             n = sum(1 for f in os.listdir(spath) if f.lower().endswith(".zip"))
                             item = QtWidgets.QListWidgetItem(f"📁 {sname}  ({n} files)")
-                            item.setData(Qt.UserRole, spath)
+                            item.setData(Qt.ItemDataRole.UserRole, spath)
                             self._list.addItem(item)
                 except OSError:
                     pass
@@ -534,14 +534,14 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
         # ── Copernicus GLO-30（全球：常に表示）──
         sec_cop = QtWidgets.QListWidgetItem("── Copernicus DEM (Global) ───────────")
-        sec_cop.setFlags(Qt.NoItemFlags)
+        sec_cop.setFlags(Qt.ItemFlag.NoItemFlags)
         sec_cop.setForeground(QColor("#7b4f00"))
         f4 = QFont(); f4.setBold(True)
         sec_cop.setFont(f4)
         self._list.addItem(sec_cop)
         for sentinel, label, _url, _info in self._COPERNICUS_ITEMS:
             item = QtWidgets.QListWidgetItem(label)
-            item.setData(Qt.UserRole, sentinel)
+            item.setData(Qt.ItemDataRole.UserRole, sentinel)
             f = QFont(); f.setBold(True)
             item.setFont(f)
             item.setForeground(QColor("#7b4f00"))
@@ -552,7 +552,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
             def _vs_section(label):
                 sec = QtWidgets.QListWidgetItem(label)
-                sec.setFlags(Qt.NoItemFlags)
+                sec.setFlags(Qt.ItemFlag.NoItemFlags)
                 sec.setForeground(QColor("#1a6b1a"))
                 f = QFont(); f.setBold(True)
                 sec.setFont(f)
@@ -560,13 +560,13 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
             def _vs_subsection(label):
                 sec = QtWidgets.QListWidgetItem(label)
-                sec.setFlags(Qt.NoItemFlags)
+                sec.setFlags(Qt.ItemFlag.NoItemFlags)
                 sec.setForeground(QColor("#4a8c4a"))
                 self._list.addItem(sec)
 
             def _vs_item(label, sentinel):
                 item = QtWidgets.QListWidgetItem(label)
-                item.setData(Qt.UserRole, sentinel)
+                item.setData(Qt.ItemDataRole.UserRole, sentinel)
                 f = QFont(); f.setBold(True)
                 item.setFont(f)
                 item.setForeground(QColor("#1a6b1a"))
@@ -593,7 +593,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
         self._handle_single_item(items[0])
 
     def _handle_single_item(self, current):
-        path = current.data(Qt.UserRole)
+        path = current.data(Qt.ItemDataRole.UserRole)
         # VS LP/Grid 自動取得
         if path == self.VS_LP_GRID_SENTINEL:
             self._lbl_info.setText(
@@ -802,7 +802,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
         items = self._list.selectedItems()
         if not items:
             return
-        paths = [i.data(Qt.UserRole) for i in items if i.data(Qt.UserRole)]
+        paths = [i.data(Qt.ItemDataRole.UserRole) for i in items if i.data(Qt.ItemDataRole.UserRole)]
         if not paths:
             return
 
@@ -943,7 +943,7 @@ class LockedMapTool(QgsMapTool):
     def __init__(self, canvas):
         super().__init__(canvas)
         from qgis.PyQt.QtGui import QCursor
-        self.setCursor(QCursor(Qt.ArrowCursor))
+        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         # イベントフィルターでホイールイベントを消費（キャンバスのズームを阻止）
         canvas.viewport().installEventFilter(self)
 
@@ -963,7 +963,7 @@ class LockedMapTool(QgsMapTool):
 
     def eventFilter(self, obj, event):
         from qgis.PyQt.QtCore import QEvent
-        if event.type() == QEvent.Wheel:
+        if event.type() == QEvent.Type.Wheel:
             return True  # ホイールイベントを消費してズームを阻止
         return False
 
@@ -1091,7 +1091,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.btnRefreshAnalysis.setFixedWidth(28)
         self.btnRefreshAnalysis.setToolTip("Refresh analysis list")
 
-        self.mainSplitter = QtWidgets.QSplitter(Qt.Horizontal, self)
+        self.mainSplitter = QtWidgets.QSplitter(Qt.Orientation.Horizontal, self)
         self.leftPane = QtWidgets.QWidget(self.mainSplitter)
         self.rightPane = QtWidgets.QWidget(self.mainSplitter)
         self.leftPane.setMinimumWidth(480)
@@ -1102,12 +1102,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.grpPreviewCanvas = QtWidgets.QGroupBox("Design Preview")
         preview_layout = QtWidgets.QVBoxLayout(self.grpPreviewCanvas)
         self.preview_canvas = QgsMapCanvas(self)
-        self.preview_canvas.setCanvasColor(Qt.white)
+        self.preview_canvas.setCanvasColor(Qt.GlobalColor.white)
         self.preview_canvas.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+            QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding
         )
         # キーボードフォーカスを有効化（矢印キーパンのため）
-        self.preview_canvas.setFocusPolicy(Qt.StrongFocus)
+        self.preview_canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         preview_layout.addWidget(self.preview_canvas)
 
         # デフォルトツール: ドラッグ・スクロール・矢印キーでのパン/ズーム
@@ -1271,7 +1271,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.tabDataSettings = QtWidgets.QWidget()
         _ds_scroll = QtWidgets.QScrollArea(self.tabDataSettings)
         _ds_scroll.setWidgetResizable(True)
-        _ds_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        _ds_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         _ds_outer = QtWidgets.QVBoxLayout(self.tabDataSettings)
         _ds_outer.setContentsMargins(0, 0, 0, 0)
         _ds_outer.addWidget(_ds_scroll)
@@ -1363,7 +1363,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         _btn_tips.toggled.connect(_toggle_tips)
 
         _lbl_credit = QtWidgets.QLabel("Developed by Avid Tree Work")
-        _lbl_credit.setAlignment(Qt.AlignCenter)
+        _lbl_credit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         _lbl_credit.setStyleSheet("color: #888; font-size: 8pt; padding: 4px 0;")
         ds_layout.addWidget(_lbl_credit)
         ds_layout.addStretch()
@@ -1380,7 +1380,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         _corner_lnk.setOpenExternalLinks(True)
         _corner_lnk.setToolTip("Open FOL documentation")
         _corner_lnk.setContentsMargins(0, 0, 4, 0)
-        self.leftTabs.setCornerWidget(_corner_lnk, Qt.TopRightCorner)
+        self.leftTabs.setCornerWidget(_corner_lnk, Qt.Corner.TopRightCorner)
 
         left_layout.addWidget(self.leftTabs)
 
@@ -1446,7 +1446,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _build_terrain_tab(self, parent):
         scroll = QtWidgets.QScrollArea(parent)
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         outer = QtWidgets.QVBoxLayout(parent)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
@@ -1612,12 +1612,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # --- パラメータ タブ ---
         self.tabParams = QtWidgets.QTabWidget()
         self.tabParams.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Minimum)
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Minimum)
         self.grpParamPlaceholder = QtWidgets.QGroupBox("Parameters")
         _ph_lay = QtWidgets.QVBoxLayout(self.grpParamPlaceholder)
         _ph_lbl = QtWidgets.QLabel("Select analysis types above")
-        _ph_lbl.setAlignment(Qt.AlignCenter)
+        _ph_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         _ph_lbl.setStyleSheet("color:#888;font-size:9pt;padding:12px 0;")
         _ph_lay.addWidget(_ph_lbl)
         lay.addWidget(self.tabParams)
@@ -1660,11 +1660,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.cmbAreaLimit.setCurrentIndex(1)  # デフォルト: 50ha
         _al_left_lay.addWidget(self.cmbAreaLimit)
         _al_left_lay.addWidget(QtWidgets.QLabel("ha"))
-        _al_left.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        _al_left.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
         _al_lay.addWidget(_al_left, 2)
         # Resample インジケーター（解像度 < 0.2m のとき表示）
         self.lblResample = QtWidgets.QLabel("Resample")
-        self.lblResample.setAlignment(Qt.AlignCenter)
+        self.lblResample.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lblResample.setStyleSheet(
             "QLabel{background:#27ae60;color:white;border-radius:3px;"
             "padding:2px 5px;font-size:8pt;}"
@@ -1708,7 +1708,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         lay.addWidget(grpOut)
 
         _lbl_credit_a = QtWidgets.QLabel("Developed by Avid Tree Work")
-        _lbl_credit_a.setAlignment(Qt.AlignCenter)
+        _lbl_credit_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
         _lbl_credit_a.setStyleSheet("color: #888; font-size: 8pt; padding: 4px 0;")
         lay.addWidget(_lbl_credit_a)
         lay.addStretch(1)
@@ -1728,7 +1728,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
     def eventFilter(self, obj, event):
         """タブバー空白 / パラメータ表示領域背景クリックで次タブへ切り替える。"""
-        if event.type() == QEvent.MouseButtonPress and self.tabParams.count() > 0:
+        if event.type() == QEvent.Type.MouseButtonPress and self.tabParams.count() > 0:
             nxt = (self.tabParams.currentIndex() + 1) % self.tabParams.count()
             # タブバーの空白部分
             if obj is self.tabParams.tabBar():
@@ -2122,15 +2122,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if self.iface is not None and self._added_to_main_window:
                 self.iface.mainWindow().removeDockWidget(self)
                 self._added_to_main_window = False
-            self.setParent(None, Qt.Window)
+            self.setParent(None, Qt.WindowType.Window)
             self.showMaximized()
             QTimer.singleShot(300, self._finish_init)
         else:
             if self.iface is not None and not self._added_to_main_window:
                 self.setParent(self.iface.mainWindow())
-                self.iface.addDockWidget(Qt.BottomDockWidgetArea, self)
+                self.iface.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self)
                 self._added_to_main_window = True
-            self.setAllowedAreas(Qt.BottomDockWidgetArea)
+            self.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea)
             if self.isFloating():
                 self.setFloating(False)
             self.show()
@@ -2342,7 +2342,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 sl0.setStrokeWidth(0.26)
             # Layer 1: 外周グロー（塗りなし、青半透明の太いアウトライン）
             sl1 = QgsSimpleFillSymbolLayer()
-            sl1.setBrushStyle(Qt.NoBrush)
+            sl1.setBrushStyle(Qt.BrushStyle.NoBrush)
             sl1.setStrokeColor(QColor(30, 80, 220, 52))
             sl1.setStrokeWidth(6)
             sl1.setStrokeWidthUnit(QgsUnitTypes.RenderPixels)
@@ -3023,7 +3023,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             return
         initial_dir = ""
         dlg = DemBrowserDialog(self.preview_canvas, initial_dir=initial_dir, parent=self)
-        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             path = dlg.selected_path()
             if not path:
                 return
@@ -3356,10 +3356,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             "DSM creation may require a large amount of data.\n"
             "Basic analysis is possible without LAS.\n\n"
             "Do you want to continue DSM creation?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
         )
-        if reply != QtWidgets.QMessageBox.Yes:
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
             self.lblDsmInfo.setText("Skipped — no LAS")
             self._update_vs_export_buttons()
             return
@@ -3698,7 +3698,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _unload_terrain_group(self):
         """プラグイン管理グループをカスタムプロパティで検索して削除する。
         Python参照（_terrain_layer_group）が stale でも確実に除去できる。"""
-        import sip
+        from qgis.PyQt import sip
         layer_ids = []
         try:
             root = QgsProject.instance().layerTreeRoot()
@@ -3850,7 +3850,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self._update_vs_export_buttons()
             return
         dlg = DemBrowserDialog(self.preview_canvas, "", self, mode="dsm")
-        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             path = dlg.selected_path()
             self._reset_vs_export_state()
             _orig_labels = {
@@ -4090,8 +4090,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                "Proceed?")
         if QtWidgets.QMessageBox.question(
             self, "VS Export", msg,
-            QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel
-        ) != QtWidgets.QMessageBox.Ok:
+            QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel
+        ) != QtWidgets.QMessageBox.StandardButton.Ok:
             self.lblVsExportStatus.setText("—")
             return
 
@@ -4274,9 +4274,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                         self, "Area Warning",
                         f"Analysis area is {_area_ha:.0f} ha, "
                         f"which exceeds the warning limit of {_limit_ha} ha.\n\nContinue?",
-                        QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel,
+                        QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel,
                     )
-                    if _reply != QtWidgets.QMessageBox.Ok:
+                    if _reply != QtWidgets.QMessageBox.StandardButton.Ok:
                         return
             except Exception:  # nosec B110
                 pass
@@ -4307,9 +4307,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             reply = QtWidgets.QMessageBox.question(
                 self, "解析範囲の確認",
                 "解析範囲にDSM/DTM設定外が含まれます。\n再取得しますか？",
-                QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.No,
             )
-            if reply != QtWidgets.QMessageBox.Ok:
+            if reply != QtWidgets.QMessageBox.StandardButton.Ok:
                 return
             self._load_vs_lp_ground()
 
@@ -4408,9 +4408,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self, "Analysis Range",
                 "The analysis range extends beyond the DEM data.\n"
                 "Proceed with the available data only?",
-                QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel,
+                QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel,
             )
-            if reply != QtWidgets.QMessageBox.Ok:
+            if reply != QtWidgets.QMessageBox.StandardButton.Ok:
                 return
             self._partial_outside_warned = True
 
