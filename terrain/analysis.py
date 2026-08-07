@@ -293,8 +293,8 @@ def rational_flow(accum, cell_size, rainfall_mmh=50.0, runoff_coef=0.8):
 
 
 def rational_flow_3metrics(accum, cell_size,
-                            i_peak_mmh=50.0, runoff_coef=0.8,
-                            total_mm=100.0, duration_h=6.0):
+                           i_peak_mmh=50.0, runoff_coef=0.8,
+                           total_mm=100.0, duration_h=6.0):
     """
     合理式ベース流量の3指標
 
@@ -398,8 +398,8 @@ def compute_tc(dem, flow_dir, local_tt):
 
 
 def flow_routing_3metrics(accum, tc, cell_size, duration_h,
-                           i_peak_mmh=50.0, runoff_coef=0.8,
-                           total_mm=100.0):
+                          i_peak_mmh=50.0, runoff_coef=0.8,
+                          total_mm=100.0):
     """
     到達時間（Tc）を用いた修正合理式による流量3指標。
 

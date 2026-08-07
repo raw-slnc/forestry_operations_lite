@@ -271,8 +271,8 @@ class GSITileDEMLoader:
                      + g.astype(np.uint32) * 256
                      + b.astype(np.uint32))
                 arr = np.where(u == 0x800000, np.nan,
-                      np.where(u <  0x800000, u.astype(np.float64) * 0.01,
-                               (u.astype(np.int32) - 0x1000000).astype(np.float64) * 0.01))
+                               np.where(u <  0x800000, u.astype(np.float64) * 0.01,
+                                        (u.astype(np.int32) - 0x1000000).astype(np.float64) * 0.01))
 
             return arr.astype(np.float64), None
         except Exception as e:

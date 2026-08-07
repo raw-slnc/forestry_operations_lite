@@ -1654,8 +1654,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         _al_left_lay.addWidget(QtWidgets.QLabel("Warn above"))
         self.cmbAreaLimit = QtWidgets.QComboBox()
         for _ha_val, _ha_lbl in [(30, "30"), (50, "50"), (150, "150"), (300, "300"),
-                                  (800, "800"), (1500, "1500"), (2000, "2000"),
-                                  (0, "No Limit")]:
+                                 (800, "800"), (1500, "1500"), (2000, "2000"),
+                                 (0, "No Limit")]:
             self.cmbAreaLimit.addItem(_ha_lbl, _ha_val)
         self.cmbAreaLimit.setCurrentIndex(1)  # デフォルト: 50ha
         _al_left_lay.addWidget(self.cmbAreaLimit)
@@ -4541,7 +4541,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 saved.append(("TWI", p, "raster"))
                 min_cells = self.spinMinArea.value() / (dem.cell_size ** 2)
                 vmask = (twi >= self.spinTwiThresh.value()) \
-                        & (accum_v >= min_cells) & ~np.isnan(twi)
+                    & (accum_v >= min_cells) & ~np.isnan(twi)
                 if vmask.any():
                     p2 = rw.mask_to_polygons(vmask, dem.gt, dem.crs_wkt,
                                              tmp_folder, "valley_zones",
@@ -4678,8 +4678,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             "dem_path": getattr(self, "_dem_actual_path", None) or getattr(self, "_dem_path", ""),
             "analyses": [
                 k for k, chk in [("stability", self.chkStability),
-                                  ("valley",    self.chkValley),
-                                  ("flow",      self.chkFlow)]
+                                 ("valley",    self.chkValley),
+                                 ("flow",      self.chkFlow)]
                 if chk.isChecked()
             ],
         }
