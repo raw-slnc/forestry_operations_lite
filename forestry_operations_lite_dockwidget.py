@@ -2345,7 +2345,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             sl1.setBrushStyle(Qt.BrushStyle.NoBrush)
             sl1.setStrokeColor(QColor(30, 80, 220, 52))
             sl1.setStrokeWidth(6)
-            sl1.setStrokeWidthUnit(QgsUnitTypes.RenderPixels)
+            sl1.setStrokeWidthUnit(QgsUnitTypes.RenderUnit.RenderPixels)
             symbol.appendSymbolLayer(sl1)
         elif base_name == "unstable_zones":
             symbol.setColor(QColor(220, 0, 0, 140))
@@ -2435,7 +2435,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         from qgis.core import QgsRasterBandStats
         stats = lyr.dataProvider().bandStatistics(
             1,
-            QgsRasterBandStats.Min | QgsRasterBandStats.Max,
+            QgsRasterBandStats.Stats.Min | QgsRasterBandStats.Stats.Max,
             lyr.extent(),
             250_000,
         )
@@ -2486,7 +2486,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             return
 
         shader_func = QgsColorRampShader()
-        shader_func.setColorRampType(QgsColorRampShader.Interpolated)
+        shader_func.setColorRampType(QgsColorRampShader.Type.Interpolated)
         shader_func.setColorRampItemList(items)
         shader_func.setMinimumValue(vmin)
         shader_func.setMaximumValue(vmax)

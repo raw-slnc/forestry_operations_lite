@@ -250,7 +250,7 @@ class GSITileDEMLoader:
             img = QImage()
             if not img.loadFromData(raw):
                 return None, "PNG decode failed"
-            img = img.convertToFormat(QImage.Format_ARGB32)
+            img = img.convertToFormat(QImage.Format.Format_ARGB32)
 
             ptr = img.bits()
             nbytes = img.sizeInBytes() if hasattr(img, 'sizeInBytes') else img.byteCount()
