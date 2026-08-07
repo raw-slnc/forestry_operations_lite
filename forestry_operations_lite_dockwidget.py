@@ -1000,6 +1000,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._pending_apply_layer_display = False
         self._preview_has_layers = False
         self._post_init_scheduled = False
+        self._is_floating_fullscreen = False
+        self._pre_fullscreen_geometry = None
+        self._alt_tab_fix_applied = False
 
         self._apply_japanese_base_labels()
         self._build_extended_ui()
@@ -1016,6 +1019,125 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         QgsProject.instance().cleared.connect(self._on_project_cleared)
         self._load_settings()
         self._restore_layer_combos_from_project()  # プロジェクト組み込み設定を優先適用
+
+    def event(self, event):
+        """OSネイティブのタイトルバーをダブルクリックすると
+        QEvent.NonClientAreaMouseButtonDblClick が発生し、QDockWidget内部で
+        無条件に toggleTopLevel()（=setFloatingの反転）が呼ばれてしまう
+        （DockWidgetFloatable機能フラグの有無に関係なく発生する）。
+        ここでイベントを握りつぶし、代わりに全画面トグルとして扱う。"""
+        if event.type() == QEvent.Type.NonClientAreaMouseButtonDblClick:
+            event.accept()
+            self.chkFullscreen.setChecked(not self.chkFullscreen.isChecked())
+            return True
+        return super().event(event)
+
+    def _show_as_window(self):
+        if self.iface is not None and not self._added_to_main_window:
+            self.setParent(self.iface.mainWindow())
+            self.iface.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self)
+            self._added_to_main_window = True
+        self.setAllowedAreas(Qt.DockWidgetArea.NoDockWidgetArea)
+        self.setFeatures(
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.setFloating(True)
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self._ensure_startup_size()
+        self._ensure_alt_tab_visible()
+        self.raise_()
+        self.activateWindow()
+
+    def _ensure_alt_tab_visible(self):
+        """フロート時のウィンドウ種別はデフォルトで Qt::Tool になり、
+        Windowsの仕様上Alt+Tabの対象から除外される。通常のWindowに変更し、
+        Qtがメインウィンドウにセットするオーナー関係も解除してAlt+Tab対象にする。
+        topLevelChangedは監視しない（event()でダブルクリックを握りつぶしており
+        起動後は発火しないため、ここで一度だけ適用する）。"""
+        if self._alt_tab_fix_applied:
+            return
+        self._alt_tab_fix_applied = True
+        geometry = self.geometry()
+        self.setWindowFlag(Qt.WindowType.Tool, False)
+        self.setWindowFlag(Qt.WindowType.Window, True)
+        self.show()
+        if geometry.isValid():
+            self.setGeometry(geometry)
+        self._detach_native_window_owner()
+
+    def _detach_native_window_owner(self):
+        """QtがメインウィンドウをオーナーにセットするHWNDを解除する
+        （Windowsはowned windowをAlt+Tabから除外するため）。"""
+        import sys
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            set_long_ptr = getattr(
+                user32, "SetWindowLongPtrW", user32.SetWindowLongW
+            )
+            get_long_ptr = getattr(
+                user32, "GetWindowLongPtrW", user32.GetWindowLongW
+            )
+            hwnd = int(self.winId())
+            gwlp_hwndparent = -8
+            gwl_exstyle = -20
+            ws_ex_appwindow = 0x00040000
+            ws_ex_toolwindow = 0x00000080
+            # NOSIZE|NOMOVE|NOZORDER|FRAMECHANGED
+            swp_flags = 0x0001 | 0x0002 | 0x0004 | 0x0020
+
+            set_long_ptr(hwnd, gwlp_hwndparent, 0)
+            ex_style = get_long_ptr(hwnd, gwl_exstyle)
+            ex_style = (ex_style | ws_ex_appwindow) & ~ws_ex_toolwindow
+            set_long_ptr(hwnd, gwl_exstyle, ex_style)
+            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, swp_flags)
+        except (OSError, AttributeError, ValueError):
+            pass
+
+    def _ensure_startup_size(self):
+        """フロート直後は十分な初期サイズが確保されないことがあるため、
+        画面の大部分（余白5%）を使うサイズを明示的に設定する。"""
+        screen = QtWidgets.QApplication.screenAt(self.pos())
+        if screen is None:
+            screen = QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        margin_w = int(avail.width() * 0.05)
+        margin_h = int(avail.height() * 0.05)
+        self.setGeometry(
+            avail.x() + margin_w,
+            avail.y() + margin_h,
+            avail.width() - margin_w * 2,
+            avail.height() - margin_h * 2,
+        )
+
+    def _toggle_floating_fullscreen(self, checked):
+        """独立ウィンドウのサイズを画面いっぱいと元のサイズで切り替える。
+        setFloating()やallowedAreasには触れない（ドッキングへの復帰は行わない）。"""
+        if not self.isFloating():
+            return
+        if checked:
+            self._pre_fullscreen_geometry = self.geometry()
+            screen = QtWidgets.QApplication.screenAt(self.pos())
+            if screen is None:
+                screen = QtWidgets.QApplication.primaryScreen()
+            # screen.geometry() だとタスクバー領域まで覆ってしまう
+            # （Alt+Tab等の操作を物理的に塞ぐ）ため availableGeometry() を使う
+            self.setGeometry(screen.availableGeometry())
+            self._is_floating_fullscreen = True
+        else:
+            self._is_floating_fullscreen = False
+            if self._pre_fullscreen_geometry is not None:
+                self.setGeometry(self._pre_fullscreen_geometry)
+                self._pre_fullscreen_geometry = None
 
     def _apply_japanese_base_labels(self):
         self.setWindowTitle("Forestry Operations Lite")
@@ -1420,6 +1542,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         dm_row2.addStretch(1)
         self.chkMapLock = QtWidgets.QCheckBox("Lock Map")
         dm_row2.addWidget(self.chkMapLock)
+        self.chkFullscreen = QtWidgets.QCheckBox("Fullscreen")
+        self.chkFullscreen.setToolTip(
+            "Toggle between fullscreen and the previous window size"
+        )
+        dm_row2.addWidget(self.chkFullscreen)
         dm_vlay.addLayout(dm_row2)
         # Row3: レイヤー表示 ON/OFF + 透過率（GPKG / Tile / Background）
         dm_row3 = QtWidgets.QHBoxLayout()
@@ -1764,6 +1891,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.btnRefreshLayerList.clicked.connect(self._refresh_layer_combos)
         self._setup_canvas_sync()
         self.chkStandaloneWindow.toggled.connect(self._apply_window_mode)
+        self.chkFullscreen.toggled.connect(self._toggle_floating_fullscreen)
         self.chkMapLock.toggled.connect(self._on_map_lock_toggled)
         self.btnBrowseDem.clicked.connect(self._on_browse_dem)
         self.btnBrowseDsm.clicked.connect(self._on_browse_dsm)
@@ -2111,29 +2239,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
     def _apply_window_mode(self, checked):
         from qgis.PyQt.QtCore import QTimer
-        QSettings().setValue("forestry_operations_lite/standalone_window", bool(checked))
-        if checked:
-            # ウィンドウ操作前にメインキャンバス状態を保存（起動初回のみ）
-            if getattr(self, '_initializing', False) and self.iface is not None:
-                mc = self.iface.mapCanvas()
-                self._saved_main_center = mc.center()
-                self._saved_main_scale  = mc.scale()
-                self._saved_main_extent = mc.extent()   # extent を直接保存（setExtent で確実に復元できる）
-            if self.iface is not None and self._added_to_main_window:
-                self.iface.mainWindow().removeDockWidget(self)
-                self._added_to_main_window = False
-            self.setParent(None, Qt.WindowType.Window)
-            self.showMaximized()
-            QTimer.singleShot(300, self._finish_init)
-        else:
-            if self.iface is not None and not self._added_to_main_window:
-                self.setParent(self.iface.mainWindow())
-                self.iface.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self)
-                self._added_to_main_window = True
-            self.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea)
-            if self.isFloating():
-                self.setFloating(False)
-            self.show()
+        QSettings().setValue("forestry_operations_lite/standalone_window", True)
+        if getattr(self, '_initializing', False) and self.iface is not None:
+            mc = self.iface.mapCanvas()
+            self._saved_main_center = mc.center()
+            self._saved_main_scale  = mc.scale()
+            self._saved_main_extent = mc.extent()   # extent を直接保存（setExtent で確実に復元できる）
+        self._show_as_window()
+        QTimer.singleShot(300, self._finish_init)
 
     def _refresh_preview_canvas(self):
         if self.preview_canvas is None:
