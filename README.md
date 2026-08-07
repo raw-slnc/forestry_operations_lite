@@ -110,8 +110,8 @@ Use the **Open in WODMI** button to open the exported ZIP directly in the WebODM
 
 ## Requirements
 
-- QGIS 3.16 or later
-- Python 3.7+
+- QGIS 4.0 or later
+- Python 3.x (bundled with QGIS)
 - numpy, GDAL, scipy (bundled with QGIS)
 
 ---
@@ -302,8 +302,8 @@ DEM読込時のタイル範囲に基づいて全データが取得されるた�
 
 ## 動作環境
 
-- QGIS 3.16 以降
-- Python 3.7+
+- QGIS 4.0 以降
+- Python 3.x（QGIS同梱）
 - numpy、GDAL、scipy（QGIS同梱）
 
 ---
