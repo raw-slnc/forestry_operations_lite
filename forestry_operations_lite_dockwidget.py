@@ -1002,8 +1002,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._post_init_scheduled = False
         self._is_floating_fullscreen = False
         self._pre_fullscreen_geometry = None
-        self._alt_tab_fix_applied = False
-
         self._apply_japanese_base_labels()
         self._build_extended_ui()
         self._connect_extended_signals()
@@ -1056,11 +1054,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         """フロート時のウィンドウ種別はデフォルトで Qt::Tool になり、
         Windowsの仕様上Alt+Tabの対象から除外される。通常のWindowに変更し、
         Qtがメインウィンドウにセットするオーナー関係も解除してAlt+Tab対象にする。
-        topLevelChangedは監視しない（event()でダブルクリックを握りつぶしており
-        起動後は発火しないため、ここで一度だけ適用する）。"""
-        if self._alt_tab_fix_applied:
-            return
-        self._alt_tab_fix_applied = True
+        再表示時にQt/OS側で属性が戻ることがあるため、表示のたびに再適用する。"""
         geometry = self.geometry()
         self.setWindowFlag(Qt.WindowType.Tool, False)
         self.setWindowFlag(Qt.WindowType.Window, True)
@@ -3808,7 +3802,29 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._terrain_layer_group = group
         return group
 
-    def _unload_terrain_group(self):
+    def _capture_terrain_display_state(self):
+        """現在表示中の地形レイヤ状態を、解析切替後に復元できる形で保持する。"""
+        return {
+            key: self._terrain_cycle_state.get(key, -1)
+            for key in self._BTN_LABELS
+            if self._terrain_cycle_state.get(key, -1) >= 0
+        }
+
+    def _restore_terrain_display_state(self, state):
+        """保存済みの地形レイヤ表示状態を現在の解析番号へ再適用する。"""
+        analysis_number = self.cmbAnalysisNumber.currentData()
+        if not analysis_number:
+            return
+        for key in self._BTN_LABELS:
+            desired_state = state.get(key, -1)
+            if desired_state < 0:
+                continue
+            # _cycle_terrain_layer() は現在 state から次状態へ進めるため、
+            # 目標の1つ手前を仕込んでから1回進めて復元する。
+            self._terrain_cycle_state[key] = desired_state - 1
+            self._cycle_terrain_layer(key)
+
+    def _unload_terrain_group(self, reset_controls=True):
         """プラグイン管理グループをカスタムプロパティで検索して削除する。
         Python参照（_terrain_layer_group）が stale でも確実に除去できる。"""
         from qgis.PyQt import sip
@@ -3840,7 +3856,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 pass
         self._loaded_terrain_layers = {}
         self._flow_buffer_layer_ids = []
-        self._reset_load_buttons()
+        self._exclusive_hidden = {}
+        if reset_controls:
+            self._reset_load_buttons()
         try:
             self._refresh_preview_canvas()
         except Exception:  # nosec B110
@@ -3862,11 +3880,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             pass
 
     def _on_analysis_number_changed(self, _index):
-        """解析番号コンボ変更時: 表示中レイヤをすべて解除してボタンをリセット"""
-        self._unload_terrain_group()
+        """解析番号コンボ変更時: 現在の表示状態を保ったまま対象解析へ切り替える。"""
+        display_state = self._capture_terrain_display_state()
+        self._unload_terrain_group(reset_controls=False)
         analysis_number = self.cmbAnalysisNumber.currentData()
         if analysis_number:
             self._create_terrain_group(analysis_number)
+            self._restore_terrain_display_state(display_state)
+        else:
+            self._reset_load_buttons()
         self._update_analysis_condition_label(analysis_number)
         # ロック中は新しい解析範囲へ更新し、現在の表示が範囲外なら移動
         if self._map_locked:
