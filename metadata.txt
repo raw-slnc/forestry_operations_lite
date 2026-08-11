@@ -3,7 +3,7 @@ name=Forestry Operations Lite
 qgisMinimumVersion=3.16
 qgisMaximumVersion=3.99
 description=Terrain analysis for forestry sites: DEM/DSM loading, slope, TWI, stability index, and flow accumulation.
-version=0.2.9
+version=0.2.10
 author=Hideharu Masai
 email=hideharumasai@void.mints.ne.jp
 
@@ -14,6 +14,7 @@ repository=https://github.com/raw-slnc/forestry_operations_lite
 
 hasProcessingProvider=no
 changelog=
+    0.2.10 - Switching the analysis run selector now preserves the current terrain layer display state (which layers are shown and which file/variant each is on) instead of resetting it, so different runs can be compared under the same display conditions
     0.2.9 - Fix a critical issue: High Risk Areas now correctly applies the user-configured FS threshold
     0.2.8 - Final QGIS 3.x maintenance release focused on plugin-submission security hardening: verify Bandit scan passes with no findings, confirm no secrets are detected in the package, and keep the release limited to security/readiness updates without adding new user-facing features
     0.2.7 - Add flow direction method for Valley Terrain (TWI): choose D8 (single steepest), D-infinity, or MFD (multiple flow) via mutually-exclusive selector in the Valley Terrain parameters. Applies to TWI/valley delineation only; flow estimation stays D8. Help (FOL.html) and README updated with a method comparison (sample renders) and a note that the TWI threshold needs re-tuning per method
