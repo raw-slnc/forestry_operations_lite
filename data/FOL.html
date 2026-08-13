@@ -1,14 +1,18 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Forestry Operations Lite — ヘルプ</title>
+<title>Forestry Operations Lite — Help</title>
 <style>
   body { font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", sans-serif;
          font-size: 14px; line-height: 1.7; color: #333; max-width: 860px;
          margin: 0 auto; padding: 24px 32px; }
-  h1   { font-size: 1.4em; border-bottom: 2px solid #4a7c4e; padding-bottom: 6px; color: #2d5a30; }
+  h1   { font-size: 1.4em; color: #2d5a30; margin: 0; }
+  .title-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    border-bottom: 2px solid #4a7c4e; padding-bottom: 6px;
+  }
   h2   { font-size: 1.15em; margin-top: 2em; border-left: 4px solid #4a7c4e;
          padding-left: 10px; color: #2d5a30; }
   h3   { font-size: 1em; margin-top: 1.4em; color: #444; }
@@ -22,15 +26,315 @@
   .sec { margin-bottom: 2.5em; }
   ul   { padding-left: 1.4em; }
   li   { margin-bottom: 4px; }
+  .lang-en { display: block; }
+  .lang-ja { display: none; }
+  body.show-ja .lang-en { display: none; }
+  body.show-ja .lang-ja { display: block; }
+  .lang-switch { font-size: 0.85em; white-space: nowrap; }
+  .lang-opt { cursor: pointer; color: #999; padding: 2px 3px; }
+  .lang-opt.active { color: #2d5a30; font-weight: bold; }
+  .lang-sep { color: #ccc; margin: 0 1px; }
 </style>
 </head>
 <body>
 
-<h1>Forestry Operations Lite — ヘルプ</h1>
+<div class="title-row">
+  <h1 class="lang-en">Forestry Operations Lite — Help</h1>
+  <h1 class="lang-ja">Forestry Operations Lite — ヘルプ</h1>
+  <div class="lang-switch">
+    <span id="optEn" class="lang-opt active" onclick="setLang('en')">EN</span><span class="lang-sep">/</span><span id="optJp" class="lang-opt" onclick="setLang('jp')">JP</span>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- ENGLISH (default)                                                 -->
+<!-- ================================================================ -->
+<div class="lang-en">
+
+<!-- ============================================================ -->
+<div class="sec">
+<h2>Data Setup Hints</h2>
+
+<h3>About scipy (required for Flow Buffer / DEM resampling / SHC computation)</h3>
+<div class="note">
+  scipy is not bundled with QGIS and must be installed separately. Without it, Flow Buffer display, fine-resolution DEM resampling, and SHC computation do not work (other features are unaffected).
+</div>
+<ol>
+  <li>In QGIS's Plugins → Python Console, run the following to find QGIS's own Python location:<br>
+      <code>import sys; print(sys.executable)</code></li>
+  <li>Close QGIS, then in your OS terminal (<strong>NOT the Python Console above</strong>), run the following (replace the path with the one shown in Step 1):<br>
+      <code>"&lt;path from Step 1&gt;" -m pip install --user scipy</code><br>
+      Debian/Ubuntu systems may require appending <code>--break-system-packages</code>.</li>
+</ol>
+<div class="note">
+  Note: this can also upgrade numpy, which may affect other Python tools on the system. To undo, run the following with the same path:<br>
+  <code>"&lt;path from Step 1&gt;" -m pip uninstall --user scipy numpy</code>
+</div>
+
+<h3>DEM / DSM/DTM Data</h3>
+<ul>
+  <li>Select a general-purpose DEM, or one covering the area where you'll run the terrain analysis.</li>
+  <li>Select a DSM covering the same extent as the DEM data.</li>
+  <li>Selecting DSM data lets the runoff and velocity coefficients for flow estimation be calculated automatically from the DSM.</li>
+</ul>
+
+<h3>TIF / ZIP Layout</h3>
+<table>
+  <tr><th>Pattern</th><th>Action</th></tr>
+  <tr>
+    <td>Single TIF</td>
+    <td>Select the file directly</td>
+  </tr>
+  <tr>
+    <td>Single ZIP (containing a TIF)</td>
+    <td>Select the ZIP directly</td>
+  </tr>
+  <tr>
+    <td>Merge multiple ZIPs</td>
+    <td>Place all ZIPs for the same region in one folder and select that folder.<br>
+        A <code>merged_&lt;folder name&gt;.tif</code> is auto-generated in the parent folder.</td>
+  </tr>
+  <tr>
+    <td>Reuse a merged TIF</td>
+    <td>Select the generated <code>merged_*.tif</code> directly to skip re-merging.</td>
+  </tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div class="sec">
+<h2>Parameter Setting Hints</h2>
+
+<h3>Slope Stability (Infinite Slope Model)</h3>
+<p>Computes the slope stability factor of safety (FS) using the infinite slope model.<br>
+FS is calculated from slope angle, internal friction angle, cohesion, soil depth, and saturation ratio.<br>
+<strong>FS &lt; 1.0: collapse risk　/ FS &lt; FS threshold: caution</strong><br>
+All parameters describe the properties of the "topsoil down to the hard layer".</p>
+
+<table>
+  <tr><th>Parameter</th><th>Guideline / how to check on-site</th></tr>
+  <tr>
+    <td><strong>Internal friction angle φ'</strong><br>Interlock of topsoil particles</td>
+    <td>
+      Check by picking up and squeezing soil in your hand on site.<br>
+      ・Holds shape when squeezed but crumbles when wet → φ 20–28°<br>
+      　(fine sand/clay, slopes with surface wash marks after rain)<br>
+      ・Forms a clump when squeezed but breaks apart → φ 30–35°<br>
+      　(typical mountain soil/loam in cedar/cypress plantations)<br>
+      ・Doesn't hold shape, feels gritty → φ 38°+<br>
+      　(gravel/rock debris, ridgelines, near-bedrock layers)
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Cohesion c'</strong><br>Stickiness/bonding of topsoil</td>
+    <td>
+      ・Sandy soil, young stand with shallow roots → 0 kPa<br>
+      ・Gravelly loam, mid-age stand → 5 kPa<br>
+      ・Organic clay soil → 10–20 kPa
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Soil depth z</strong><br>Thickness of topsoil</td>
+    <td>
+      Dig or probe with a backhoe or steel rod to the boundary where the layer changes
+      (color/hardness/grain size). The hard layer is a candidate slip surface.
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Saturation ratio m</strong></td>
+    <td>
+      ・0.5 = half-saturated (normal conditions)<br>
+      ・0.9 = after heavy rain
+    </td>
+  </tr>
+  <tr>
+    <td><strong>FS threshold</strong></td>
+    <td>
+      Try different thresholds (e.g. 1.5 for danger, 2.5 for caution) to see how the distribution changes.<br>
+      Prefer on-site test values if available.
+    </td>
+  </tr>
+</table>
+
+<h3>Valley Terrain (TWI)</h3>
+<p>TWI (Topographic Wetness Index) = ln(A / tan(β)) identifies wet zones.<br>
+Higher values indicate valleys/lowlands where water tends to accumulate.</p>
+
+<table>
+  <tr><th>Parameter</th><th>Concept</th></tr>
+  <tr>
+    <td><strong>TWI threshold</strong></td>
+    <td>
+      Filters areas below the set value as dry terrain.<br>
+      Setting 8.0 extracts mainly valley areas prone to wetness. Raising the value increases areas
+      classified as dry, missing more wet terrain.
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Minimum catchment area</strong></td>
+    <td>Lower bound for excluding small flow paths. Smaller values detect finer valley terrain.</td>
+  </tr>
+</table>
+
+<h3>Flow Direction Method (Valley/TWI only)</h3>
+<p>Choose from 3 methods for <strong>how water is routed</strong> when computing TWI and valley zones.
+This choice affects <strong>Valley Terrain (TWI) only</strong> — flow estimation always uses D8.<br>
+It's a trade-off between "how sharp the valley lines are" and "how accurate the wetness distribution is".</p>
+
+<table>
+  <tr>
+    <th style="width:33%">D8 (Single Steepest)</th>
+    <th style="width:33%">D∞ (Tarboton)</th>
+    <th style="width:33%">MFD (Multiple Flow Direction)</th>
+  </tr>
+  <tr>
+    <td><img src="fol_flow_method_example_d8.jpg" style="width:100%" alt="D8 example rendering"></td>
+    <td><img src="fol_flow_method_example_dinf.jpg" style="width:100%" alt="D∞ example rendering"></td>
+    <td><img src="fol_flow_method_example_mfd.jpg" style="width:100%" alt="MFD example rendering"></td>
+  </tr>
+  <tr>
+    <td>Routes water to a single cell. Produces a <strong>sharp, single-line</strong> valley, but
+        <strong>vertical striping artifacts</strong> appear on the TWI surface.</td>
+    <td>Splits flow between 2 adjacent cells. <strong>No striping</strong>, and the valley line is
+        <strong>reasonably preserved — an intermediate approach</strong>.</td>
+    <td>Distributes flow across all downslope directions. <strong>Smoothest wetness distribution</strong>.
+        Valleys follow the bottom of the terrain but are thick and diffuse.</td>
+  </tr>
+  <tr>
+    <td>Use for: <strong>identifying dangerous channels where water concentrates</strong>
+        (collapse-prone channels, channels to avoid when routing roads).</td>
+    <td>Use for: when you want a surface that <strong>keeps the line while avoiding striping</strong>.</td>
+    <td>Use for: representing <strong>valley terrain accurately as a surface</strong> (wetness/hazard surface).</td>
+  </tr>
+</table>
+
+<p><strong>Reference values (same sample DEM as above, 2m, matched valley area — analysis area: 72 ha)</strong></p>
+<table>
+  <tr><th>Method</th><th>Approx. TWI threshold</th><th>Extracted valley area</th><th>Share (of 72 ha)</th></tr>
+  <tr><td>D8</td><td>approx. 5.2</td><td>2.01 ha</td><td>2.8%</td></tr>
+  <tr><td>D∞</td><td>approx. 5.4</td><td>2.21 ha</td><td>3.1%</td></tr>
+  <tr><td>MFD</td><td>approx. 5.9</td><td>2.87 ha</td><td>4.0%</td></tr>
+</table>
+<p><strong>How to read this:</strong> A method with a small share and thin lines (D8) points to
+"dangerous channels." A method with a large share and thick areas (MFD) represents
+"the valley terrain itself" as a surface.</p>
+<p>Because the catchment scale differs by method, <strong>the TWI threshold needed to match the same
+valley area shifts between methods</strong>. When switching methods, re-adjust the <strong>TWI threshold</strong>
+above (e.g., 5.2 for D8 → around 5.9 for MFD).</p>
+
+<div class="note">
+  The three images above are <strong>illustrative renderings showing the behavioral differences between
+  methods</strong>, not plugin output. They were rendered from a sample DEM (2m resampled) solely to
+  illustrate the differences. Actual output (<code>twi.tif</code>, <code>valley_zones.gpkg</code>) is
+  generated by running the analysis.
+</div>
+
+<h3>Flow Estimation (Modified Rational Method with Time of Concentration)</h3>
+<p>Estimates flow using the modified rational method plus time-of-concentration (Tc) routing.<br>
+<code>Q = (1/360) × C × i × A_eff　　A_eff = A × min(1, T/Tc)</code><br>
+Catchments where duration T is shorter than Tc have suppressed flow.</p>
+
+<table>
+  <tr><th>Parameter</th><th>Concept</th></tr>
+  <tr>
+    <td><strong>i_peak (peak rainfall intensity)</strong></td>
+    <td>50 mm/h assumes "a heavy storm of 50mm in 1 hour"</td>
+  </tr>
+  <tr>
+    <td><strong>Runoff coefficient C</strong></td>
+    <td>0.8 means about 80% of rainfall is calculated as surface runoff</td>
+  </tr>
+  <tr>
+    <td><strong>Total precipitation</strong></td>
+    <td>100 mm is a case totaling 100mm from start to end of rainfall</td>
+  </tr>
+  <tr>
+    <td><strong>Duration T</strong></td>
+    <td>6 h computes average/total flow assuming 6 hours of continuous rain</td>
+  </tr>
+  <tr>
+    <td><strong>Velocity coefficient</strong></td>
+    <td>
+      Guideline: forest 0.3 / grassland 0.6 / paved surface 1.5 m/s.<br>
+      When DSM/DTM is set, the runoff and velocity coefficients are auto-calculated from canopy height.
+    </td>
+  </tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div class="sec">
+<h2>Output Files</h2>
+
+<table>
+  <tr><th>File name</th><th>Contents</th></tr>
+  <tr><td><code>twi.tif</code></td><td>Drainage / seepage / mud risk (Topographic Wetness Index)</td></tr>
+  <tr><td><code>stability_fs.tif</code></td><td>Slope stability (FS raster)</td></tr>
+  <tr><td><code>integrated_risk_index.tif</code></td><td>Integrated risk index (0–6)</td></tr>
+  <tr><td><code>integrated_high_risk.gpkg</code></td><td>High-priority area polygons</td></tr>
+  <tr><td><code>valley_zones.gpkg</code></td><td>Valley shape / catchment terrain vector</td></tr>
+  <tr><td><code>flow_peak.tif</code></td><td>Peak flow Qp [m³/s]</td></tr>
+  <tr><td><code>flow_mean.tif</code></td><td>Mean flow Qm [m³/s]</td></tr>
+  <tr><td><code>flow_vtotal.tif</code></td><td>Total flow volume V [m³]</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div class="sec">
+<h2>Feature Descriptions</h2>
+
+<h3>Slope Stability</h3>
+<p>Computes the stability factor FS using the infinite slope model. FS &lt; 1.0 indicates collapse risk,
+FS &lt; 1.5 indicates a caution zone. Calculated from soil parameters (φ, c, γ), terrain slope, and soil depth.</p>
+
+<h3>Valley Terrain</h3>
+<p>Vector data extracted from the DEM, showing catchment terrain and valley lines.
+Used to check for interference with the drainage network when planning road/skid-trail networks.</p>
+
+<h3>Wetness Terrain</h3>
+<p>Topographic Wetness Index (TWI) raster. Higher values indicate greater water accumulation,
+poor drainage, weak ground, and higher mud risk.</p>
+
+<h3>Flow Estimation</h3>
+<p>Estimates per-cell peak and mean flow plus total flow volume using the modified rational method
+(Q = CiA/360). When DSM is set, the runoff coefficient varies per location based on canopy height.</p>
+
+<h3>Integrated Risk</h3>
+<p>An additive risk index (0–6) combining FS, TWI, and peak flow.
+Extracts areas where multiple hazard factors overlap as "high-priority" polygons.</p>
+</div>
+
+<hr>
+<p style="font-size:0.8em;color:#888;text-align:center;">
+  Forestry Operations Lite &nbsp;|&nbsp; Developed by Avid Tree Work
+</p>
+
+</div>
+
+<!-- ================================================================ -->
+<!-- 日本語                                                            -->
+<!-- ================================================================ -->
+<div class="lang-ja">
 
 <!-- ============================================================ -->
 <div class="sec">
 <h2>データ設定ヒント</h2>
+
+<h3>scipy について（Flow Buffer / DEM リサンプル / SHC 計算に必須）</h3>
+<div class="note">
+  scipy は QGIS に同梱されていないため、別途インストールが必要です。無い場合、Flow Buffer 表示・高解像度 DEM のリサンプル・SHC 計算が動作しません（他の機能には影響しません）。
+</div>
+<ol>
+  <li>QGIS の「プラグイン → Python コンソール」で以下を実行し、QGIS 自身の Python の場所を確認します：<br>
+      <code>import sys; print(sys.executable)</code></li>
+  <li>QGIS を閉じてから、<strong>OS のターミナル（上記の Python コンソールではありません）</strong>で以下を実行します（パスは手順1で表示されたものに置き換えてください）：<br>
+      <code>"&lt;手順1で表示されたパス&gt;" -m pip install --user scipy</code><br>
+      Debian/Ubuntu 系では末尾に <code>--break-system-packages</code> の追加が必要な場合があります。</li>
+</ol>
+<div class="note">
+  注意：この操作は numpy も同時にアップグレードすることがあり、システム上の他の Python ツールに影響する可能性があります。元に戻す場合は、同じパスで以下を実行してください：<br>
+  <code>"&lt;手順1のパス&gt;" -m pip uninstall --user scipy numpy</code>
+</div>
 
 <h3>DEM / DSM/DTM データ</h3>
 <ul>
@@ -262,6 +566,17 @@ DSM 設定時は樹冠高から流出係数を地点ごとに可変。</p>
 <p style="font-size:0.8em;color:#888;text-align:center;">
   Forestry Operations Lite &nbsp;|&nbsp; Developed by Avid Tree Work
 </p>
+
+</div>
+
+<script>
+function setLang(lang) {
+  var isJa = (lang === 'jp');
+  document.body.classList.toggle('show-ja', isJa);
+  document.getElementById('optEn').classList.toggle('active', !isJa);
+  document.getElementById('optJp').classList.toggle('active', isJa);
+}
+</script>
 
 </body>
 </html>

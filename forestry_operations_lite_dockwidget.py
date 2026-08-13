@@ -1282,6 +1282,45 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         ds_layout.addWidget(self.grpVsExport)
         ds_layout.addWidget(self.grpLayers)
 
+        grpScipy = QtWidgets.QGroupBox(
+            "scipy required (Flow Buffer / DEM resampling / SHC)"
+        )
+        scipy_lay = QtWidgets.QVBoxLayout(grpScipy)
+        scipy_lay.setSpacing(4)
+        for text, style in (
+            ("- scipy is not bundled with QGIS and must be installed "
+             "separately.", "font-size: 8pt; color: #cc6600;"),
+            ("- Without it, Flow Buffer display, fine-resolution DEM "
+             "resampling, and SHC computation do not work. Other features "
+             "are unaffected.", "font-size: 8pt; color: #cc6600;"),
+            ("- Step 1 — in QGIS's Plugins → Python Console, run:",
+             "font-size: 8pt; color: #555;"),
+            ("      import sys; print(sys.executable)", "font-size: 8pt; color: #333; font-family: monospace;"),
+            ("- Step 2 — close QGIS. In your OS terminal (NOT the Python "
+             "Console above), run (replace with the path from Step 1):",
+             "font-size: 8pt; color: #555;"),
+            ('      "<path from Step 1>" -m pip install --user scipy',
+             "font-size: 8pt; color: #333; font-family: monospace;"),
+            ("  (Debian/Ubuntu may require appending "
+             "--break-system-packages.)", "font-size: 8pt; color: #555;"),
+            ("- Note: this can also upgrade numpy, which may affect other "
+             "Python tools on the system. To undo, in the OS terminal "
+             "(using the same path from Step 1): \"<path from Step 1>\" "
+             "-m pip uninstall --user scipy numpy",
+             "font-size: 8pt; color: #555;"),
+        ):
+            lbl = QtWidgets.QLabel(text)
+            lbl.setWordWrap(True)
+            lbl.setStyleSheet(style)
+            lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            scipy_lay.addWidget(lbl)
+        try:
+            import scipy  # noqa: F401
+            grpScipy.setVisible(False)
+        except ImportError:
+            pass
+        ds_layout.addWidget(grpScipy)
+
         grpHint = QtWidgets.QGroupBox("Data Setup")
         hint_lay = QtWidgets.QVBoxLayout(grpHint)
         hint_lay.setSpacing(4)
