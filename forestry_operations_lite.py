@@ -1,3 +1,4 @@
+from qgis.core import Qgis
 from qgis.PyQt.QtCore import QCoreApplication, QSettings, QTranslator
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
@@ -78,7 +79,7 @@ class ForestryOperationsLite:
                 "Forestry Operations Lite",
                 "scipy is not installed. Flow buffer feature will be unavailable. "
                 "Install it via: pip install scipy",
-                level=1,  # Qgis.Warning
+                level=Qgis.MessageLevel.Warning,
                 duration=10,
             )
 
