@@ -57,18 +57,21 @@
 
 <h3>About scipy (required for Flow Buffer / DEM resampling / SHC computation)</h3>
 <div class="note">
-  scipy is not bundled with QGIS and must be installed separately. Without it, Flow Buffer display, fine-resolution DEM resampling, and SHC computation do not work (other features are unaffected).
+  Without scipy, Flow Buffer display, fine-resolution DEM resampling, and SHC computation do not work (other features are unaffected).
 </div>
-<ol>
-  <li>In QGIS's Plugins → Python Console, run the following to find QGIS's own Python location:<br>
-      <code>import sys; print(sys.executable)</code></li>
-  <li>Close QGIS, then in your OS terminal (<strong>NOT the Python Console above</strong>), run the following (replace the path with the one shown in Step 1):<br>
-      <code>"&lt;path from Step 1&gt;" -m pip install --user scipy</code><br>
-      Debian/Ubuntu systems may require appending <code>--break-system-packages</code>.</li>
-</ol>
+<p><strong>Windows (standard installer):</strong> scipy is normally already included. If it's genuinely
+missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin</code> folder
+(e.g. <code>C:\Program Files\QGIS 3.44\bin\</code>):<br>
+   <code>python-qgis-ltr.bat -m pip install --user scipy</code><br>
+   (The filename may be <code>python-qgis.bat</code> depending on your install; adjust the path to match
+   your QGIS version.)</p>
+<p><strong>Linux:</strong> close QGIS and run in a terminal:<br>
+   <code>sudo apt install python3-scipy</code></p>
 <div class="note">
-  Note: this can also upgrade numpy, which may affect other Python tools on the system. To undo, run the following with the same path:<br>
-  <code>"&lt;path from Step 1&gt;" -m pip uninstall --user scipy numpy</code>
+  To check what's actually loaded after installing, run the following in QGIS's Python Console:<br>
+  <code>import numpy, scipy</code><br>
+  <code>print(numpy.__file__, numpy.__version__)</code><br>
+  <code>print(scipy.__file__, scipy.__version__)</code>
 </div>
 
 <h3>DEM / DSM/DTM Data</h3>
@@ -322,18 +325,18 @@ Extracts areas where multiple hazard factors overlap as "high-priority" polygons
 
 <h3>scipy について（Flow Buffer / DEM リサンプル / SHC 計算に必須）</h3>
 <div class="note">
-  scipy は QGIS に同梱されていないため、別途インストールが必要です。無い場合、Flow Buffer 表示・高解像度 DEM のリサンプル・SHC 計算が動作しません（他の機能には影響しません）。
+  scipy が無い場合、Flow Buffer 表示・高解像度 DEM のリサンプル・SHC 計算が動作しません（他の機能には影響しません）。
 </div>
-<ol>
-  <li>QGIS の「プラグイン → Python コンソール」で以下を実行し、QGIS 自身の Python の場所を確認します：<br>
-      <code>import sys; print(sys.executable)</code></li>
-  <li>QGIS を閉じてから、<strong>OS のターミナル（上記の Python コンソールではありません）</strong>で以下を実行します（パスは手順1で表示されたものに置き換えてください）：<br>
-      <code>"&lt;手順1で表示されたパス&gt;" -m pip install --user scipy</code><br>
-      Debian/Ubuntu 系では末尾に <code>--break-system-packages</code> の追加が必要な場合があります。</li>
-</ol>
+<p><strong>Windows（標準インストーラー）：</strong>通常はscipyが最初から入っています。本当に無い場合は、QGISを閉じてから、QGISインストール先の<code>bin</code>フォルダ（例：<code>C:\Program Files\QGIS 3.44\bin\</code>）でコマンドプロンプトを開き、以下を実行してください：<br>
+   <code>python-qgis-ltr.bat -m pip install --user scipy</code><br>
+   （ファイル名は環境によって<code>python-qgis.bat</code>の場合もあります。パスはお使いのQGISバージョンに合わせてください。）</p>
+<p><strong>Linux：</strong>QGISを閉じてから、ターミナルで以下を実行してください：<br>
+   <code>sudo apt install python3-scipy</code></p>
 <div class="note">
-  注意：この操作は numpy も同時にアップグレードすることがあり、システム上の他の Python ツールに影響する可能性があります。元に戻す場合は、同じパスで以下を実行してください：<br>
-  <code>"&lt;手順1のパス&gt;" -m pip uninstall --user scipy numpy</code>
+  インストール後、実際に読み込まれているものを確認するには、QGISのPythonコンソールで以下を実行してください：<br>
+  <code>import numpy, scipy</code><br>
+  <code>print(numpy.__file__, numpy.__version__)</code><br>
+  <code>print(scipy.__file__, scipy.__version__)</code>
 </div>
 
 <h3>DEM / DSM/DTM データ</h3>
@@ -576,6 +579,12 @@ function setLang(lang) {
   document.getElementById('optEn').classList.toggle('active', !isJa);
   document.getElementById('optJp').classList.toggle('active', isJa);
 }
+(function () {
+  var browserLang = (navigator.language || (navigator.languages && navigator.languages[0]) || '');
+  if (browserLang.toLowerCase().indexOf('ja') === 0) {
+    setLang('jp');
+  }
+})();
 </script>
 
 </body>

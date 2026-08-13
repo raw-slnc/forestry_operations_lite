@@ -112,7 +112,11 @@ Use the **Open in WODMI** button to open the exported ZIP directly in the WebODM
 
 - QGIS 3.16 or later
 - Python 3.7+
-- numpy, GDAL, scipy (bundled with QGIS)
+- numpy, GDAL (bundled with QGIS)
+- scipy — bundled on Windows (standard installer); **not bundled on Linux**.
+  Needed only for Flow Buffer display, fine-resolution DEM resampling, and SHC computation
+  (other features work without it). See the in-panel guide (Data Setup tab) or `data/FOL.html`
+  for install steps if it's missing.
 
 ---
 
@@ -304,7 +308,10 @@ DEM読込時のタイル範囲に基づいて全データが取得されるた�
 
 - QGIS 3.16 以降
 - Python 3.7+
-- numpy、GDAL、scipy（QGIS同梱）
+- numpy、GDAL（QGIS同梱）
+- scipy — Windows（標準インストーラー）では同梱済み。**Linuxでは同梱されていません**。
+  Flow Buffer表示・高解像度DEMのリサンプル・SHC計算にのみ必要です（他の機能には影響しません）。
+  無い場合のインストール手順はパネル内の案内（Data Setupタブ）または`data/FOL.html`を参照してください。
 
 ---
 

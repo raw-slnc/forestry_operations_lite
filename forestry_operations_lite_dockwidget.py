@@ -1288,26 +1288,27 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         scipy_lay = QtWidgets.QVBoxLayout(grpScipy)
         scipy_lay.setSpacing(4)
         for text, style in (
-            ("- scipy is not bundled with QGIS and must be installed "
-             "separately.", "font-size: 8pt; color: #cc6600;"),
-            ("- Without it, Flow Buffer display, fine-resolution DEM "
+            ("- Without scipy, Flow Buffer display, fine-resolution DEM "
              "resampling, and SHC computation do not work. Other features "
              "are unaffected.", "font-size: 8pt; color: #cc6600;"),
-            ("- Step 1 — in QGIS's Plugins → Python Console, run:",
+            ("- Windows (standard installer): scipy is normally already "
+             "included. If it's genuinely missing, close QGIS and run in "
+             "Command Prompt from your QGIS install's bin folder:",
              "font-size: 8pt; color: #555;"),
-            ("      import sys; print(sys.executable)", "font-size: 8pt; color: #333; font-family: monospace;"),
-            ("- Step 2 — close QGIS. In your OS terminal (NOT the Python "
-             "Console above), run (replace with the path from Step 1):",
-             "font-size: 8pt; color: #555;"),
-            ('      "<path from Step 1>" -m pip install --user scipy',
+            ("      python-qgis-ltr.bat -m pip install --user scipy",
              "font-size: 8pt; color: #333; font-family: monospace;"),
-            ("  (Debian/Ubuntu may require appending "
-             "--break-system-packages.)", "font-size: 8pt; color: #555;"),
-            ("- Note: this can also upgrade numpy, which may affect other "
-             "Python tools on the system. To undo, in the OS terminal "
-             "(using the same path from Step 1): \"<path from Step 1>\" "
-             "-m pip uninstall --user scipy numpy",
+            ("  (filename may be python-qgis.bat depending on your "
+             "install; adjust the path to match your QGIS version.)",
              "font-size: 8pt; color: #555;"),
+            ("- Linux: close QGIS and run in a terminal:",
+             "font-size: 8pt; color: #555;"),
+            ("      sudo apt install python3-scipy",
+             "font-size: 8pt; color: #333; font-family: monospace;"),
+            ("- To check what's actually loaded after installing, in "
+             "QGIS's Python Console run:", "font-size: 8pt; color: #555;"),
+            ("      import numpy, scipy", "font-size: 8pt; color: #333; font-family: monospace;"),
+            ("      print(numpy.__file__, numpy.__version__)", "font-size: 8pt; color: #333; font-family: monospace;"),
+            ("      print(scipy.__file__, scipy.__version__)", "font-size: 8pt; color: #333; font-family: monospace;"),
         ):
             lbl = QtWidgets.QLabel(text)
             lbl.setWordWrap(True)
