@@ -980,7 +980,7 @@ class LockedMapTool(QgsMapTool):
         pass  # ズーム阻止
 
 
-class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
+class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
     closingPlugin = pyqtSignal()
 
     def __init__(self, iface, parent=None):
@@ -1020,10 +1020,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
     def event(self, event):
         """OSネイティブのタイトルバーをダブルクリックすると
-        QEvent.NonClientAreaMouseButtonDblClick が発生し、QDockWidget内部で
-        無条件に toggleTopLevel()（=setFloatingの反転）が呼ばれてしまう
-        （DockWidgetFloatable機能フラグの有無に関係なく発生する）。
-        ここでイベントを握りつぶし、代わりに全画面トグルとして扱う。"""
+        QEvent.NonClientAreaMouseButtonDblClick が発生する。
+        これを全画面トグルとして扱う。"""
         if event.type() == QEvent.Type.NonClientAreaMouseButtonDblClick:
             event.accept()
             self.chkFullscreen.setChecked(not self.chkFullscreen.isChecked())
@@ -1033,14 +1031,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _show_as_window(self):
         if self.iface is not None and not self._added_to_main_window:
             self.setParent(self.iface.mainWindow())
-            self.iface.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self)
             self._added_to_main_window = True
-        self.setAllowedAreas(Qt.DockWidgetArea.NoDockWidgetArea)
-        self.setFeatures(
-            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable
-            | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        )
-        self.setFloating(True)
+        self.setWindowFlag(Qt.WindowType.Window, True)
         if self.isMinimized():
             self.showNormal()
         else:
@@ -1114,9 +1106,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         )
 
     def _toggle_floating_fullscreen(self, checked):
-        """独立ウィンドウのサイズを画面いっぱいと元のサイズで切り替える。
-        setFloating()やallowedAreasには触れない（ドッキングへの復帰は行わない）。"""
-        if not self.isFloating():
+        """独立ウィンドウのサイズを画面いっぱいと元のサイズで切り替える。"""
+        if not self.isVisible():
             return
         if checked:
             self._pre_fullscreen_geometry = self.geometry()
@@ -1397,6 +1388,51 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         ds_layout.addWidget(self.grpDem)
         ds_layout.addWidget(self.grpVsExport)
         ds_layout.addWidget(self.grpLayers)
+
+        self.grpScipy = QtWidgets.QGroupBox(
+            "scipy required (Flow Buffer / DEM resampling / SHC)"
+        )
+        scipy_lay = QtWidgets.QVBoxLayout(self.grpScipy)
+        scipy_lay.setSpacing(4)
+        for text, style in (
+            ("- Without scipy, Flow Buffer display, fine-resolution DEM "
+             "resampling, and SHC computation do not work. Other features "
+             "are unaffected.", "font-size: 8pt; color: #cc6600;"),
+            ("- Windows (standard installer): scipy is normally already "
+             "included. If it's genuinely missing, close QGIS and run in "
+             "Command Prompt from your QGIS install's bin folder:",
+             "font-size: 8pt; color: #555;"),
+            ("      python-qgis-ltr.bat -m pip install --user scipy",
+             "font-size: 8pt; color: #333; font-family: monospace;"),
+            ("  (filename may be python-qgis.bat depending on your "
+             "install; adjust the path to match your QGIS version.)",
+             "font-size: 8pt; color: #555;"),
+            ("- Linux: close QGIS and run in a terminal:",
+             "font-size: 8pt; color: #555;"),
+            ("      sudo apt install python3-scipy",
+             "font-size: 8pt; color: #333; font-family: monospace;"),
+            ("- To check what's actually loaded after installing, in "
+             "QGIS's Python Console run:", "font-size: 8pt; color: #555;"),
+            ("      import numpy, scipy",
+             "font-size: 8pt; color: #333; font-family: monospace;"),
+            ("      print(numpy.__file__, numpy.__version__)",
+             "font-size: 8pt; color: #333; font-family: monospace;"),
+            ("      print(scipy.__file__, scipy.__version__)",
+             "font-size: 8pt; color: #333; font-family: monospace;"),
+        ):
+            lbl = QtWidgets.QLabel(text)
+            lbl.setWordWrap(True)
+            lbl.setStyleSheet(style)
+            lbl.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            scipy_lay.addWidget(lbl)
+        try:
+            import scipy  # noqa: F401
+            self.grpScipy.setVisible(False)
+        except ImportError:
+            pass
+        ds_layout.addWidget(self.grpScipy)
 
         grpHint = QtWidgets.QGroupBox("Data Setup")
         hint_lay = QtWidgets.QVBoxLayout(grpHint)

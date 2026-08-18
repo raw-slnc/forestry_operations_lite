@@ -14,7 +14,7 @@ repository=https://github.com/raw-slnc/forestry_operations_lite
 
 hasProcessingProvider=no
 changelog=
-    1.0.2 - Fix crash on plugin load when scipy is not installed (missing Qgis.MessageLevel enum scoping)
+    1.0.2 - Fix crash on plugin load when scipy is not installed (missing Qgis.MessageLevel enum scoping); add scipy requirement notice to Terrain Data tab (hidden automatically when scipy is available) and update FOL.html help with a bilingual EN/JA scipy install guide; convert the plugin window from a QDockWidget-based floating panel to a plain top-level QWidget window, removing a dock-area registration step that could affect the width of QGIS's Layers panel on first launch and a non-functional dock/float toggle button on the window's title bar
     1.0.1 - Fix Windows Alt+Tab visibility when reopening the floating plugin window; preserve terrain result display state across analysis-run changes so comparison workflows do not reset visible layers unnecessarily
     1.0.0 - QGIS 4.x support
     0.2.9 - Fix a critical issue: High Risk Areas now correctly applies the user-configured FS threshold
