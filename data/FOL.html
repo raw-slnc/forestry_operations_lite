@@ -23,6 +23,59 @@
   code { background: #f4f4f4; padding: 1px 5px; border-radius: 3px; font-size: 0.88em; }
   .note{ background: #fffbe6; border-left: 3px solid #e6c800;
          padding: 8px 12px; margin: 10px 0; font-size: 0.9em; }
+  .concept-link {
+    background: linear-gradient(135deg, #eef6f0, #f8fbf4);
+    border: 1px solid #b9d0bb; border-left: 6px solid #4a7c4e;
+    padding: 14px 16px; margin: 16px 0 22px; font-size: 0.92em;
+    box-shadow: 0 4px 14px rgba(45, 90, 48, 0.10);
+  }
+  .concept-title { color: #2d5a30; font-weight: bold; font-size: 1.08em; margin-bottom: 4px; }
+  .concept-text { margin-bottom: 10px; }
+  .concept-button {
+    display: inline-block; background: #2d5a30; color: #fff; font-weight: bold;
+    text-decoration: none; padding: 6px 12px; border-radius: 4px;
+  }
+  .concept-button:hover { background: #214824; text-decoration: none; }
+  .image-zoom {
+    display: block; position: relative; width: 100%; padding: 0; border: 1px solid #c8d8c8;
+    background: #f8fbf8; cursor: zoom-in; box-shadow: 0 3px 10px rgba(45, 90, 48, 0.12);
+  }
+  .image-zoom img { display: block; width: 100%; height: auto; }
+  .image-zoom::after {
+    content: "Open"; position: absolute; right: 6px; bottom: 6px;
+    background: rgba(31, 50, 34, 0.76); color: #fff; border-radius: 4px;
+    padding: 2px 6px; font-size: 0.76em; letter-spacing: 0;
+  }
+  body.show-ja .image-zoom::after { content: "拡大"; }
+  .image-zoom:hover { box-shadow: 0 5px 14px rgba(45, 90, 48, 0.20); }
+  .lightbox {
+    position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center;
+    justify-content: center; padding: 24px; background: rgba(12, 20, 14, 0.84);
+  }
+  .lightbox[hidden] { display: none; }
+  .lightbox-panel {
+    position: relative; max-width: min(96vw, 1400px); max-height: 92vh;
+    background: #101811; border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+  }
+  .lightbox img { display: block; max-width: 100%; max-height: calc(92vh - 54px); height: auto; }
+  .lightbox-caption { color: #edf5ee; font-size: 0.9em; padding: 10px 14px; }
+  .lightbox-close {
+    position: absolute; top: 8px; right: 8px; width: 34px; height: 34px;
+    border: 1px solid rgba(255, 255, 255, 0.32); border-radius: 4px;
+    background: rgba(0, 0, 0, 0.58); color: #fff; font-size: 24px;
+    line-height: 28px; cursor: pointer;
+  }
+  .lightbox-nav {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    width: 40px; height: 56px; border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 4px; background: rgba(0, 0, 0, 0.50); color: #fff;
+    font-size: 34px; line-height: 48px; cursor: pointer;
+  }
+  .lightbox-prev { left: 10px; }
+  .lightbox-next { right: 10px; }
+  .lightbox-nav:hover, .lightbox-close:hover { background: rgba(0, 0, 0, 0.72); }
+  body.lightbox-open { overflow: hidden; }
   .sec { margin-bottom: 2.5em; }
   ul   { padding-left: 1.4em; }
   li   { margin-bottom: 4px; }
@@ -51,6 +104,12 @@
 <!-- ================================================================ -->
 <div class="lang-en">
 
+<div class="concept-link">
+  <div class="concept-title">Before Using The Results In Field Planning</div>
+  <div class="concept-text">Forestry Operations Lite is a lightweight terrain-checking tool for reviewing forestry roads, harvesting, tending, and simple drainage in detailed mountain terrain. It combines QGIS-based terrain analysis with field knowledge to support site judgment and explanatory materials. It is intended for forestry sites that want to connect terrain analysis and field judgment directly in QGIS without relying on a dedicated system.</div>
+  <a class="concept-button" href="field_design_note.html">Open Field Design Support Note</a>
+</div>
+
 <!-- ============================================================ -->
 <div class="sec">
 <h2>Data Setup Hints</h2>
@@ -61,7 +120,7 @@
 </div>
 <p><strong>Windows (standard installer):</strong> scipy is normally already included. If it's genuinely
 missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin</code> folder
-(e.g. <code>C:\Program Files\QGIS 4.x\bin\</code>):<br>
+(e.g. <code>C:\Program Files\QGIS 3.44\bin\</code>):<br>
    <code>python-qgis-ltr.bat -m pip install --user scipy</code><br>
    (The filename may be <code>python-qgis.bat</code> depending on your install; adjust the path to match
    your QGIS version.)</p>
@@ -191,9 +250,9 @@ It's a trade-off between "how sharp the valley lines are" and "how accurate the 
     <th style="width:33%">MFD (Multiple Flow Direction)</th>
   </tr>
   <tr>
-    <td><img src="fol_flow_method_example_d8.jpg" style="width:100%" alt="D8 example rendering"></td>
-    <td><img src="fol_flow_method_example_dinf.jpg" style="width:100%" alt="D∞ example rendering"></td>
-    <td><img src="fol_flow_method_example_mfd.jpg" style="width:100%" alt="MFD example rendering"></td>
+    <td><button class="image-zoom" type="button" data-group="flow-method" data-src="fol_flow_method_example_d8.jpg" data-caption="D8 (Single Steepest): sharp single-line valley rendering"><img src="fol_flow_method_example_d8.jpg" alt="D8 example rendering"></button></td>
+    <td><button class="image-zoom" type="button" data-group="flow-method" data-src="fol_flow_method_example_dinf.jpg" data-caption="D∞ (Tarboton): intermediate valley and wetness rendering"><img src="fol_flow_method_example_dinf.jpg" alt="D∞ example rendering"></button></td>
+    <td><button class="image-zoom" type="button" data-group="flow-method" data-src="fol_flow_method_example_mfd.jpg" data-caption="MFD (Multiple Flow Direction): smooth wetness surface rendering. With a background layer, its relation to existing road/trail networks can also be checked."><img src="fol_flow_method_example_mfd.jpg" alt="MFD example rendering"></button></td>
   </tr>
   <tr>
     <td>Routes water to a single cell. Produces a <strong>sharp, single-line</strong> valley, but
@@ -319,6 +378,12 @@ Extracts areas where multiple hazard factors overlap as "high-priority" polygons
 <!-- ================================================================ -->
 <div class="lang-ja">
 
+<div class="concept-link">
+  <div class="concept-title">現場計画に使う前に</div>
+  <div class="concept-text">Forestry Operations Lite は、細かな山地地形での作業道・伐採・保育・簡易排水を検討するための軽量な地形確認ツールです。QGIS と現場知見を組み合わせ、現場判断の補助と説明資料づくりを支援します。専用システムに頼らず、QGIS 上で地形解析と現場判断をつなぎたい林業現場向けです。</div>
+  <a class="concept-button" href="field_design_note.html">現場設計支援ノートを開く</a>
+</div>
+
 <!-- ============================================================ -->
 <div class="sec">
 <h2>データ設定ヒント</h2>
@@ -327,7 +392,7 @@ Extracts areas where multiple hazard factors overlap as "high-priority" polygons
 <div class="note">
   scipy が無い場合、Flow Buffer 表示・高解像度 DEM のリサンプル・SHC 計算が動作しません（他の機能には影響しません）。
 </div>
-<p><strong>Windows（標準インストーラー）：</strong>通常はscipyが最初から入っています。本当に無い場合は、QGISを閉じてから、QGISインストール先の<code>bin</code>フォルダ（例：<code>C:\Program Files\QGIS 4.x\bin\</code>）でコマンドプロンプトを開き、以下を実行してください：<br>
+<p><strong>Windows（標準インストーラー）：</strong>通常はscipyが最初から入っています。本当に無い場合は、QGISを閉じてから、QGISインストール先の<code>bin</code>フォルダ（例：<code>C:\Program Files\QGIS 3.44\bin\</code>）でコマンドプロンプトを開き、以下を実行してください：<br>
    <code>python-qgis-ltr.bat -m pip install --user scipy</code><br>
    （ファイル名は環境によって<code>python-qgis.bat</code>の場合もあります。パスはお使いのQGISバージョンに合わせてください。）</p>
 <p><strong>Linux：</strong>QGISを閉じてから、ターミナルで以下を実行してください：<br>
@@ -456,9 +521,9 @@ FS は傾斜角・内部摩擦角・粘着力・土壌深度・飽和率から�
     <th style="width:33%">MFD（多方向）</th>
   </tr>
   <tr>
-    <td><img src="fol_flow_method_example_d8.jpg" style="width:100%" alt="D8 描画例"></td>
-    <td><img src="fol_flow_method_example_dinf.jpg" style="width:100%" alt="D∞ 描画例"></td>
-    <td><img src="fol_flow_method_example_mfd.jpg" style="width:100%" alt="MFD 描画例"></td>
+    <td><button class="image-zoom" type="button" data-group="flow-method" data-src="fol_flow_method_example_d8.jpg" data-caption="D8（単一最急）：沢が細い1本線で出る描画例"><img src="fol_flow_method_example_d8.jpg" alt="D8 描画例"></button></td>
+    <td><button class="image-zoom" type="button" data-group="flow-method" data-src="fol_flow_method_example_dinf.jpg" data-caption="D∞（Tarboton）：沢の線と湿り分布の中間的な描画例"><img src="fol_flow_method_example_dinf.jpg" alt="D∞ 描画例"></button></td>
+    <td><button class="image-zoom" type="button" data-group="flow-method" data-src="fol_flow_method_example_mfd.jpg" data-caption="MFD（多方向）：なめらかな湿り分布の描画例。背景レイヤーを重ねることで既存路網との位置関係も確認できる"><img src="fol_flow_method_example_mfd.jpg" alt="MFD 描画例"></button></td>
   </tr>
   <tr>
     <td>水を1マスにだけ流す。沢が<strong>細い1本線でくっきり</strong>出るが、TWI面に<strong>縦縞のアーティファクト</strong>が出る。</td>
@@ -572,6 +637,16 @@ DSM 設定時は樹冠高から流出係数を地点ごとに可変。</p>
 
 </div>
 
+<div id="imageLightbox" class="lightbox" hidden>
+  <div class="lightbox-panel" role="dialog" aria-modal="true" aria-label="Image preview">
+    <button id="lightboxClose" class="lightbox-close" type="button" aria-label="Close">&times;</button>
+    <button id="lightboxPrev" class="lightbox-nav lightbox-prev" type="button" aria-label="Previous image">&#8249;</button>
+    <button id="lightboxNext" class="lightbox-nav lightbox-next" type="button" aria-label="Next image">&#8250;</button>
+    <img id="lightboxImage" src="" alt="">
+    <div id="lightboxCaption" class="lightbox-caption"></div>
+  </div>
+</div>
+
 <script>
 function setLang(lang) {
   var isJa = (lang === 'jp');
@@ -579,11 +654,85 @@ function setLang(lang) {
   document.getElementById('optEn').classList.toggle('active', !isJa);
   document.getElementById('optJp').classList.toggle('active', isJa);
 }
+var lightboxItems = [];
+var lightboxIndex = 0;
+function updateLightbox(index) {
+  if (!lightboxItems.length) {
+    return;
+  }
+  lightboxIndex = (index + lightboxItems.length) % lightboxItems.length;
+  var item = lightboxItems[lightboxIndex];
+  var image = document.getElementById('lightboxImage');
+  var text = document.getElementById('lightboxCaption');
+  image.src = item.src;
+  image.alt = item.alt || '';
+  text.textContent = item.caption || '';
+}
+function openLightbox(items, index) {
+  var box = document.getElementById('imageLightbox');
+  lightboxItems = items;
+  updateLightbox(index);
+  box.hidden = false;
+  document.body.classList.add('lightbox-open');
+  document.getElementById('lightboxClose').focus();
+}
+function closeLightbox() {
+  var box = document.getElementById('imageLightbox');
+  box.hidden = true;
+  document.body.classList.remove('lightbox-open');
+}
 (function () {
   var browserLang = (navigator.language || (navigator.languages && navigator.languages[0]) || '');
   if (browserLang.toLowerCase().indexOf('ja') === 0) {
     setLang('jp');
   }
+  var zoomButtons = document.querySelectorAll('.image-zoom');
+  for (var i = 0; i < zoomButtons.length; i++) {
+    zoomButtons[i].addEventListener('click', function () {
+      var group = this.getAttribute('data-group');
+      var selector = group ? '.image-zoom[data-group="' + group + '"]' : '.image-zoom';
+      var langScope = this.closest('.lang-en, .lang-ja');
+      var groupButtons = langScope ? langScope.querySelectorAll(selector) : document.querySelectorAll(selector);
+      var items = [];
+      var index = 0;
+      for (var j = 0; j < groupButtons.length; j++) {
+        var itemImage = groupButtons[j].querySelector('img');
+        items.push({
+          src: groupButtons[j].getAttribute('data-src'),
+          alt: itemImage ? itemImage.alt : '',
+          caption: groupButtons[j].getAttribute('data-caption')
+        });
+        if (groupButtons[j] === this) {
+          index = j;
+        }
+      }
+      openLightbox(items, index);
+    });
+  }
+  document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
+  document.getElementById('lightboxPrev').addEventListener('click', function () {
+    updateLightbox(lightboxIndex - 1);
+  });
+  document.getElementById('lightboxNext').addEventListener('click', function () {
+    updateLightbox(lightboxIndex + 1);
+  });
+  document.getElementById('imageLightbox').addEventListener('click', function (event) {
+    if (event.target === this) {
+      closeLightbox();
+    }
+  });
+  document.addEventListener('keydown', function (event) {
+    if (document.getElementById('imageLightbox').hidden) {
+      return;
+    }
+    if (event.key === 'Escape') {
+      closeLightbox();
+    } else if (event.key === 'ArrowLeft') {
+      updateLightbox(lightboxIndex - 1);
+    } else if (event.key === 'ArrowRight') {
+      updateLightbox(lightboxIndex + 1);
+    }
+  });
 })();
 </script>
 

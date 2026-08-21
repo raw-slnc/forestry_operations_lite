@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forestry Operations Lite — Field Design Support Note</title>
+<style>
+  body { font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", sans-serif;
+         font-size: 14px; line-height: 1.75; color: #333; max-width: 860px;
+         margin: 0 auto; padding: 24px 32px; }
+  h1   { font-size: 1.4em; color: #2d5a30; margin: 0; }
+  .title-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    border-bottom: 2px solid #4a7c4e; padding-bottom: 6px;
+  }
+  h2   { font-size: 1.15em; margin-top: 2em; border-left: 4px solid #4a7c4e;
+         padding-left: 10px; color: #2d5a30; }
+  h3   { font-size: 1em; margin-top: 1.4em; color: #444; }
+  table{ border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th   { background: #e8f0e8; text-align: left; padding: 6px 10px;
+         border: 1px solid #c0d4c0; font-size: 0.9em; }
+  td   { padding: 6px 10px; border: 1px solid #d4e4d4; font-size: 0.9em; vertical-align: top; }
+  code { background: #f4f4f4; padding: 1px 5px; border-radius: 3px; font-size: 0.88em; }
+  .note{ background: #fffbe6; border-left: 3px solid #e6c800;
+         padding: 8px 12px; margin: 10px 0; font-size: 0.9em; }
+  .lead{ background: #eef6f0; border-left: 3px solid #4a7c4e;
+         padding: 10px 14px; margin: 14px 0 18px; }
+  .figure { margin: 16px 0 22px; }
+  .image-zoom {
+    display: block; position: relative; width: 100%; padding: 0; border: 1px solid #c8d8c8;
+    background: #f8fbf8; cursor: zoom-in; box-shadow: 0 4px 14px rgba(45, 90, 48, 0.12);
+  }
+  .image-zoom img { display: block; max-width: 100%; height: auto; }
+  .image-zoom::after {
+    content: "Open large"; position: absolute; right: 10px; bottom: 10px;
+    background: rgba(31, 50, 34, 0.78); color: #fff; border-radius: 4px;
+    padding: 4px 8px; font-size: 0.78em; letter-spacing: 0;
+  }
+  body.show-ja .image-zoom::after { content: "拡大表示"; }
+  .image-zoom:hover { box-shadow: 0 6px 18px rgba(45, 90, 48, 0.20); }
+  .caption { color: #666; font-size: 0.86em; margin-top: 6px; }
+  .lightbox {
+    position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center;
+    justify-content: center; padding: 24px; background: rgba(12, 20, 14, 0.84);
+  }
+  .lightbox[hidden] { display: none; }
+  .lightbox-panel {
+    position: relative; max-width: min(96vw, 1500px); max-height: 92vh;
+    background: #101811; border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+  }
+  .lightbox img { display: block; max-width: 100%; max-height: calc(92vh - 54px); height: auto; }
+  .lightbox-caption { color: #edf5ee; font-size: 0.9em; padding: 10px 14px; }
+  .lightbox-close {
+    position: absolute; top: 8px; right: 8px; width: 34px; height: 34px;
+    border: 1px solid rgba(255, 255, 255, 0.32); border-radius: 4px;
+    background: rgba(0, 0, 0, 0.58); color: #fff; font-size: 24px;
+    line-height: 28px; cursor: pointer;
+  }
+  body.lightbox-open { overflow: hidden; }
+  .back-link {
+    background: linear-gradient(135deg, #eef6f0, #f8fbf4);
+    border: 1px solid #b9d0bb; border-left: 6px solid #4a7c4e;
+    padding: 14px 16px; margin: 16px 0 22px; font-size: 0.92em;
+    box-shadow: 0 4px 14px rgba(45, 90, 48, 0.10);
+  }
+  .back-title { color: #2d5a30; font-weight: bold; font-size: 1.08em; margin-bottom: 4px; }
+  .back-text { margin-bottom: 10px; }
+  .back-button {
+    display: inline-block; background: #2d5a30; color: #fff; font-weight: bold;
+    text-decoration: none; padding: 6px 12px; border-radius: 4px;
+  }
+  .back-button:hover { background: #214824; text-decoration: none; }
+  .sec { margin-bottom: 2.5em; }
+  ul   { padding-left: 1.4em; }
+  li   { margin-bottom: 4px; }
+  .lang-en { display: block; }
+  .lang-ja { display: none; }
+  body.show-ja .lang-en { display: none; }
+  body.show-ja .lang-ja { display: block; }
+  .lang-switch { font-size: 0.85em; white-space: nowrap; }
+  .lang-opt { cursor: pointer; color: #999; padding: 2px 3px; }
+  .lang-opt.active { color: #2d5a30; font-weight: bold; }
+  .lang-sep { color: #ccc; margin: 0 1px; }
+</style>
+</head>
+<body>
+
+<div class="title-row">
+  <h1 class="lang-en">Field Design Support Note</h1>
+  <h1 class="lang-ja">現場設計支援としての考え方</h1>
+  <div class="lang-switch">
+    <span id="optEn" class="lang-opt active" onclick="setLang('en')">EN</span><span class="lang-sep">/</span><span id="optJp" class="lang-opt" onclick="setLang('jp')">JP</span>
+  </div>
+</div>
+
+<div class="lang-en">
+
+<div class="back-link">
+  <div class="back-title">Return To The Operation Help</div>
+  <div class="back-text">Go back to data setup, parameters, output files, and feature descriptions.</div>
+  <a class="back-button" href="FOL.html">Open Forestry Operations Lite Help</a>
+</div>
+
+<div class="lead">
+  Forestry Operations Lite is intended to support field-based planning for forestry roads, harvesting,
+  tending, trail surface review, and simple drainage. It does not decide the route or operation plan
+  by itself; it adds terrain analysis, risk indicators, and valley-shape evidence to decisions made
+  through on-site inspection and construction judgment.
+</div>
+
+<div class="sec">
+<h2>Positioning</h2>
+<p>Forestry roads, operation trails, harvesting, tending, surface cleanup, and drainage planning are
+strongly constrained by ground conditions. Slope, wetness, valley terrain, soil depth, spring water,
+old collapse traces, machine access, and drainage behavior cannot be reduced to a single automatic
+route or operation result.</p>
+<p>This plugin is therefore positioned as a <strong>support and record tool for field design</strong>.
+It is most useful after considering a route, operation area, cleanup method, or drainage treatment,
+then checking where terrain-derived risks overlap with that plan.</p>
+</div>
+
+<div class="sec">
+<h2>How To Read The Results</h2>
+<table>
+  <tr><th>Output</th><th>Use in field design</th></tr>
+  <tr>
+    <td><code>stability_fs.tif</code></td>
+    <td>Check slope-stability caution areas. Treat low FS zones as places that need field confirmation of soil depth, surface condition, roots, and groundwater.</td>
+  </tr>
+  <tr>
+    <td><code>twi.tif</code></td>
+    <td>Check wet terrain and likely water accumulation. Use it to review drainage, mud risk, spring water, and route changes around wet zones.</td>
+  </tr>
+  <tr>
+    <td><code>valley_zones.gpkg</code></td>
+    <td>Check valley lines, catchment terrain, and possible water paths. Avoid treating valley extraction as a surveyed stream line.</td>
+  </tr>
+  <tr>
+    <td><code>flow_peak.tif</code> / <code>flow_mean.tif</code></td>
+    <td>Use as a comparative indicator for where more runoff may concentrate during rainfall. Confirm actual drainage paths on site.</td>
+  </tr>
+  <tr>
+    <td><code>integrated_risk_index.tif</code></td>
+    <td>Find locations where several caution factors overlap. It is a priority map for checking, not a safety certificate.</td>
+  </tr>
+</table>
+</div>
+
+<div class="figure">
+  <button class="image-zoom" type="button" data-src="field_design_overall_valley.png" data-caption="Example: use Hillshade (DTM), such as output from WebODM Importer, with contour lines as the base and add Overall Risk and Valley Terrain as check layers.">
+    <img src="field_design_overall_valley.png" alt="Example display with Overall Risk and Valley Terrain over Hillshade DTM">
+  </button>
+  <div class="caption">Example: use Hillshade (DTM), such as output from WebODM Importer, with contour lines as the base and add Overall Risk and Valley Terrain as check layers.</div>
+</div>
+
+<div class="sec">
+<h2>Use For Harvesting And Tending</h2>
+<p>The plugin can also support harvesting and stand-tending plans. It should not be used to decide
+which individual trees to cut by itself. Instead, use it to identify where cutting intensity,
+yarding routes, cleanup, and slash placement need extra care.</p>
+<ul>
+  <li>On steep or unstable slopes, reduce disturbance and check whether cutting or cleanup could trigger windthrow, fallen trees, or soil movement.</li>
+  <li>Around valley terrain and wet areas, avoid leaving logs, branches, or slash where they can block or redirect concentrated flow.</li>
+  <li>Use flow and wetness layers to plan where bucked logs and branches should be kept along contours, helping slow surface runoff after rainfall.</li>
+  <li>Treat Overall Risk as a screening layer for places where harvesting, skidding, and cleanup should be planned more carefully.</li>
+</ul>
+</div>
+
+<div class="sec">
+<h2>Use For Earthwork And Simple Cross Drainage</h2>
+<p>For forestry operation trails, the plugin can support the placement of small earthwork adjustments
+and simple cross drainage. It does not design drainage structures automatically. Use it to decide
+where water should be crossed, dispersed, or kept away from disturbed soil.</p>
+<ul>
+  <li>Use Valley Terrain and Flow Estimation to find where concentrated runoff may intersect the trail line.</li>
+  <li>Place simple cross drains, rolling dips, or water bars before water gains speed or volume along the trail surface.</li>
+  <li>Avoid sending drained water directly into unstable slopes, exposed fill, wet hollows, or existing collapse traces.</li>
+  <li>Use Slope Stability and Overall Risk to check where cut-and-fill work should be minimized or handled with extra care.</li>
+  <li>Check outlet points on site. The map can show likely water paths, but the actual discharge point must be confirmed in the field.</li>
+</ul>
+</div>
+
+<div class="sec">
+<h2>Recommended Workflow</h2>
+<ol>
+  <li>Prepare DEM/DSM data and run the terrain analysis.</li>
+  <li>Draw or import a candidate road/trail alignment based on field knowledge.</li>
+  <li>Overlay the candidate alignment with slope stability, wetness, valley zones, flow, and integrated risk.</li>
+  <li>Mark sections where the alignment crosses valley terrain, wet zones, steep slopes, or overlapping high-risk areas.</li>
+  <li>Confirm those sections on site: soil depth, surface water, spring water, old collapse traces, machine workability, and drainage exits.</li>
+  <li>Record why the alignment was accepted, changed, or rejected.</li>
+</ol>
+</div>
+
+<div class="sec">
+<h2>Limits</h2>
+<div class="note">
+  The analysis results depend on the resolution, date, coverage, and accuracy of the DEM/DSM and source data.
+  They cannot replace field inspection, construction judgment, legal review, or site-specific safety decisions.
+</div>
+<ul>
+  <li>Small springs, buried water paths, soil-layer boundaries, rock, weak fill, and recent disturbance may not appear in DEM-derived results.</li>
+  <li>Risk values change when parameters such as friction angle, cohesion, soil depth, rainfall, and thresholds are changed.</li>
+  <li>Valley and wetness extraction indicates terrain tendency. It is not a guarantee that water is present or absent.</li>
+  <li>Final route judgment should include weather history, planned machinery, construction method, drainage treatment, and maintenance access.</li>
+</ul>
+</div>
+
+<div class="sec">
+<h2>Record Items</h2>
+<p>When using the plugin output as supporting material, keep the following items with the project or report.</p>
+<ul>
+  <li>DEM/DSM source, resolution, date, and processing extent</li>
+  <li>Analysis parameters and thresholds used for FS, TWI, flow, and integrated risk</li>
+  <li>Candidate route version, date, and reason for route changes</li>
+  <li>On-site confirmation points, photos, notes, and GPS tracks if available</li>
+  <li>Sections where desktop analysis could not determine the actual condition</li>
+</ul>
+</div>
+
+</div>
+
+<div class="lang-ja">
+
+<div class="back-link">
+  <div class="back-title">操作ヘルプへ戻る</div>
+  <div class="back-text">データ設定、パラメータ、出力ファイル、機能説明を確認する場合はこちらに戻ります。</div>
+  <a class="back-button" href="FOL.html">Forestry Operations Lite ヘルプを開く</a>
+</div>
+
+<div class="lead">
+  Forestry Operations Lite は、現場に基づく作業道・伐採・保育・路面・簡易排水の検討を支援するためのツールです。
+  ルートや施業内容を自動決定するものではなく、現地踏査と施工判断で検討した計画に対して、地形解析・危険度・沢地形の根拠を添えるために使います。
+</div>
+
+<div class="sec">
+<h2>位置づけ</h2>
+<p>林業作業道、作業路、伐採、保育、片付け、路面排水の計画は、地形図だけでは決めきれない条件に強く左右されます。
+傾斜、湿り、沢地形、土層深、湧水、過去の崩壊跡、機械の入り方、水の逃がし方などは、
+単一の自動ルートや自動判定にはまとめきれません。</p>
+<p>そのため本プラグインは、<strong>現場設計の支援・記録ツール</strong>として位置づけます。
+線形、施業範囲、片付け方法、排水処理を検討した後、地形由来の注意箇所がどこで重なるかを確認する使い方に向いています。</p>
+</div>
+
+<div class="sec">
+<h2>成果物の読み方</h2>
+<table>
+  <tr><th>成果物</th><th>現場設計での使い方</th></tr>
+  <tr>
+    <td><code>stability_fs.tif</code></td>
+    <td>斜面安定の注意箇所を確認します。FS が低い場所は、土層深・表土状態・根系・地下水を現地で確認する候補として扱います。</td>
+  </tr>
+  <tr>
+    <td><code>twi.tif</code></td>
+    <td>湿りやすい地形、水が集まりやすい場所を確認します。排水、ぬかるみ、湧水、湿潤帯を避ける線形検討に使います。</td>
+  </tr>
+  <tr>
+    <td><code>valley_zones.gpkg</code></td>
+    <td>沢筋・集水地形・水みち候補を確認します。測量済みの水路線そのものとしては扱わず、現地確認の入口として使います。</td>
+  </tr>
+  <tr>
+    <td><code>flow_peak.tif</code> / <code>flow_mean.tif</code></td>
+    <td>降雨時に流量が集中しやすい箇所の比較指標として使います。実際の排水経路は現地で確認します。</td>
+  </tr>
+  <tr>
+    <td><code>integrated_risk_index.tif</code></td>
+    <td>複数の注意因子が重なる箇所を探します。安全を証明するものではなく、確認優先度を決めるための図として扱います。</td>
+  </tr>
+</table>
+</div>
+
+<div class="figure">
+  <button class="image-zoom" type="button" data-src="field_design_overall_valley.png" data-caption="表示例：WebODM Importer などで作成した Hillshade (DTM) と等高線を下敷きにして、Overall Risk と Valley Terrain を確認用に重ねます。">
+    <img src="field_design_overall_valley.png" alt="Hillshade DTM に Overall Risk と Valley Terrain を重ねた表示例">
+  </button>
+  <div class="caption">表示例：WebODM Importer などで作成した Hillshade (DTM) と等高線を下敷きにして、Overall Risk と Valley Terrain を確認用に重ねます。</div>
+</div>
+
+<div class="sec">
+<h2>伐採・保育作業への応用</h2>
+<p>本プラグインは、伐採や保育作業の計画支援にも利用できます。ただし、どの木を伐るかを単独で決めるものではありません。
+伐採強度、搬出経路、片付け、枝条や玉切り材の置き方に注意が必要な場所を把握するために使います。</p>
+<ul>
+  <li>急傾斜や不安定な斜面では、伐採や片付け不足が倒木・土壌移動・表土流出を誘発しないか確認します。</li>
+  <li>沢地形や湿潤地形では、丸太・枝条・残材が水をせき止めたり、流れを変えたりしないように計画します。</li>
+  <li>流量・湿潤地形の表示を見ながら、玉切り材や枝条を等高線方向に収め、降雨後の表面流を弱める配置を検討します。</li>
+  <li>Overall Risk は、伐採・搬出・片付けを慎重に計画すべき箇所を拾うためのふるい分けとして扱います。</li>
+</ul>
+</div>
+
+<div class="sec">
+<h2>土工と簡易横断排水への応用</h2>
+<p>林業作業道では、土工の入れ方と簡易的な横断排水の位置が、施工後の壊れやすさに大きく関わります。
+本プラグインは排水構造物を自動設計するものではありません。水をどこで横断させるか、どこで分散させるか、
+どこで裸地や盛土に当てないかを検討する補助として使います。</p>
+<ul>
+  <li>Valley Terrain と Flow Estimation で、集水した水が作業道と交差しそうな箇所を拾います。</li>
+  <li>路面上で水が走り出す前に、簡易横断排水、洗い越し、横断溝、水切りを検討します。</li>
+  <li>排水先が不安定斜面、盛土、湿潤凹地、旧崩壊跡へ直接入らないか確認します。</li>
+  <li>Slope Stability と Overall Risk で、切土・盛土を抑えるべき区間や慎重に施工すべき区間を確認します。</li>
+  <li>排水の出口は必ず現地で確認します。地図は水の通りやすい場所を示しますが、実際の放流先までは保証しません。</li>
+</ul>
+</div>
+
+<div class="sec">
+<h2>推奨する流れ</h2>
+<ol>
+  <li>DEM/DSM を準備し、地形解析を実行します。</li>
+  <li>現場知見に基づいて、候補となる作業道・路網の線形を作成または読み込みます。</li>
+  <li>候補線と、斜面安定・湿潤地形・沢地形・流量・総合リスクを重ねます。</li>
+  <li>沢地形、湿潤帯、急傾斜、複合リスク箇所を横断または通過する区間を抽出します。</li>
+  <li>該当区間を現地で確認します。土層深、表流水、湧水、旧崩壊跡、機械施工性、水の逃げを確認します。</li>
+  <li>線形を採用・変更・棄却した理由を記録します。</li>
+</ol>
+</div>
+
+<div class="sec">
+<h2>限界</h2>
+<div class="note">
+  解析結果は、DEM/DSM や元データの解像度・時期・範囲・精度に依存します。
+  現地踏査、施工判断、法令確認、現場ごとの安全判断を代替するものではありません。
+</div>
+<ul>
+  <li>小さな湧水、伏流水、土層境界、岩、弱い盛土、直近の攪乱は、DEM 由来の成果物に出ない場合があります。</li>
+  <li>内部摩擦角、粘着力、土層深、降雨、閾値などの設定を変えると、リスク表示も変わります。</li>
+  <li>沢地形や湿潤地形は、地形としての傾向を示すものです。水の有無を保証するものではありません。</li>
+  <li>最終的な線形判断には、降雨履歴、使用機械、施工方法、排水処理、維持管理のしやすさを含めてください。</li>
+</ul>
+</div>
+
+<div class="sec">
+<h2>記録しておきたい項目</h2>
+<p>プラグインの成果物を後ろ盾として使う場合は、次の情報をプロジェクトや資料に残しておくと、判断過程を説明しやすくなります。</p>
+<ul>
+  <li>DEM/DSM の出典、解像度、取得時期、解析範囲</li>
+  <li>FS、TWI、流量、総合リスクで使用した解析パラメータと閾値</li>
+  <li>候補線の版、作成日、変更理由</li>
+  <li>現地確認地点、写真、メモ、GPS 軌跡があればその記録</li>
+  <li>机上解析だけでは実態を判断できなかった区間</li>
+</ul>
+</div>
+
+</div>
+
+<hr>
+<p style="font-size:0.8em;color:#888;text-align:center;">
+  Forestry Operations Lite &nbsp;|&nbsp; Developed by Avid Tree Work
+</p>
+
+<div id="imageLightbox" class="lightbox" hidden>
+  <div class="lightbox-panel" role="dialog" aria-modal="true" aria-label="Image preview">
+    <button id="lightboxClose" class="lightbox-close" type="button" aria-label="Close">&times;</button>
+    <img id="lightboxImage" src="" alt="">
+    <div id="lightboxCaption" class="lightbox-caption"></div>
+  </div>
+</div>
+
+<script>
+function setLang(lang) {
+  var isJa = (lang === 'jp');
+  document.body.classList.toggle('show-ja', isJa);
+  document.getElementById('optEn').classList.toggle('active', !isJa);
+  document.getElementById('optJp').classList.toggle('active', isJa);
+}
+function openLightbox(src, alt, caption) {
+  var box = document.getElementById('imageLightbox');
+  var image = document.getElementById('lightboxImage');
+  var text = document.getElementById('lightboxCaption');
+  image.src = src;
+  image.alt = alt || '';
+  text.textContent = caption || '';
+  box.hidden = false;
+  document.body.classList.add('lightbox-open');
+  document.getElementById('lightboxClose').focus();
+}
+function closeLightbox() {
+  var box = document.getElementById('imageLightbox');
+  box.hidden = true;
+  document.body.classList.remove('lightbox-open');
+}
+(function () {
+  var browserLang = (navigator.language || (navigator.languages && navigator.languages[0]) || '');
+  if (browserLang.toLowerCase().indexOf('ja') === 0) {
+    setLang('jp');
+  }
+  var zoomButtons = document.querySelectorAll('.image-zoom');
+  for (var i = 0; i < zoomButtons.length; i++) {
+    zoomButtons[i].addEventListener('click', function () {
+      var image = this.querySelector('img');
+      openLightbox(this.getAttribute('data-src'), image ? image.alt : '', this.getAttribute('data-caption'));
+    });
+  }
+  document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
+  document.getElementById('imageLightbox').addEventListener('click', function (event) {
+    if (event.target === this) {
+      closeLightbox();
+    }
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && !document.getElementById('imageLightbox').hidden) {
+      closeLightbox();
+    }
+  });
+})();
+</script>
+
+</body>
+</html>
