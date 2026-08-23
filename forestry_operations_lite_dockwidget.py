@@ -1268,6 +1268,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.cmbBackgroundLayer = QtWidgets.QComboBox()
         self.cmbTileLayer = QtWidgets.QComboBox()
         self.cmbGpkgLayer = QtWidgets.QComboBox()
+        for _cmb in (self.cmbBackgroundLayer, self.cmbTileLayer, self.cmbGpkgLayer):
+            _cmb.setMaximumWidth(200)
         self.btnRefreshLayerList = QtWidgets.QPushButton("Refresh Layers")
 
         # 解析データの表示管理 Row2 で使うレイヤー表示管理ウィジェット（ここで先行作成）
@@ -1350,7 +1352,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._vs_dsm_codes = []   # VS LP/Ground 読込時のタイルコード（同上）
 
         # ── VS Export グループ ──────────────────────────────────────────────
-        self.grpVsExport = QtWidgets.QGroupBox("Export for WebODM Importer (Virtual Shizuoka data only)")
+        self.grpVsExport = QtWidgets.QGroupBox("Export for WebODM Importer")
+        self.grpVsExport.setToolTip("Virtual Shizuoka data only")
         _vs_lay = QtWidgets.QHBoxLayout(self.grpVsExport)
         _vs_lay.setContentsMargins(8, 4, 8, 6)
         _vs_lay.setSpacing(6)

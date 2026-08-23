@@ -3,7 +3,7 @@ name=Forestry Operations Lite
 qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
 description=Terrain analysis for forestry sites: DEM/DSM loading, slope, TWI, stability index, and flow accumulation.
-version=1.0.2
+version=1.0.3
 author=Hideharu Masai
 email=hideharumasai@void.mints.ne.jp
 
@@ -14,6 +14,7 @@ repository=https://github.com/raw-slnc/forestry_operations_lite
 
 hasProcessingProvider=no
 changelog=
+    1.0.3 - Fix a serious UI bug: the Terrain Data tab's GPKG/Tile/Background layer combo boxes had no width limit and, depending on loaded layer names, could force the whole left panel into horizontal scrolling on Windows; combo boxes are now capped to the same width as the DEM/DSM path fields, and the WebODM Export group title was shortened (detail moved to tooltip)
     1.0.2 - Fix crash on plugin load when scipy is not installed (missing Qgis.MessageLevel enum scoping); add scipy requirement notice to Terrain Data tab (hidden automatically when scipy is available) and update FOL.html help with a bilingual EN/JA scipy install guide; convert the plugin window from a QDockWidget-based floating panel to a plain top-level QWidget window, removing a dock-area registration step that could affect the width of QGIS's Layers panel on first launch and a non-functional dock/float toggle button on the window's title bar
     1.0.1 - Fix Windows Alt+Tab visibility when reopening the floating plugin window; preserve terrain result display state across analysis-run changes so comparison workflows do not reset visible layers unnecessarily
     1.0.0 - QGIS 4.x support
