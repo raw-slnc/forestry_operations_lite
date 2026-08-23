@@ -1353,9 +1353,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         # ── VS Export グループ ──────────────────────────────────────────────
         self.grpVsExport = QtWidgets.QGroupBox("Export for WebODM Importer")
-        self.grpVsExport.setToolTip("Virtual Shizuoka data only")
-        _vs_lay = QtWidgets.QHBoxLayout(self.grpVsExport)
-        _vs_lay.setContentsMargins(8, 4, 8, 6)
+        _vs_outer = QtWidgets.QVBoxLayout(self.grpVsExport)
+        _vs_outer.setContentsMargins(8, 4, 8, 6)
+        _vs_outer.setSpacing(2)
+        _vs_lay = QtWidgets.QHBoxLayout()
         _vs_lay.setSpacing(6)
         self.btnVsExport = QtWidgets.QPushButton("Export")
         self.btnVsExport.setToolTip("Load DEM/DSM to enable export")
@@ -1370,6 +1371,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         _vs_lay.addWidget(self.btnOpenWodmi)
         _vs_lay.addWidget(self.lblVsExportStatus, 1)
         _vs_lay.addWidget(self.btnVsCancel)
+        _vs_outer.addLayout(_vs_lay)
+        _lbl_vs_note = QtWidgets.QLabel("Virtual Shizuoka data only")
+        _lbl_vs_note.setWordWrap(True)
+        _lbl_vs_note.setStyleSheet("color:#888;font-size:8pt;")
+        _vs_outer.addWidget(_lbl_vs_note)
 
         # .ui 由来の旧テキストフィールドを非表示
         for _w in (self.lblTileUrl, self.txtTileUrl, self.btnLoadTerrain):
