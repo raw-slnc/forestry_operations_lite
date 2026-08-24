@@ -1,6 +1,7 @@
 """
 地形解析アルゴリズム群
   compute_slope_deg  : Horn法で傾斜角[度]を計算
+  compute_hillshade  : 陰影起伏（0-255）を計算
   compute_curvature  : 平均曲率（ラプラシアン）を計算
   compute_shc        : SHC = 曲率の局所標準偏差（FOP用）
   d8_flow_direction  : D8流向コードを返す
@@ -24,6 +25,28 @@ def compute_slope_deg(dem, cell_size):
     result = np.degrees(slope_rad)
     result[np.isnan(dem)] = np.nan
     return result
+
+
+def compute_hillshade(dem, cell_size, azimuth=315.0, altitude=45.0):
+    """
+    陰影起伏（Hillshade）を計算する。0-255の輝度値を返す。
+
+    背景地形の表示用（terrain背景レイヤ）。既定は光源方位315°・高度45°
+    （地図表現で一般的な左上光源）。行方向（軸0）は南向きに増加する
+    ラスタ配列を前提とする（QGIS/GDALの標準的な読み込み順）。
+    """
+    x, y = np.gradient(dem, cell_size)
+    slope = np.pi / 2.0 - np.arctan(np.sqrt(x ** 2 + y ** 2))
+    aspect = np.arctan2(-x, y)
+    az_rad = np.radians(360.0 - azimuth)
+    alt_rad = np.radians(altitude)
+    shaded = (
+        np.sin(alt_rad) * np.sin(slope)
+        + np.cos(alt_rad) * np.cos(slope) * np.cos((az_rad - np.pi / 2.0) - aspect)
+    )
+    result = np.clip((shaded + 1.0) / 2.0, 0.0, 1.0) * 255.0
+    result[np.isnan(dem)] = np.nan
+    return result.astype(np.float32)
 
 
 def compute_curvature(dem, cell_size):
@@ -274,7 +297,7 @@ def stability_fs(slope_deg, phi_deg=35.0, c_kpa=0.0, z_m=1.0,
     resistance = c_kpa + (gamma_s - m * gamma_w) * z_m * cos2 * np.tan(phi)
     driving = gamma_s * z_m * sincos
 
-    fs = np.where(driving > 1e-6, resistance / driving, np.inf)
+    fs = np.where(driving > 1e-6, resistance / driving, 10.0)
     fs = np.where(np.isnan(slope_deg), np.nan, fs)
     return fs
 

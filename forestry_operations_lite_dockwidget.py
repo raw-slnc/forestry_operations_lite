@@ -1017,6 +1017,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         QgsProject.instance().cleared.connect(self._on_project_cleared)
         self._load_settings()
         self._restore_layer_combos_from_project()  # プロジェクト組み込み設定を優先適用
+        # 起動時点で既存の解析結果を選択可能にする（呼ばないと解析番号コンボが
+        # 空のままで、読込ボタンもグレーアウトしたまま = 起動直後は選択できない）
+        self._refresh_analysis_combo(select_latest=False)
 
     def event(self, event):
         """OSネイティブのタイトルバーをダブルクリックすると
@@ -1172,6 +1175,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.spinOpacityWetland    = _make_opacity_spin()
         self.spinOpacityFlow       = _make_opacity_spin()
         self.spinOpacityIntegrated = _make_opacity_spin()
+
+        # 背景地形（Hillshade / Elevation color relief）。Terrain Data タブの
+        # チェックで表示/非表示を切り替えるため既定では非表示にしておく。
+        self.chkLoadHillshade  = QtWidgets.QPushButton("Hillshade (DTM)")
+        self.chkLoadElevRelief = QtWidgets.QPushButton("Elevation Background")
+        for _b in (self.chkLoadHillshade, self.chkLoadElevRelief):
+            _b.setCheckable(True)
+            _b.setEnabled(False)   # 解析データが存在するまでグレーアウト
+            _b.setStyleSheet(self._BTN_STYLE_NORMAL)
+            _b.setVisible(False)
+        self.spinOpacityHillshade  = _make_opacity_spin(default=60)
+        self.spinOpacityElevRelief = _make_opacity_spin(default=60)
+        for _sp in (self.spinOpacityHillshade, self.spinOpacityElevRelief):
+            _sp.setVisible(False)
 
         def _make_filter_btn():
             b = QtWidgets.QPushButton("off")
@@ -1337,6 +1354,25 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.lblDsmInfo = QtWidgets.QLabel("Not set")
         self.lblDsmInfo.setWordWrap(True)
         dem_lay.addWidget(self.lblDsmInfo,   3, 0, 1, 3)
+
+        # ── 背景地形プロダクト（Hillshade / Elevation color relief）──────
+        self.grpTerrainBg = QtWidgets.QGroupBox("Background Terrain Products")
+        _bg_lay = QtWidgets.QVBoxLayout(self.grpTerrainBg)
+        self.chkGenHillshade = QtWidgets.QCheckBox("Hillshade (DTM)")
+        self.chkGenElevRelief = QtWidgets.QCheckBox("Elevation Background")
+        _bg_row = QtWidgets.QHBoxLayout()
+        _bg_row.addWidget(self.chkGenHillshade)
+        _bg_row.addWidget(self.chkGenElevRelief)
+        _bg_lay.addLayout(_bg_row)
+        _bg_note = QtWidgets.QLabel(
+            "Always computed on Run Analysis. Checking here shows a "
+            "dedicated on/off + opacity control in the Analysis Layer "
+            "Display bar, next to Background."
+        )
+        _bg_note.setWordWrap(True)
+        _bg_note.setStyleSheet("color:#888;font-size:8pt;")
+        _bg_lay.addWidget(_bg_note)
+
         self._dem_path = ""
         self._dsm_path = ""
         self._partial_outside_warned = False   # reset when DEM changes
@@ -1396,6 +1432,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         ds_layout = QtWidgets.QVBoxLayout(_ds_inner)
         ds_layout.addWidget(self.grpDem)
         ds_layout.addWidget(self.grpVsExport)
+        ds_layout.addWidget(self.grpTerrainBg)
         ds_layout.addWidget(self.grpLayers)
 
         self.grpScipy = QtWidgets.QGroupBox(
@@ -1594,6 +1631,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             (self.btnGpkgLayerVis, self.spinGpkgOpacity),
             (self.btnTileLayerVis, self.spinTileOpacity),
             (self.btnBgLayerVis,   self.spinBgOpacity),
+            (self.chkLoadHillshade,  self.spinOpacityHillshade),
+            (self.chkLoadElevRelief, self.spinOpacityElevRelief),
         ):
             dm_row3.addWidget(_b)
             dm_row3.addWidget(_sp)
@@ -1630,6 +1669,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._terrain_cycle_state = {}     # key → int (-1=非表示, 0..N-1=表示中ファイル番号)
         self._filter_state = {"wetland": "off", "flow": "off"}  # off/low/mid
         self._flow_buffer_state = "off"  # off/weak/strong
+        self._filter_state_vtotal = "off"  # Total Flow Vol. 専用 off/low/mid
+        self._flow_buffer_state_vtotal = "off"  # Total Flow Vol. 専用 off/weak/strong
         self._flow_buffer_layer_ids = []  # バッファ滲みレイヤーのID管理
         self._flow_buffer_mem_paths = []  # vsimem パス（解放用）
         self._loaded_terrain_basenames = {}  # key → base_name（フィルタ再適用用）
@@ -1873,6 +1914,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         out_lay.addWidget(self.progressAnalysis)
         lay.addWidget(grpOut)
 
+        # --- エクスポート（未接続のプレースホルダー） ---
+        grpExport = QtWidgets.QGroupBox("Export")
+        export_lay = QtWidgets.QVBoxLayout(grpExport)
+        self.btnExport = QtWidgets.QPushButton("Export")
+        export_lay.addWidget(self.btnExport)
+        lay.addWidget(grpExport)
+
         _lbl_credit_a = QtWidgets.QLabel("Developed by Avid Tree Work")
         _lbl_credit_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
         _lbl_credit_a.setStyleSheet("color: #888; font-size: 8pt; padding: 4px 0;")
@@ -1938,18 +1986,23 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.btnOpenWodmi.clicked.connect(self._on_open_wodmi)
         self.btnVsCancel.clicked.connect(self._on_vs_cancel)
         self.btnRunAnalysis.clicked.connect(self._run_terrain_analysis)
+        self.btnExport.clicked.connect(self._on_export_clicked)
         self.btnStopAnalysis.clicked.connect(self._on_stop_analysis)
         self.chkLoadStability.clicked.connect(lambda: self._cycle_terrain_layer("stability"))
         self.chkLoadValley.clicked.connect(lambda: self._cycle_terrain_layer("valley"))
         self.chkLoadWetland.clicked.connect(lambda: self._cycle_terrain_layer("wetland"))
         self.chkLoadFlow.clicked.connect(lambda: self._cycle_terrain_layer("flow"))
         self.chkLoadIntegrated.clicked.connect(lambda: self._cycle_terrain_layer("integrated"))
+        self.chkLoadHillshade.clicked.connect(lambda: self._cycle_terrain_layer("hillshade"))
+        self.chkLoadElevRelief.clicked.connect(lambda: self._cycle_terrain_layer("elev_relief"))
         for _key, _sp in (
             ("stability",  self.spinOpacityStability),
             ("valley",     self.spinOpacityValley),
             ("wetland",    self.spinOpacityWetland),
             ("flow",       self.spinOpacityFlow),
             ("integrated", self.spinOpacityIntegrated),
+            ("hillshade",   self.spinOpacityHillshade),
+            ("elev_relief", self.spinOpacityElevRelief),
         ):
             _sp.valueChanged.connect(
                 lambda val, k=_key: self._on_key_opacity_changed(k, val)
@@ -1960,6 +2013,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.btnFilterFlow.clicked.connect(lambda: self._toggle_filter("flow"))
         self.btnFlowBuffer.clicked.connect(self._cycle_flow_buffer)
         self.btnTerrainToggle.toggled.connect(self._on_terrain_toggle)
+        self.chkGenHillshade.toggled.connect(self._on_bg_control_toggled)
+        self.chkGenElevRelief.toggled.connect(self._on_bg_control_toggled)
 
     def _connect_interactive_signals(self):
         """Connect signals for user interactions after initial setup is complete."""
@@ -1985,8 +2040,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             for ids in getattr(self, "_loaded_terrain_layers", {}).values()
             for lid in ids
         }
-        for layer in QgsProject.instance().mapLayers().values():
-            if layer.id() in terrain_ids:
+        # mapLayers().values() はプロジェクトへの登録順であり、レイヤーパネル
+        # の見た目の並びとは一致しないため、レイヤーツリーを辿った順序を使う。
+        for node in QgsProject.instance().layerTreeRoot().findLayers():
+            layer = node.layer()
+            if layer is None or layer.id() in terrain_ids:
                 continue
             if layer.type() == layer.RasterLayer:
                 bg_data.append((layer.name(), layer.id()))
@@ -2309,7 +2367,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         if getattr(self, "_terrain_layers_visible", True):
             flow_lids = set(getattr(self, "_loaded_terrain_layers", {}).get("flow", []))
             flow_buf_added = False
-            for key, ids in getattr(self, "_loaded_terrain_layers", {}).items():
+            _loaded = getattr(self, "_loaded_terrain_layers", {})
+            # dict の挿入順（＝ボタンをクリックした順）ではなく _KEY_RANK
+            # （ランクが高い＝上）に従って積み順を決める。
+            for key in sorted(_loaded.keys(),
+                               key=lambda k: self._KEY_RANK.get(k, 0),
+                               reverse=True):
+                ids = _loaded[key]
                 for lid in ids:
                     lyr = proj.mapLayer(lid)
                     if lyr is not None and lyr.isValid():
@@ -2509,6 +2573,33 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
     _FILTER_KEYS = {"twi", "flow_peak", "flow_mean", "flow_vtotal"}
 
     @staticmethod
+    def _apply_hillshade_style(lyr):
+        """Hillshadeをグレースケール＋乗算(Multiply)ブレンドで描画する。
+        乗算なら明部は下のElevation Backgroundの色を保ったまま陰影だけが
+        乗るため、単純な半透明合成（不透明度のみの重ね合わせ）より
+        カートグラフィー的に正しい見え方になる。不透明度はレイヤー側
+        （呼び出し元の lyr.renderer().setOpacity）で別途設定される。"""
+        from qgis.PyQt.QtGui import QPainter
+        from qgis.core import QgsSingleBandGrayRenderer, QgsContrastEnhancement
+
+        renderer = QgsSingleBandGrayRenderer(lyr.dataProvider(), 1)
+        enhancement = QgsContrastEnhancement(lyr.dataProvider().dataType(1))
+        enhancement.setMinimumValue(0.0)
+        enhancement.setMaximumValue(255.0)
+        try:
+            stretch_algo = QgsContrastEnhancement.ContrastEnhancementAlgorithm.StretchToMinimumMaximum
+        except AttributeError:
+            stretch_algo = getattr(QgsContrastEnhancement, "StretchToMinimumMaximum")
+        enhancement.setContrastEnhancementAlgorithm(stretch_algo)
+        renderer.setContrastEnhancement(enhancement)
+        lyr.setRenderer(renderer)
+        try:
+            multiply_mode = QPainter.CompositionMode.CompositionMode_Multiply
+        except AttributeError:
+            multiply_mode = getattr(QPainter, "CompositionMode_Multiply")
+        lyr.setBlendMode(multiply_mode)
+
+    @staticmethod
     def _apply_raster_color(lyr, base_name, filter_mode="off"):
         """base_name ごとに目的別カラーランプを設定。
         固定値型: FS・統合リスクなど物理的意味のある値を使用。
@@ -2581,6 +2672,24 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     (QColor(130,   0,  45), "High"),
                 ],
             },
+            # 背景地形（basemap 用）。他の解析レイヤーと違い、意味の主張を
+            # 持たない参照情報として、彩度を抑えた配色にする。
+            # hillshade は _apply_hillshade_style（グレースケール＋乗算
+            # ブレンド）で描画するため、ここには含めない。
+            "elev_relief": {
+                # 国土地理院の段彩に準じた低地=緑〜高標高=茶。最高点のみ
+                # 「雪」ではなく岩肌を示す灰にとどめ、積雪を連想させない。
+                # 茶を1段追加で保持させ、灰への遷移を最後の区間だけに狭めている。
+                "log": False,
+                "colors": [
+                    (QColor( 92, 140,  97), "Low"),
+                    (QColor(170, 179, 110), ""),
+                    (QColor(214, 176, 110), ""),
+                    (QColor(196, 148, 112), ""),
+                    (QColor(196, 148, 112), ""),
+                    (QColor(178, 178, 175), "High (exposed rock)"),
+                ],
+            },
         }
 
         # サンプル数を制限して高速化（全ピクセルスキャンは大規模ラスターで数秒かかる）
@@ -2637,16 +2746,48 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         else:
             return
 
+        ramp_min = items[0].value
+        ramp_max = items[-1].value
+
         shader_func = QgsColorRampShader()
         shader_func.setColorRampType(QgsColorRampShader.Type.Interpolated)
         shader_func.setColorRampItemList(items)
-        shader_func.setMinimumValue(vmin)
-        shader_func.setMaximumValue(vmax)
+        shader_func.setMinimumValue(ramp_min)
+        shader_func.setMaximumValue(ramp_max)
+
+        # sourceColorRamp を明示しないと、シンポロジパネル側は「未分類」と
+        # みなし、開いた際にQGIS既定のランプ・等間隔クラスで上書きしてしまう
+        # （実機で確認済み）。ここで items と同じ色を持つグラデーションランプ
+        # を由来として明示的に持たせ、UIが正しい設定として認識するようにする。
+        from qgis.core import QgsGradientColorRamp, QgsGradientStop
+        span = ramp_max - ramp_min
+        stops = [
+            QgsGradientStop(
+                (it.value - ramp_min) / span if span else 0.0, it.color
+            )
+            for it in items[1:-1]
+        ]
+        source_ramp = QgsGradientColorRamp(
+            items[0].color, items[-1].color, False, stops
+        )
+        shader_func.setSourceColorRamp(source_ramp)
+        try:
+            shader_func.setClassificationMode(
+                QgsColorRampShader.ClassificationMode.Continuous
+            )
+        except AttributeError:
+            shader_func.setClassificationMode(getattr(QgsColorRampShader, "Continuous"))
 
         raster_shader = QgsRasterShader()
         raster_shader.setRasterShaderFunction(shader_func)
 
         renderer = QgsSingleBandPseudoColorRenderer(lyr.dataProvider(), 1, raster_shader)
+        # QGIS のプロパティダイアログは renderer 側の classificationMin/Max
+        # も参照する。ここが NaN のままだと、見た目は正しく描けていても
+        # プロパティを開いた時に未分類に近い状態として扱われ、通常操作で
+        # ランプや透明度が崩れることがある。
+        renderer.setClassificationMin(ramp_min)
+        renderer.setClassificationMax(ramp_max)
         lyr.setRenderer(renderer)
         # triggerRepaint は呼び出し元が管理する（レイヤ追加前に呼ぶと無駄な描画になるため）
 
@@ -2659,24 +2800,75 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 continue
             if lyr.type() == lyr.RasterLayer:
                 lyr.renderer().setOpacity(opacity)
+                lyr.setOpacity(opacity)
             else:
                 lyr.setOpacity(opacity)
             lyr.triggerRepaint()
         if self.preview_canvas is not None:
             self.preview_canvas.refresh()
 
+    def _flow_filter_state(self, base_name=None):
+        if base_name == "flow_vtotal":
+            return self._filter_state_vtotal
+        return self._filter_state.get("flow", "off")
+
+    def _set_flow_filter_state(self, base_name, value):
+        if base_name == "flow_vtotal":
+            self._filter_state_vtotal = value
+        else:
+            self._filter_state["flow"] = value
+
+    def _flow_buffer_state_for_base(self, base_name=None):
+        if base_name == "flow_vtotal":
+            return self._flow_buffer_state_vtotal
+        return self._flow_buffer_state
+
+    def _set_flow_buffer_state_for_base(self, base_name, value):
+        if base_name == "flow_vtotal":
+            self._flow_buffer_state_vtotal = value
+        else:
+            self._flow_buffer_state = value
+
+    def _set_flow_buffer_button_state(self, state):
+        labels = {
+            "off":    "Buffer: Off",
+            "weak":   "Buffer: Low",
+            "strong": "Buffer: High",
+        }
+        self.btnFlowBuffer.setText(labels.get(state, labels["off"]))
+        active = state != "off"
+        self.btnFlowBuffer.setStyleSheet(
+            ("font-size:8pt; padding:1px 2px;"
+             "background:#e07050; color:white; border-radius:2px;")
+            if active else
+            "font-size:8pt; padding:1px 2px;"
+        )
+
+    def _sync_flow_aux_controls(self):
+        base_name = self._loaded_terrain_basenames.get("flow")
+        self.btnFilterFlow.setText(self._flow_filter_state(base_name))
+        self._set_flow_buffer_button_state(
+            self._flow_buffer_state_for_base(base_name)
+        )
+
     def _toggle_filter(self, key):
         """湿潤地形/流量推測の低値透過フィルタを off→low→mid→off と循環する。"""
         states = ["off", "low", "mid"]
-        current = self._filter_state.get(key, "off")
+        base_name = self._loaded_terrain_basenames.get(key)
+        if key == "flow":
+            current = self._flow_filter_state(base_name)
+        else:
+            current = self._filter_state.get(key, "off")
         next_state = states[(states.index(current) + 1) % len(states)]
-        self._filter_state[key] = next_state
+        if key == "flow":
+            self._set_flow_filter_state(base_name, next_state)
+        else:
+            self._filter_state[key] = next_state
 
         btn = self.btnFilterWetland if key == "wetland" else self.btnFilterFlow
         btn.setText(next_state)
 
         # 表示中のラスタレイヤへ即時再適用
-        base_name = self._loaded_terrain_basenames.get(key)
         if base_name is None:
             return
         proj = QgsProject.instance()
@@ -2684,41 +2876,103 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             lyr = proj.mapLayer(lid)
             if lyr is None or lyr.type() != lyr.RasterLayer:
                 continue
-            opacity = lyr.renderer().opacity()
+            opacity = lyr.opacity()
             self._apply_raster_color(lyr, base_name, next_state)
             lyr.renderer().setOpacity(opacity)
+            lyr.setOpacity(opacity)
             lyr.triggerRepaint()
+        if key == "flow" and self._flow_buffer_state_for_base(base_name) != "off":
+            self._apply_flow_buffer()
         if self.preview_canvas is not None:
             self.preview_canvas.refresh()
 
     # バッファ強度ごとのブラー半径（ピクセル）
     _FLOW_BUFFER_SIGMA  = {"weak": 2, "strong": 3}   # Gaussian sigma（ピクセル）
+    _FLOW_VTOTAL_WEAK_SIGMA = 2.8  # Total Flow Vol. は Low でも High 寄りにする
     _FLOW_BUFFER_OPACITY = {"weak": 0.45, "strong": 0.65}  # 滲みレイヤーの透過率
+
+    @classmethod
+    def _flow_buffer_sigma(cls, base_name, state):
+        if base_name == "flow_vtotal" and state == "weak":
+            return cls._FLOW_VTOTAL_WEAK_SIGMA
+        return cls._FLOW_BUFFER_SIGMA[state]
+
+    @staticmethod
+    def _write_flow_buffer_raster(src_path, dst_path, sigma):
+        """Flow バッファ用のぼかし済み GeoTIFF を作成する。"""
+        import numpy as np
+        from scipy.ndimage import gaussian_filter
+        from osgeo import gdal
+
+        ds = gdal.Open(src_path)
+        if ds is None:
+            return False
+
+        data = ds.GetRasterBand(1).ReadAsArray().astype(np.float32)
+        gt = ds.GetGeoTransform()
+        wkt = ds.GetProjection()
+        nodata = ds.GetRasterBand(1).GetNoDataValue()
+        ds = None
+
+        mask = np.isnan(data)
+        if nodata is not None:
+            mask |= (data == nodata)
+        filled = np.where(mask, 0.0, data)
+        blurred = gaussian_filter(
+            filled.astype(np.float64), sigma=sigma
+        ).astype(np.float32)
+        blurred[mask] = nodata if nodata is not None else np.nan
+
+        out_dir = os.path.dirname(dst_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        drv = gdal.GetDriverByName("GTiff")
+        if os.path.exists(dst_path):
+            try:
+                drv.Delete(dst_path)
+            except Exception:  # nosec B110
+                pass
+        out = drv.Create(dst_path, data.shape[1], data.shape[0], 1, gdal.GDT_Float32)
+        if out is None:
+            return False
+        out.SetGeoTransform(gt)
+        out.SetProjection(wkt)
+        band = out.GetRasterBand(1)
+        band.WriteArray(blurred)
+        if nodata is not None:
+            band.SetNoDataValue(nodata)
+        band.FlushCache()
+        out.FlushCache()
+        out = None
+        return True
 
     def _on_terrain_toggle(self, checked: bool):
         """解析データ表示トグル: ON=表示・OFF=非表示（個別設定は保持）。"""
         self._terrain_layers_visible = checked
         self._refresh_preview_canvas()
 
+    def _on_bg_control_toggled(self, _checked=None):
+        """Terrain Data タブの Hillshade/Elevation color relief チェック:
+        Analysis Layer Display 側のボタンの表示/非表示を切り替える。
+        OFF にしたときに表示中であれば、そのレイヤーも隠す。"""
+        for key, chk, btn, sp in (
+            ("hillshade",   self.chkGenHillshade,  self.chkLoadHillshade,  self.spinOpacityHillshade),
+            ("elev_relief", self.chkGenElevRelief, self.chkLoadElevRelief, self.spinOpacityElevRelief),
+        ):
+            visible = chk.isChecked()
+            btn.setVisible(visible)
+            sp.setVisible(visible)
+            if not visible and self._terrain_cycle_state.get(key, -1) >= 0:
+                self._cycle_terrain_layer(key)
+
     def _cycle_flow_buffer(self):
         """流量レイヤーのバッファ（滲み）表現を off→弱→強→off と循環する。"""
         states = ["off", "weak", "strong"]
-        labels = {
-            "off":    "Buffer: Off",
-            "weak":   "Buffer: Low",
-            "strong": "Buffer: High",
-        }
-        cur = self._flow_buffer_state
+        base_name = self._loaded_terrain_basenames.get("flow")
+        cur = self._flow_buffer_state_for_base(base_name)
         nxt = states[(states.index(cur) + 1) % len(states)]
-        self._flow_buffer_state = nxt
-        self.btnFlowBuffer.setText(labels[nxt])
-        active = nxt != "off"
-        self.btnFlowBuffer.setStyleSheet(
-            ("font-size:8pt; padding:1px 2px;"
-             "background:#e07050; color:white; border-radius:2px;")
-            if active else
-            "font-size:8pt; padding:1px 2px;"
-        )
+        self._set_flow_buffer_state_for_base(base_name, nxt)
+        self._set_flow_buffer_button_state(nxt)
         self._apply_flow_buffer()
 
     def _apply_flow_buffer(self):
@@ -2741,18 +2995,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             _gdal.Unlink(mp)
         self._flow_buffer_mem_paths = []
 
-        state = self._flow_buffer_state
+        base_name = self._loaded_terrain_basenames.get("flow")
+        state = self._flow_buffer_state_for_base(base_name)
         if state == "off":
             self._refresh_preview_canvas()
             return
 
-        sigma   = self._FLOW_BUFFER_SIGMA[state]
         opacity = self._FLOW_BUFFER_OPACITY[state]
 
         for lid in self._loaded_terrain_layers.get("flow", []):
             lyr = proj.mapLayer(lid)
             if lyr is None or lyr.type() != lyr.RasterLayer:
                 continue
+            sigma = self._flow_buffer_sigma(base_name, state)
             src_path = lyr.source()
             ds = gdal.Open(src_path)
             if ds is None:
@@ -2792,11 +3047,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             if not blur_lyr.isValid():
                 continue
 
-            base_name = self._loaded_terrain_basenames.get("flow")
             if base_name:
                 self._apply_raster_color(blur_lyr, base_name,
-                                         self._filter_state.get("flow", "off"))
+                                         self._flow_filter_state(base_name))
             blur_lyr.renderer().setOpacity(opacity)
+            blur_lyr.setOpacity(opacity)
             proj.addMapLayer(blur_lyr, False)
 
             # flow レイヤーの直下に挿入
@@ -2837,6 +3092,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             ("integrated_risk_index", "Overall Risk Index", "raster", ".tif"),
             ("integrated_high_risk",  "High Risk Areas",    "vector", ".gpkg"),
         ],
+        # 背景地形。解析対象チェックに関わらず _run_terrain_analysis で
+        # 常に生成される（Terrain Data タブのチェックはこのボタン自体の
+        # 表示/非表示だけを切り替える）。
+        "hillshade": [
+            ("hillshade", "Hillshade (DTM)", "raster", ".tif"),
+        ],
+        "elev_relief": [
+            ("elev_relief", "Elevation Background", "raster", ".tif"),
+        ],
     }
 
     _BTN_LABELS = {
@@ -2845,12 +3109,18 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         "wetland":   ("Wetland Terrain",  None),
         "flow":      ("Flow Estimation",  None),
         "integrated":("Overall Risk",     None),
+        "hillshade": ("Hillshade (DTM)",   None),
+        "elev_relief":("Elevation Background", None),
     }
 
-    # レイヤパネル内の順序: 値が大きいほど上（描画上位）
-    # 下から: stability → wetland → valley → flow → integrated（最上位）
-    # 下から: stability → integrated → wetland → valley → flow（最上位）
-    _KEY_RANK = {"stability": 0, "integrated": 1, "wetland": 2, "valley": 3, "flow": 4}
+    # 解析結果グループ内の順序: 値が大きいほど上（描画上位）
+    # 下から: elev_relief → hillshade → stability → integrated → wetland
+    #        → valley → flow（最上位）
+    # 背景地形（elev_relief/hillshade）は同じグループの中で常に最下位＝背景。
+    _KEY_RANK = {
+        "elev_relief": -2, "hillshade": -1,
+        "stability": 0, "integrated": 1, "wetland": 2, "valley": 3, "flow": 4,
+    }
 
     def _btn(self, key):
         return {
@@ -2859,6 +3129,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             "wetland":    self.chkLoadWetland,
             "flow":       self.chkLoadFlow,
             "integrated": self.chkLoadIntegrated,
+            "hillshade":  self.chkLoadHillshade,
+            "elev_relief":self.chkLoadElevRelief,
         }[key]
 
     def _opacity_spinbox(self, key):
@@ -2868,11 +3140,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             "wetland":    self.spinOpacityWetland,
             "flow":       self.spinOpacityFlow,
             "integrated": self.spinOpacityIntegrated,
+            "hillshade":  self.spinOpacityHillshade,
+            "elev_relief":self.spinOpacityElevRelief,
         }[key]
 
     def _insert_terrain_layer_ordered(self, key, lyr):
         """_KEY_RANK に従いグループ内の正しい位置にレイヤを挿入する。
-        ランクが高いキー（上位）が既にあればその下、なければ先頭に挿入する。"""
+        ランクが高いキー（上位）が既にあればその下、なければ先頭に挿入する。
+
+        hillshade/elev_relief も解析データなので他のキーと同様に解析結果
+        グループの中に入れる（root直下には出さない）。これにより解析の
+        切り替え・プラグイン終了時のグループ削除（_unload_terrain_group 等の
+        findLayers() によるクリア）に他のレイヤーと同じく含まれる。
+        """
         from qgis.core import QgsLayerTreeLayer
         rank = self._KEY_RANK.get(key, 0)
         group = self._terrain_layer_group
@@ -3038,10 +3318,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         if lyr.isValid():
             opacity = self._opacity_spinbox(key).value() / 100.0
             if kind == "raster":
-                filter_mode = self._filter_state.get(key, "off")
-                self._apply_raster_color(lyr, base_name, filter_mode)
+                if base_name == "hillshade":
+                    self._apply_hillshade_style(lyr)
+                else:
+                    filter_mode = (
+                        self._flow_filter_state(base_name)
+                        if key == "flow" else self._filter_state.get(key, "off")
+                    )
+                    self._apply_raster_color(lyr, base_name, filter_mode)
                 self._loaded_terrain_basenames[key] = base_name
                 lyr.renderer().setOpacity(opacity)
+                lyr.setOpacity(opacity)
             else:
                 self._apply_vector_style(lyr, base_name)
                 lyr.setOpacity(opacity)
@@ -3056,7 +3343,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             status = f"Showing {label} ({next_state + 1}/{n})." if n > 1 else f"Showing {label}."
             self.lblLoadStatus.setText(status)
             # 流量レイヤー切替後にバッファ状態を引き継ぐ
-            if key == "flow" and self._flow_buffer_state != "off":
+            if key == "flow":
+                self._sync_flow_aux_controls()
                 self._apply_flow_buffer()
         else:
             self.lblLoadStatus.setText(f"Load error: {label}")
@@ -3103,10 +3391,18 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     opacity = self._opacity_spinbox(key).value() / 100.0
                     if kind == "raster":
                         try:
-                            self._apply_raster_color(lyr, color_name)
+                            if color_name == "hillshade":
+                                self._apply_hillshade_style(lyr)
+                            else:
+                                filter_mode = (
+                                    self._flow_filter_state(color_name)
+                                    if key == "flow" else self._filter_state.get(key, "off")
+                                )
+                                self._apply_raster_color(lyr, color_name, filter_mode)
                         except Exception:  # nosec B110
                             pass
                         lyr.renderer().setOpacity(opacity)
+                        lyr.setOpacity(opacity)
                     else:
                         try:
                             self._apply_vector_style(lyr, color_name)
@@ -3781,7 +4077,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # トグルボタンの有効/無効を更新
         has_data = self.cmbAnalysisNumber.count() > 1
         for _b in (self.chkLoadStability, self.chkLoadValley,
-                   self.chkLoadWetland, self.chkLoadFlow, self.chkLoadIntegrated):
+                   self.chkLoadWetland, self.chkLoadFlow, self.chkLoadIntegrated,
+                   self.chkLoadHillshade, self.chkLoadElevRelief):
             _b.setEnabled(has_data)
         # 解析番号に紐づかない DEM キャッシュを削除
         self._gc_dem_cache()
@@ -4409,12 +4706,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             return
 
         if wodmi.panel is None:
-            wodmi._toggle_panel()
+            show_panel = getattr(wodmi, "_show_panel", None) or getattr(wodmi, "_toggle_panel", None)
+            if not callable(show_panel):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "WebODM Importer",
+                    "Installed webodm_importer does not expose a panel opener.",
+                )
+                return
+            show_panel()
         else:
             wodmi.panel.setVisible(True)
             wodmi.panel.raise_()
 
-        if hasattr(wodmi.panel, "_src_edit"):
+        if wodmi.panel and hasattr(wodmi.panel, "_src_edit"):
             wodmi.panel._source_path = zip_path
             wodmi.panel._is_zip = True
             wodmi.panel._src_edit.setText(zip_path)
@@ -4424,6 +4729,130 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._vs_export_dir = ""
         self._vs_wodmi_opened = True
         self._update_vs_export_buttons()
+
+    def _on_export_clicked(self):
+        """選択中の解析番号の全レイヤー（現在表示中かどうかを問わない）を、
+        プラグイン管理下（_GROUP_PROP付きグループ）から独立した永続グループ
+        として書き出す。解析の切替やプラグイン終了で消えない、プラグインを
+        開かずに書類作成等で参照できる実レイヤーにするためのもの。"""
+        analysis_number = self.cmbAnalysisNumber.currentData()
+        if not analysis_number:
+            self.lblAnalysisStatus.setVisible(True)
+            self.lblAnalysisStatus.setText("Select an analysis run to export.")
+            return
+        out_dir = self._terrain_output_dir()
+        proj = QgsProject.instance()
+        root = proj.layerTreeRoot()
+        # キーごとに現在表示中のレイヤー名を集めておき、エクスポート先の
+        # 表示ON/OFFへ引き継ぐ（flow/integrated等、キー内に複数ファイルが
+        # あるものは「今表示中の1件」だけがONの対象になる）。
+        visible_labels = {}
+        for key, ids in self._loaded_terrain_layers.items():
+            for lid in ids:
+                lyr0 = proj.mapLayer(lid)
+                if lyr0 is not None:
+                    visible_labels.setdefault(key, set()).add(lyr0.name())
+        group_name = f"Forestry Operations Lite - {analysis_number}"
+        # 同じ解析番号を再エクスポートしても前回分は消さない（重複エクスポートは許容する）。
+        group = root.insertGroup(0, group_name)
+        group.setExpanded(False)
+        added = 0
+        buffer_errors = []
+        for key, patterns in self._TERRAIN_PATTERNS.items():
+            for pat in patterns:
+                color_name, label, kind, ext = pat[0], pat[1], pat[2], pat[3]
+                file_base = pat[4] if len(pat) > 4 else color_name
+                path = os.path.join(out_dir, analysis_number, f"{file_base}{ext}")
+                if not os.path.exists(path):
+                    continue
+                lyr = (QgsRasterLayer(path, label) if kind == "raster"
+                       else QgsVectorLayer(path, label, "ogr"))
+                if not lyr.isValid():
+                    continue
+                opacity = self._opacity_spinbox(key).value() / 100.0
+                if kind == "raster":
+                    if color_name == "hillshade":
+                        self._apply_hillshade_style(lyr)
+                    else:
+                        filter_mode = (
+                            self._flow_filter_state(color_name)
+                            if key == "flow" else self._filter_state.get(key, "off")
+                        )
+                        self._apply_raster_color(lyr, color_name, filter_mode)
+                    lyr.renderer().setOpacity(opacity)
+                    lyr.setOpacity(opacity)
+                else:
+                    self._apply_vector_style(lyr, color_name)
+                    lyr.setOpacity(opacity)
+                lyr.triggerRepaint()
+                lyr.emitStyleChanged()
+                proj.addMapLayer(lyr, False)
+                is_visible = label in visible_labels.get(key, set())
+                flow_buffer_state = (
+                    self._flow_buffer_state_for_base(color_name)
+                    if key == "flow" and kind == "raster" else "off"
+                )
+                parent_group = group
+                if key == "flow" and kind == "raster" and flow_buffer_state != "off":
+                    parent_group = group.addGroup(label)
+                    parent_group.setExpanded(False)
+                    parent_group.setItemVisibilityChecked(is_visible)
+
+                node = parent_group.addLayer(lyr)
+                if node:
+                    node.setExpanded(False)
+                    node.setItemVisibilityChecked(
+                        True if parent_group is not group else is_visible
+                    )
+                added += 1
+
+                if key == "flow" and kind == "raster" and flow_buffer_state != "off":
+                    buffer_state = flow_buffer_state
+                    buffer_path = os.path.join(
+                        out_dir,
+                        analysis_number,
+                        f"{file_base}_buffer_{buffer_state}.tif",
+                    )
+                    try:
+                        buffer_sigma = self._flow_buffer_sigma(color_name, buffer_state)
+                        ok = self._write_flow_buffer_raster(
+                            path, buffer_path, buffer_sigma
+                        )
+                    except Exception as e:
+                        ok = False
+                        buffer_errors.append(f"{label}: {e}")
+                    if not ok:
+                        if not buffer_errors or not buffer_errors[-1].startswith(label):
+                            buffer_errors.append(label)
+                        continue
+
+                    buffer_lyr = QgsRasterLayer(buffer_path, f"{label} buffer")
+                    if not buffer_lyr.isValid():
+                        buffer_errors.append(f"{label}: invalid buffer layer")
+                        continue
+                    self._apply_raster_color(
+                        buffer_lyr, color_name, self._flow_filter_state(color_name)
+                    )
+                    buffer_opacity = self._FLOW_BUFFER_OPACITY[buffer_state]
+                    buffer_lyr.renderer().setOpacity(buffer_opacity)
+                    buffer_lyr.setOpacity(buffer_opacity)
+                    buffer_lyr.triggerRepaint()
+                    buffer_lyr.emitStyleChanged()
+                    proj.addMapLayer(buffer_lyr, False)
+                    buffer_node = parent_group.addLayer(buffer_lyr)
+                    if buffer_node:
+                        buffer_node.setExpanded(False)
+                        buffer_node.setItemVisibilityChecked(True)
+                    added += 1
+        self.lblAnalysisStatus.setVisible(True)
+        if added == 0:
+            root.removeChildNode(group)
+            self.lblAnalysisStatus.setText(f"No output files found for {analysis_number}.")
+        else:
+            msg = f"Exported {added} layer(s) to '{group.name()}'."
+            if buffer_errors:
+                msg += f" Buffer skipped: {len(buffer_errors)}."
+            self.lblAnalysisStatus.setText(msg)
 
     def _run_terrain_analysis(self):
         # ── 解析タイプ選択チェック ──
@@ -4673,6 +5102,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                            "shc", overwrite=True)
             self.progressAnalysis.setValue(15)
             _pe()
+
+            # ── 背景地形（Hillshade / Elevation color relief） ──
+            # 解析対象チェックに関わらず、必ず作成する（Terrain Data タブの
+            # チェックはプレビュー・コントロールの表示/非表示を切り替える
+            # だけで、生成自体のON/OFFではない）。
+            hillshade = ta.compute_hillshade(dem.data, dem.cell_size)
+            p = rw.save_raster(hillshade, dem.gt, dem.crs_wkt, tmp_folder,
+                               "hillshade", overwrite=True)
+            saved.append(("Hillshade (DTM)", p, "raster"))
+            p = rw.save_raster(dem.data.astype(np.float32), dem.gt,
+                               dem.crs_wkt, tmp_folder, "elev_relief",
+                               overwrite=True)
+            saved.append(("Elevation Background", p, "raster"))
 
             if self.chkStability.isChecked() or self.chkValley.isChecked() \
                     or self.chkFlow.isChecked():
@@ -4934,7 +5376,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # saved のパスを新フォルダに更新
         saved = [(label, os.path.join(folder, os.path.basename(p)), kind)
                  for label, p, kind in saved]
-
         # ── 解析完了後処理（コンボ更新・UI表示） ──
         # 解析番号コンボを更新して新番号を選択（解析完了後は最新が当該番号なのでそのまま）
         self._refresh_analysis_combo(select_latest=False)
@@ -4969,6 +5410,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._refresh_layer_combos()
         self._load_settings()                          # QSettings フォールバック
         self._restore_layer_combos_from_project()      # プロジェクト設定を優先
+        self._refresh_analysis_combo(select_latest=False)
         self._update_out_dir_label()
         self.apply_layer_display()
 
@@ -4984,6 +5426,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         s.setValue("dem_path", "" if self._dem_path in _vs_sentinels else self._dem_path)
         s.setValue("dsm_path", "" if self._dsm_path in _vs_sentinels else self._dsm_path)
         s.setValue("flow_buffer_state", self._flow_buffer_state)
+        s.setValue("flow_buffer_state_vtotal", self._flow_buffer_state_vtotal)
 
         # ── レイヤー設定（layer ID） ──
         s.setValue("bg_layer_id",   self.cmbBackgroundLayer.currentData() or "")
@@ -5007,12 +5450,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         s.setValue("opacity_wetland",    self.spinOpacityWetland.value())
         s.setValue("opacity_flow",       self.spinOpacityFlow.value())
         s.setValue("opacity_integrated", self.spinOpacityIntegrated.value())
+        s.setValue("opacity_hillshade",   self.spinOpacityHillshade.value())
+        s.setValue("opacity_elev_relief", self.spinOpacityElevRelief.value())
         s.setValue("filter_state_wetland", self._filter_state.get("wetland", "off"))
         s.setValue("filter_state_flow",    self._filter_state.get("flow", "off"))
+        s.setValue("filter_state_flow_vtotal", self._filter_state_vtotal)
         s.setValue("chk_overwrite",       self.chkOverwrite.isChecked())
         s.setValue("chk_stability",       self.chkStability.isChecked())
         s.setValue("chk_valley",          self.chkValley.isChecked())
         s.setValue("chk_flow",            self.chkFlow.isChecked())
+        s.setValue("chk_gen_hillshade",   self.chkGenHillshade.isChecked())
+        s.setValue("chk_gen_elev_relief", self.chkGenElevRelief.isChecked())
         if self.chkFlowMFD.isChecked():
             s.setValue("flow_method", "mfd")
         elif self.chkFlowDinf.isChecked():
@@ -5198,18 +5646,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         _fb = s.value("flow_buffer_state", "off")
         if _fb in ("off", "weak", "strong"):
             self._flow_buffer_state = _fb
-            _fb_labels = {
-                "off":    "Buffer: Off",
-                "weak":   "Buffer: Low",
-                "strong": "Buffer: High",
-            }
-            self.btnFlowBuffer.setText(_fb_labels[_fb])
-            self.btnFlowBuffer.setStyleSheet(
-                ("font-size:8pt; padding:1px 2px;"
-                 "background:#e07050; color:white; border-radius:2px;")
-                if _fb != "off" else
-                "font-size:8pt; padding:1px 2px;"
-            )
+        _fb_v = s.value("flow_buffer_state_vtotal", "off")
+        if _fb_v in ("off", "weak", "strong"):
+            self._flow_buffer_state_vtotal = _fb_v
+        self._sync_flow_aux_controls()
 
         # ── レイヤー設定 ──
         restore_combo(self.cmbBackgroundLayer, "bg_layer_id")
@@ -5230,15 +5670,23 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.spinOpacityWetland.setValue(   i("opacity_wetland",    70))
         self.spinOpacityFlow.setValue(      i("opacity_flow",       70))
         self.spinOpacityIntegrated.setValue(i("opacity_integrated", 70))
+        self.spinOpacityHillshade.setValue( i("opacity_hillshade",   60))
+        self.spinOpacityElevRelief.setValue(i("opacity_elev_relief", 60))
         for _fkey, _fbtn in (("wetland", self.btnFilterWetland), ("flow", self.btnFilterFlow)):
             _fval = s.value(f"filter_state_{_fkey}", "off")
             if _fval in ("off", "low", "mid"):
                 self._filter_state[_fkey] = _fval
                 _fbtn.setText(_fval)
+        _fv = s.value("filter_state_flow_vtotal", "off")
+        if _fv in ("off", "low", "mid"):
+            self._filter_state_vtotal = _fv
+        self._sync_flow_aux_controls()
         self.chkOverwrite.setChecked(    b("chk_overwrite",   True))
         self.chkStability.setChecked(    b("chk_stability",   True))
         self.chkValley.setChecked(       b("chk_valley",      True))
         self.chkFlow.setChecked(         b("chk_flow",        False))
+        self.chkGenHillshade.setChecked( b("chk_gen_hillshade",   False))
+        self.chkGenElevRelief.setChecked(b("chk_gen_elev_relief", False))
         _flow_method = str(s.value("flow_method", "d8")).lower()
         if _flow_method == "mfd":
             self.chkFlowMFD.setChecked(True)
