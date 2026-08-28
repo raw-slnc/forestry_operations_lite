@@ -1504,6 +1504,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._terrain_cycle_state = {}     # key → int (-1=非表示, 0..N-1=表示中ファイル番号)
         self._filter_state = {"wetland": "off", "flow": "off"}  # off/low/mid
         self._flow_buffer_state = "off"  # off/weak/strong
+        self._filter_state_vtotal = "off"  # Total Flow Vol. 専用 off/low/mid
+        self._flow_buffer_state_vtotal = "off"  # Total Flow Vol. 専用 off/weak/strong
         self._flow_buffer_layer_ids = []  # バッファ滲みレイヤーのID管理
         self._flow_buffer_mem_paths = []  # vsimem パス（解放用）
         self._loaded_terrain_basenames = {}  # key → base_name（フィルタ再適用用）
@@ -1747,6 +1749,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         out_lay.addWidget(self.progressAnalysis)
         lay.addWidget(grpOut)
 
+        # --- エクスポート ---
+        # 選択中の解析番号の全レイヤーを、プラグイン管理グループとは別の
+        # 独立した永続グループとして書き出す。
+        grpExport = QtWidgets.QGroupBox("Export")
+        export_lay = QtWidgets.QVBoxLayout(grpExport)
+        self.btnExport = QtWidgets.QPushButton("Export")
+        export_lay.addWidget(self.btnExport)
+        lay.addWidget(grpExport)
+
         _lbl_credit_a = QtWidgets.QLabel("Developed by Avid Tree Work")
         _lbl_credit_a.setAlignment(Qt.AlignCenter)
         _lbl_credit_a.setStyleSheet("color: #888; font-size: 8pt; padding: 4px 0;")
@@ -1811,6 +1822,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.btnOpenWodmi.clicked.connect(self._on_open_wodmi)
         self.btnVsCancel.clicked.connect(self._on_vs_cancel)
         self.btnRunAnalysis.clicked.connect(self._run_terrain_analysis)
+        self.btnExport.clicked.connect(self._on_export_clicked)
         self.btnStopAnalysis.clicked.connect(self._on_stop_analysis)
         self.chkLoadStability.clicked.connect(lambda: self._cycle_terrain_layer("stability"))
         self.chkLoadValley.clicked.connect(lambda: self._cycle_terrain_layer("valley"))
@@ -2508,8 +2520,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if base_name in {"twi", "flow_peak", "flow_mean", "flow_vtotal"} and filter_mode in ("low", "mid"):
                 n = len(items)
                 if filter_mode == "low":
-                    # 中間ストップを上限の35%に固定
-                    alphas = [0] + [int(255 * 0.35)] * (n - 2) + [255]
+                    # 中間ストップを上限の85%に固定（low は弱めのフィルタ）
+                    alphas = [0] + [int(255 * 0.85)] * (n - 2) + [255]
                 else:  # mid: 下半=0, 上半=線形
                     mid = n // 2
                     upper = n - mid
@@ -2553,18 +2565,73 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         if self.preview_canvas is not None:
             self.preview_canvas.refresh()
 
+    # ── Flow フィルタ/バッファ状態アクセサ ─────────────────────────────
+    # flow_peak / flow_mean は共通状態、flow_vtotal（Total Flow Vol.）のみ
+    # 別トラックの状態を持つ。読み書きは必ずこのアクセサ経由で行う。
+    def _flow_filter_state(self, base_name=None):
+        if base_name == "flow_vtotal":
+            return self._filter_state_vtotal
+        return self._filter_state.get("flow", "off")
+
+    def _set_flow_filter_state(self, base_name, value):
+        if base_name == "flow_vtotal":
+            self._filter_state_vtotal = value
+        else:
+            self._filter_state["flow"] = value
+
+    def _flow_buffer_state_for_base(self, base_name=None):
+        if base_name == "flow_vtotal":
+            return self._flow_buffer_state_vtotal
+        return self._flow_buffer_state
+
+    def _set_flow_buffer_state_for_base(self, base_name, value):
+        if base_name == "flow_vtotal":
+            self._flow_buffer_state_vtotal = value
+        else:
+            self._flow_buffer_state = value
+
+    def _set_flow_buffer_button_state(self, state):
+        labels = {
+            "off":    "Buffer: Off",
+            "weak":   "Buffer: Low",
+            "strong": "Buffer: High",
+        }
+        self.btnFlowBuffer.setText(labels.get(state, labels["off"]))
+        active = state != "off"
+        self.btnFlowBuffer.setStyleSheet(
+            ("font-size:8pt; padding:1px 2px;"
+             "background:#e07050; color:white; border-radius:2px;")
+            if active else
+            "font-size:8pt; padding:1px 2px;"
+        )
+
+    def _sync_flow_aux_controls(self):
+        """現在表示中の flow ベースに対応するフィルタ/バッファ状態を
+        Filter/Buffer ボタンの表示へ反映する。"""
+        base_name = self._loaded_terrain_basenames.get("flow")
+        self.btnFilterFlow.setText(self._flow_filter_state(base_name))
+        self._set_flow_buffer_button_state(
+            self._flow_buffer_state_for_base(base_name)
+        )
+
     def _toggle_filter(self, key):
         """湿潤地形/流量推測の低値透過フィルタを off→low→mid→off と循環する。"""
         states = ["off", "low", "mid"]
-        current = self._filter_state.get(key, "off")
+        base_name = self._loaded_terrain_basenames.get(key)
+        if key == "flow":
+            current = self._flow_filter_state(base_name)
+        else:
+            current = self._filter_state.get(key, "off")
         next_state = states[(states.index(current) + 1) % len(states)]
-        self._filter_state[key] = next_state
+        if key == "flow":
+            self._set_flow_filter_state(base_name, next_state)
+        else:
+            self._filter_state[key] = next_state
 
         btn = self.btnFilterWetland if key == "wetland" else self.btnFilterFlow
         btn.setText(next_state)
 
         # 表示中のラスタレイヤへ即時再適用
-        base_name = self._loaded_terrain_basenames.get(key)
         if base_name is None:
             return
         proj = QgsProject.instance()
@@ -2576,12 +2643,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self._apply_raster_color(lyr, base_name, next_state)
             lyr.renderer().setOpacity(opacity)
             lyr.triggerRepaint()
+        if key == "flow" and self._flow_buffer_state_for_base(base_name) != "off":
+            self._apply_flow_buffer()
         if self.preview_canvas is not None:
             self.preview_canvas.refresh()
 
-    # バッファ強度ごとのブラー半径（ピクセル）
-    _FLOW_BUFFER_SIGMA  = {"weak": 2, "strong": 3}   # Gaussian sigma（ピクセル）
-    _FLOW_BUFFER_OPACITY = {"weak": 0.45, "strong": 0.65}  # 滲みレイヤーの透過率
+    # バッファ強度ごとのブラー半径（ピクセル）。滲みレイヤーはノーフィルタで
+    # 本体の下から染み出すため、控えめな sigma でも視認できる。全 flow ベース
+    # 共通（Mean/Total の専用 override は廃止。4.x の vtotal 特例も持ち込まない）。
+    _FLOW_BUFFER_SIGMA  = {"weak": 1.5, "strong": 2.5}   # Gaussian sigma（ピクセル）
+    _FLOW_BUFFER_OPACITY = {"weak": 0.30, "strong": 0.45}  # 滲みレイヤーの不透明度
+
+    @classmethod
+    def _flow_buffer_sigma(cls, base_name, state):
+        return cls._FLOW_BUFFER_SIGMA[state]
 
     def _on_terrain_toggle(self, checked: bool):
         """解析データ表示トグル: ON=表示・OFF=非表示（個別設定は保持）。"""
@@ -2591,22 +2666,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def _cycle_flow_buffer(self):
         """流量レイヤーのバッファ（滲み）表現を off→弱→強→off と循環する。"""
         states = ["off", "weak", "strong"]
-        labels = {
-            "off":    "Buffer: Off",
-            "weak":   "Buffer: Low",
-            "strong": "Buffer: High",
-        }
-        cur = self._flow_buffer_state
+        base_name = self._loaded_terrain_basenames.get("flow")
+        cur = self._flow_buffer_state_for_base(base_name)
         nxt = states[(states.index(cur) + 1) % len(states)]
-        self._flow_buffer_state = nxt
-        self.btnFlowBuffer.setText(labels[nxt])
-        active = nxt != "off"
-        self.btnFlowBuffer.setStyleSheet(
-            ("font-size:8pt; padding:1px 2px;"
-             "background:#e07050; color:white; border-radius:2px;")
-            if active else
-            "font-size:8pt; padding:1px 2px;"
-        )
+        self._set_flow_buffer_state_for_base(base_name, nxt)
+        self._set_flow_buffer_button_state(nxt)
         self._apply_flow_buffer()
 
     def _apply_flow_buffer(self):
@@ -2629,18 +2693,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             _gdal.Unlink(mp)
         self._flow_buffer_mem_paths = []
 
-        state = self._flow_buffer_state
+        base_name = self._loaded_terrain_basenames.get("flow")
+        state = self._flow_buffer_state_for_base(base_name)
         if state == "off":
             self._refresh_preview_canvas()
             return
 
-        sigma   = self._FLOW_BUFFER_SIGMA[state]
         opacity = self._FLOW_BUFFER_OPACITY[state]
 
         for lid in self._loaded_terrain_layers.get("flow", []):
             lyr = proj.mapLayer(lid)
             if lyr is None or lyr.type() != lyr.RasterLayer:
                 continue
+            sigma = self._flow_buffer_sigma(base_name, state)
             src_path = lyr.source()
             ds = gdal.Open(src_path)
             if ds is None:
@@ -2680,10 +2745,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if not blur_lyr.isValid():
                 continue
 
-            base_name = self._loaded_terrain_basenames.get("flow")
+            # 滲みレイヤーにはフィルタ（低値透過）をかけない。生の高位を
+            # そのままぼかして本体レイヤーの下から染み出させることで、
+            # 本体フィルタが off でも「バッファをかけた」効果が出る。
             if base_name:
-                self._apply_raster_color(blur_lyr, base_name,
-                                         self._filter_state.get("flow", "off"))
+                self._apply_raster_color(blur_lyr, base_name, "off")
             blur_lyr.renderer().setOpacity(opacity)
             proj.addMapLayer(blur_lyr, False)
 
@@ -2926,7 +2992,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         if lyr.isValid():
             opacity = self._opacity_spinbox(key).value() / 100.0
             if kind == "raster":
-                filter_mode = self._filter_state.get(key, "off")
+                filter_mode = (
+                    self._flow_filter_state(base_name)
+                    if key == "flow" else self._filter_state.get(key, "off")
+                )
                 self._apply_raster_color(lyr, base_name, filter_mode)
                 self._loaded_terrain_basenames[key] = base_name
                 lyr.renderer().setOpacity(opacity)
@@ -2943,8 +3012,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self._zoom_preview_to_analysis_extent_if_available()
             status = f"Showing {label} ({next_state + 1}/{n})." if n > 1 else f"Showing {label}."
             self.lblLoadStatus.setText(status)
-            # 流量レイヤー切替後にバッファ状態を引き継ぐ
-            if key == "flow" and self._flow_buffer_state != "off":
+            # 流量レイヤー切替後: 表示中ベースのフィルタ/バッファ設定を
+            # ボタンへ反映し、バッファを再適用（off なら旧バッファ層を除去）。
+            if key == "flow":
+                self._sync_flow_aux_controls()
                 self._apply_flow_buffer()
         else:
             self.lblLoadStatus.setText(f"Load error: {label}")
@@ -4313,6 +4384,80 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._vs_wodmi_opened = True
         self._update_vs_export_buttons()
 
+    def _on_export_clicked(self):
+        """選択中の解析番号の全レイヤー（現在表示中かどうかを問わない）を、
+        プラグイン管理下（_GROUP_PROP付きグループ）から独立した永続グループ
+        として書き出す。解析の切替やプラグイン終了で消えない、プラグインを
+        開かずに書類作成等で参照できる実レイヤーにするためのもの。"""
+        analysis_number = self.cmbAnalysisNumber.currentData()
+        if not analysis_number:
+            self.lblAnalysisStatus.setVisible(True)
+            self.lblAnalysisStatus.setText("Select an analysis run to export.")
+            return
+        out_dir = self._terrain_output_dir()
+        proj = QgsProject.instance()
+        root = proj.layerTreeRoot()
+        # キーごとに現在表示中のレイヤー名を集めておき、エクスポート先の
+        # 表示ON/OFFへ引き継ぐ（integrated等、キー内に複数ファイルが
+        # あるものは「今表示中の1件」だけがONの対象になる）。
+        visible_labels = {}
+        for key, ids in self._loaded_terrain_layers.items():
+            for lid in ids:
+                lyr0 = proj.mapLayer(lid)
+                if lyr0 is not None:
+                    visible_labels.setdefault(key, set()).add(lyr0.name())
+        group_name = f"Forestry Operations Lite - {analysis_number}"
+        # 同じ解析番号を再エクスポートしても前回分は消さない（重複エクスポートは許容する）。
+        group = root.insertGroup(0, group_name)
+        group.setExpanded(False)
+        added = 0
+        for key, patterns in self._TERRAIN_PATTERNS.items():
+            for pat in patterns:
+                color_name, label, kind, ext = pat[0], pat[1], pat[2], pat[3]
+                file_base = pat[4] if len(pat) > 4 else color_name
+                path = os.path.join(out_dir, analysis_number, f"{file_base}{ext}")
+                if not os.path.exists(path):
+                    continue
+                lyr = (QgsRasterLayer(path, label) if kind == "raster"
+                       else QgsVectorLayer(path, label, "ogr"))
+                if not lyr.isValid():
+                    continue
+                opacity = self._opacity_spinbox(key).value() / 100.0
+                if kind == "raster":
+                    filter_mode = (
+                        self._flow_filter_state(color_name)
+                        if key == "flow" else self._filter_state.get(key, "off")
+                    )
+                    try:
+                        self._apply_raster_color(lyr, color_name, filter_mode)
+                    except Exception:  # nosec B110
+                        pass
+                    if lyr.renderer() is not None:
+                        lyr.renderer().setOpacity(opacity)
+                    lyr.setOpacity(opacity)
+                else:
+                    try:
+                        self._apply_vector_style(lyr, color_name)
+                    except Exception:  # nosec B110
+                        pass
+                    lyr.setOpacity(opacity)
+                lyr.triggerRepaint()
+                lyr.emitStyleChanged()
+                proj.addMapLayer(lyr, False)
+                is_visible = label in visible_labels.get(key, set())
+                node = group.addLayer(lyr)
+                if node:
+                    node.setExpanded(False)
+                    node.setItemVisibilityChecked(is_visible)
+                added += 1
+        self.lblAnalysisStatus.setVisible(True)
+        if added == 0:
+            root.removeChildNode(group)
+            self.lblAnalysisStatus.setText(f"No output files found for {analysis_number}.")
+        else:
+            self.lblAnalysisStatus.setText(
+                f"Exported {added} layer(s) to '{group.name()}'.")
+
     def _run_terrain_analysis(self):
         # ── 解析タイプ選択チェック ──
         if not any([
@@ -4872,6 +5017,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         s.setValue("dem_path", "" if self._dem_path in _vs_sentinels else self._dem_path)
         s.setValue("dsm_path", "" if self._dsm_path in _vs_sentinels else self._dsm_path)
         s.setValue("flow_buffer_state", self._flow_buffer_state)
+        s.setValue("flow_buffer_state_vtotal", self._flow_buffer_state_vtotal)
 
         # ── レイヤー設定（layer ID） ──
         s.setValue("bg_layer_id",   self.cmbBackgroundLayer.currentData() or "")
@@ -4897,6 +5043,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         s.setValue("opacity_integrated", self.spinOpacityIntegrated.value())
         s.setValue("filter_state_wetland", self._filter_state.get("wetland", "off"))
         s.setValue("filter_state_flow",    self._filter_state.get("flow", "off"))
+        s.setValue("filter_state_flow_vtotal", self._filter_state_vtotal)
         s.setValue("chk_overwrite",       self.chkOverwrite.isChecked())
         s.setValue("chk_stability",       self.chkStability.isChecked())
         s.setValue("chk_valley",          self.chkValley.isChecked())
@@ -5086,18 +5233,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         _fb = s.value("flow_buffer_state", "off")
         if _fb in ("off", "weak", "strong"):
             self._flow_buffer_state = _fb
-            _fb_labels = {
-                "off":    "Buffer: Off",
-                "weak":   "Buffer: Low",
-                "strong": "Buffer: High",
-            }
-            self.btnFlowBuffer.setText(_fb_labels[_fb])
-            self.btnFlowBuffer.setStyleSheet(
-                ("font-size:8pt; padding:1px 2px;"
-                 "background:#e07050; color:white; border-radius:2px;")
-                if _fb != "off" else
-                "font-size:8pt; padding:1px 2px;"
-            )
+        _fb_v = s.value("flow_buffer_state_vtotal", "off")
+        if _fb_v in ("off", "weak", "strong"):
+            self._flow_buffer_state_vtotal = _fb_v
+        self._sync_flow_aux_controls()
 
         # ── レイヤー設定 ──
         restore_combo(self.cmbBackgroundLayer, "bg_layer_id")
@@ -5123,6 +5262,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if _fval in ("off", "low", "mid"):
                 self._filter_state[_fkey] = _fval
                 _fbtn.setText(_fval)
+        _fv = s.value("filter_state_flow_vtotal", "off")
+        if _fv in ("off", "low", "mid"):
+            self._filter_state_vtotal = _fv
+        self._sync_flow_aux_controls()
         self.chkOverwrite.setChecked(    b("chk_overwrite",   True))
         self.chkStability.setChecked(    b("chk_stability",   True))
         self.chkValley.setChecked(       b("chk_valley",      True))
