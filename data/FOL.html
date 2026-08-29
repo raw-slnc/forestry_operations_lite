@@ -401,6 +401,21 @@ Peak / Mean only (disabled for Time load).</p>
 <h3>Integrated Risk</h3>
 <p>An additive risk index (0–6) combining FS, TWI, and peak load.
 Extracts areas where multiple hazard factors overlap as "high-priority" polygons.</p>
+
+<h3>Export Analysis Layers</h3>
+<p>The <strong>Export</strong> button (Analysis panel) writes every output layer of the
+selected analysis run into a standalone group named
+<code>Forestry Operations Lite - &lt;run&gt;</code>, separate from the plugin-managed
+group. These layers persist through run switching and closing the plugin, so they can
+be referenced for reporting without opening the plugin. The current Filter and opacity
+are applied, and the styling is saved as a <code>.qml</code> sidecar next to each data
+file — so the colour scheme follows the raw <code>.tif</code> / <code>.gpkg</code> into
+another project, PC, or GIS. The low-value Filter is part of the renderer and is
+reproduced; the Buffer bleed is a separate layer and is <em>not</em> exported. Which
+layers are checked on mirrors what is currently displayed (for a key with several
+files, only the one currently shown). Re-exporting the same run keeps the previous
+export (duplicates are allowed). An overwrite run replaces the run folder and removes
+the written <code>.qml</code> files — re-export to regenerate them.</p>
 </div>
 
 <hr>
@@ -691,6 +706,18 @@ Peak / Mean のみ有効（Time load では無効）。</p>
 <h3>総合リスク</h3>
 <p>FS・TWI・Peak load を統合した加算型リスク指標（0〜6）。
 複数の危険因子が重なる箇所を「重点箇所」ポリゴンで抽出。</p>
+
+<h3>解析レイヤーのエクスポート</h3>
+<p>Analysis パネルの <strong>Export</strong> ボタンで、選択中の解析番号の全出力レイヤーを
+<code>Forestry Operations Lite - &lt;番号&gt;</code> という独立グループ（プラグイン管理グループ
+とは別）へ書き出します。解析番号の切替やプラグイン終了で消えず、プラグインを開かずに書類作成等
+で参照できます。現在の Filter と不透明度が適用され、スタイルは各データファイルの隣に
+<code>.qml</code> サイドカーとして保存されるため、生の <code>.tif</code> / <code>.gpkg</code>
+を別プロジェクト・別 PC・他 GIS で開いても配色が付いてきます。低値透過 Filter はレンダラーに
+含まれるので再現され、Buffer の滲みは別レイヤーのため<em>エクスポートされません</em>。チェックが
+入るレイヤーは現在表示中のものに一致します（1キーに複数ファイルがある場合は表示中の1件のみ）。
+同じ番号を再エクスポートしても前回分は残ります（重複可）。上書き解析は解析番号フォルダごと
+差し替わるため書き出した <code>.qml</code> も消えます — 再エクスポートで作り直してください。</p>
 </div>
 
 <hr>

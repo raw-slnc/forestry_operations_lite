@@ -2685,6 +2685,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         shader_func = QgsColorRampShader()
         shader_func.setColorRampType(QgsColorRampShader.Interpolated)
+        # 分類モードを明示（未設定だとプロパティの Mode 欄が不定になる）
+        if hasattr(shader_func, "setClassificationMode"):
+            shader_func.setClassificationMode(QgsColorRampShader.Continuous)
         shader_func.setColorRampItemList(items)
         shader_func.setMinimumValue(items[0].value)
         shader_func.setMaximumValue(items[-1].value)
@@ -2693,6 +2696,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         raster_shader.setRasterShaderFunction(shader_func)
 
         renderer = QgsSingleBandPseudoColorRenderer(lyr.dataProvider(), 1, raster_shader)
+        # renderer 自身の classification min/max も設定する。未設定だと NaN の
+        # ままで、レイヤープロパティのシンボロジタブが Min/Max 欄を空で開き、
+        # そのまま OK を押すとランプが再生成されて真っ黒になる。
+        renderer.setClassificationMin(items[0].value)
+        renderer.setClassificationMax(items[-1].value)
         lyr.setRenderer(renderer)
         # triggerRepaint は呼び出し元が管理する（レイヤ追加前に呼ぶと無駄な描画になるため）
 
@@ -4653,7 +4661,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         group = root.insertGroup(0, group_name)
         group.setExpanded(False)
         added = 0
-        for key, patterns in self._TERRAIN_PATTERNS.items():
+        style_fail = 0
+        # プレビュー/ツリー/メインと同じ _KEY_RANK 降順（flow が最前面）で
+        # 追加する。group.addLayer() は末尾（＝下）に足すので、高ランクから
+        # 順に追加すると上から flow → … → stability の並びになる。
+        for key in sorted(self._TERRAIN_PATTERNS,
+                          key=lambda k: self._KEY_RANK.get(k, 0), reverse=True):
+            patterns = self._TERRAIN_PATTERNS[key]
             for pat in patterns:
                 color_name, label, kind, ext = pat[0], pat[1], pat[2], pat[3]
                 file_base = pat[4] if len(pat) > 4 else color_name
@@ -4685,6 +4699,18 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     lyr.setOpacity(opacity)
                 lyr.triggerRepaint()
                 lyr.emitStyleChanged()
+                # 適用済みスタイルを .qml サイドカーへ保存。プロジェクトを
+                # またいでも（他PC・他ソフト・プラグイン未使用）生ファイルに
+                # 配色が付いてくる。低値透過フィルターはレンダラーに含まれる
+                # ため再現される。Flow Buffer は別レイヤー（別データ）なので
+                # 対象外 — エクスポートにも含めない方針。
+                try:
+                    _qml = os.path.splitext(path)[0] + ".qml"
+                    _msg, _ok = lyr.saveNamedStyle(_qml)
+                    if not _ok:
+                        style_fail += 1
+                except Exception:  # nosec B110
+                    style_fail += 1
                 proj.addMapLayer(lyr, False)
                 is_visible = label in visible_labels.get(key, set())
                 node = group.addLayer(lyr)
@@ -4697,8 +4723,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             root.removeChildNode(group)
             self.lblAnalysisStatus.setText(f"No output files found for {analysis_number}.")
         else:
-            self.lblAnalysisStatus.setText(
-                f"Exported {added} layer(s) to '{group.name()}'.")
+            _msg = f"Exported {added} layer(s) to '{group.name()}'."
+            if style_fail:
+                _msg += f" ({style_fail} style file(s) not written.)"
+            self.lblAnalysisStatus.setText(_msg)
 
     def _run_terrain_analysis(self):
         # ── 解析タイプ選択チェック ──
@@ -4821,7 +4849,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 ):
                     try:
                         _uri = _getter()
-                    except Exception:  # nosec B110
+                    except Exception:  # nosec B112
                         continue
                     if _uri:
                         _uris.append(str(_uri))
@@ -4832,7 +4860,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     for _uri in list(_uris):
                         try:
                             _decoded = _metadata.decodeUri(_uri)
-                        except Exception:  # nosec B110
+                        except Exception:  # nosec B112
                             continue
                         if isinstance(_decoded, dict):
                             for _key in ("path", "filename", "database", "dbname"):
@@ -4869,7 +4897,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 for _provider_key in ("ogr", "gdal"):
                     try:
                         _metadata = _registry.providerMetadata(_provider_key)
-                    except Exception:  # nosec B110
+                    except Exception:  # nosec B112
                         continue
                     if _metadata is None:
                         continue
@@ -4878,7 +4906,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                         continue
                     try:
                         _conns = _metadata.connections(False)
-                    except Exception:  # nosec B110
+                    except Exception:  # nosec B112
                         continue
                     if not _conns:
                         continue
