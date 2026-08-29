@@ -993,6 +993,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         self._syncing = False
         self._initializing = True     # 起動完了まで preview→main 同期をブロック
+        # tc（Time load）専用のフィルタ/バッファ状態は _load_settings より前に
+        # 参照され得るのでここで最初に初期化しておく。
+        self._filter_state_tc = "off"
+        self._flow_buffer_state_tc = "off"
         self._elev_tile_cache = {}    # {(url_template, zoom, x, y): QImage}
         self._map_locked = False          # 地図ロック状態
         self._lock_analysis_extent = None # ロック時の解析範囲（QgsRectangle）
@@ -1504,8 +1508,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._terrain_cycle_state = {}     # key → int (-1=非表示, 0..N-1=表示中ファイル番号)
         self._filter_state = {"wetland": "off", "flow": "off"}  # off/low/mid
         self._flow_buffer_state = "off"  # off/weak/strong
-        self._filter_state_vtotal = "off"  # Total Flow Vol. 専用 off/low/mid
-        self._flow_buffer_state_vtotal = "off"  # Total Flow Vol. 専用 off/weak/strong
+        self._filter_state_tc = "off"  # Time load (tc) 専用 off/low/mid
+        self._flow_buffer_state_tc = "off"  # Time load 用バッファ off/weak/strong
         self._flow_buffer_layer_ids = []  # バッファ滲みレイヤーのID管理
         self._flow_buffer_mem_paths = []  # vsimem パス（解放用）
         self._loaded_terrain_basenames = {}  # key → base_name（フィルタ再適用用）
@@ -1619,16 +1623,29 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         pf_lay.setColumnStretch(0, 1)
         self.spinRainfall = QtWidgets.QDoubleSpinBox()
         self.spinRainfall.setRange(1, 500); self.spinRainfall.setValue(50); self.spinRainfall.setSuffix(" mm/h")
-        self.spinRainfall.setToolTip("Peak rainfall intensity i_peak (used for Qp calculation)")
+        self.spinRainfall.setToolTip(
+            "Peak rainfall intensity i_peak [mm/h] for the design storm.\n"
+            "Must be >= total / duration (mean intensity); lower values are clamped.")
         self.spinRunoff   = QtWidgets.QDoubleSpinBox()
         self.spinRunoff.setRange(0.1, 1.0); self.spinRunoff.setValue(0.8); self.spinRunoff.setSingleStep(0.05)
         self.spinRunoff.setToolTip("Runoff coefficient C")
         self.spinTotalRainfall = QtWidgets.QDoubleSpinBox()
         self.spinTotalRainfall.setRange(1, 2000); self.spinTotalRainfall.setValue(100); self.spinTotalRainfall.setSuffix(" mm")
-        self.spinTotalRainfall.setToolTip("Total rainfall for period (used for Qm/V calculation)")
+        self.spinTotalRainfall.setToolTip(
+            "Total rainfall depth for the event [mm]. Sets the design storm volume\n"
+            "(Mean load, and internal Total volume).")
         self.spinDuration = QtWidgets.QDoubleSpinBox()
         self.spinDuration.setRange(0.5, 72); self.spinDuration.setValue(6.0); self.spinDuration.setSuffix(" h"); self.spinDuration.setSingleStep(0.5)
-        self.spinDuration.setToolTip("Rainfall duration T (reference time vs Tc)")
+        self.spinDuration.setToolTip(
+            "Storm duration [h]. Drives the design hyetograph and the time-area\n"
+            "convolution (Clark unit hydrograph).")
+        # 3値の受付範囲を相互整合で動的更新（peak >= total / duration）
+        self.spinRainfall.valueChanged.connect(
+            lambda _v: self._sync_rain_bounds("peak"))
+        self.spinTotalRainfall.valueChanged.connect(
+            lambda _v: self._sync_rain_bounds("total"))
+        self.spinDuration.valueChanged.connect(
+            lambda _v: self._sync_rain_bounds("duration"))
         self.spinVelocityCoef = QtWidgets.QDoubleSpinBox()
         self.spinVelocityCoef.setRange(0.01, 5.0); self.spinVelocityCoef.setValue(0.3)
         self.spinVelocityCoef.setSingleStep(0.05); self.spinVelocityCoef.setDecimals(2)
@@ -1641,6 +1658,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             ("Duration T",          self.spinDuration,      "Rainfall duration vs. Tc  0.5–72 h"),
             (self._lbl_vel_coef,    self.spinVelocityCoef,  "Forest 0.3, grass 0.6, pavement 1.5  (0.01–5.0 m/s)"),
         ]
+        self._rain_hint = {}   # spinbox -> 動的更新するグレーの注記ラベル
         for i, (en, w, hint) in enumerate(_pf_defs):
             row = i * 2
             ql = en if isinstance(en, QtWidgets.QLabel) else QtWidgets.QLabel(en)
@@ -1649,6 +1667,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             _hl = QtWidgets.QLabel(hint)
             _hl.setStyleSheet("color:#888;font-size:8pt;margin-bottom:10px;")
             pf_lay.addWidget(_hl, row + 1, 0, 1, 2)
+            if w in (self.spinRainfall, self.spinTotalRainfall, self.spinDuration):
+                self._rain_hint[w] = _hl
+        self._sync_rain_bounds("peak")   # 初期の受付範囲・注記を反映
         pf_lay.setRowStretch(len(_pf_defs) * 2, 1)
 
         # --- パラメータ タブ ---
@@ -1810,6 +1831,66 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         has_tabs = self.tabParams.count() > 0
         self.tabParams.setVisible(has_tabs)
         self.grpParamPlaceholder.setVisible(not has_tabs)
+
+    def _flash_widget(self, w):
+        """入力欄の背景を短く点滅させて「制約で丸められた」ことを知らせる。"""
+        from qgis.PyQt.QtCore import QTimer
+        base = getattr(w, "_flash_base_ss", None)
+        if base is None:
+            base = w.styleSheet()
+            w._flash_base_ss = base
+        seq = ["background:#ffcf5c;", "background:#fff0c4;",
+               "background:#ffcf5c;", base]
+        for i, ss in enumerate(seq):
+            QTimer.singleShot(i * 190, lambda s=ss: w.setStyleSheet(s))
+
+    def _sync_rain_bounds(self, which):
+        """i_peak / total / duration の受付範囲を相互整合で動的更新する（モデル II）。
+
+        物理制約: i_peak >= total / duration。これを 3 欄それぞれの min/max
+        （他2値から算出）に落とし込む。範囲外の入力は Qt 側で最も近い有効値へ
+        丸められる。編集した欄が制約由来の限界に張り付いたら背景を点滅させ、
+        各欄下の注記に現在の有効範囲をライブ表示する。他の2欄は動かさない。
+        """
+        if getattr(self, "_rain_bounds_busy", False):
+            return
+        self._rain_bounds_busy = True
+        try:
+            IP, TOT, DUR = (1.0, 500.0), (1.0, 2000.0), (0.5, 72.0)
+            ip = self.spinRainfall.value()
+            tot = self.spinTotalRainfall.value()
+            dur = self.spinDuration.value()
+
+            specs = [
+                (self.spinRainfall, "peak", IP,
+                 min(max(IP[0], tot / max(dur, DUR[0])), IP[1]), IP[1],
+                 ">= total/duration", "mm/h"),
+                (self.spinTotalRainfall, "total", TOT,
+                 TOT[0], max(min(TOT[1], ip * max(dur, DUR[0])), TOT[0]),
+                 "<= i_peak x duration", "mm"),
+                (self.spinDuration, "duration", DUR,
+                 min(max(DUR[0], tot / max(ip, IP[0])), DUR[1]), DUR[1],
+                 ">= total/i_peak", "h"),
+            ]
+            for sb, key, hard, lo, hi, rule, unit in specs:
+                with QSignalBlocker(sb):
+                    sb.setRange(lo, hi)
+                hl = self._rain_hint.get(sb)
+                if hl is not None:
+                    hl.setText(
+                        '<span style="color:#888;">{}</span>&nbsp;&nbsp;'
+                        '<span style="color:#d9822b;">{:g}-{:g} {}</span>'.format(
+                            rule, sb.minimum(), sb.maximum(), unit))
+                if key == which and not getattr(self, "_initializing", False):
+                    v = sb.value()
+                    at_dyn_min = (sb.minimum() > hard[0] + 1e-9
+                                  and abs(v - sb.minimum()) < 1e-6)
+                    at_dyn_max = (sb.maximum() < hard[1] - 1e-9
+                                  and abs(v - sb.maximum()) < 1e-6)
+                    if at_dyn_min or at_dyn_max:
+                        self._flash_widget(sb)
+        finally:
+            self._rain_bounds_busy = False
 
     def _connect_extended_signals(self):
         self.btnRefreshLayerList.clicked.connect(self._refresh_layer_combos)
@@ -2207,20 +2288,21 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         proj = QgsProject.instance()
         terrain_lyrs = []
         if getattr(self, "_terrain_layers_visible", True):
-            flow_lids = set(getattr(self, "_loaded_terrain_layers", {}).get("flow", []))
-            flow_buf_added = False
-            for key, ids in getattr(self, "_loaded_terrain_layers", {}).items():
-                for lid in ids:
+            # ツリーと同じく _KEY_RANK 降順（flow が最前面）で積む。
+            # dict の挿入順（＝ボタン押下順）だとプレビューの重なりが安定しない。
+            loaded = getattr(self, "_loaded_terrain_layers", {})
+            for key in sorted(loaded, key=lambda k: self._KEY_RANK.get(k, 0),
+                              reverse=True):
+                for lid in loaded.get(key, []):
                     lyr = proj.mapLayer(lid)
                     if lyr is not None and lyr.isValid():
                         terrain_lyrs.append(lyr)
-                    # flowレイヤーの直後にバッファ滲みレイヤーを挿入
-                    if lid in flow_lids and not flow_buf_added:
-                        for blid in getattr(self, "_flow_buffer_layer_ids", []):
-                            blyr = proj.mapLayer(blid)
-                            if blyr is not None and blyr.isValid():
-                                terrain_lyrs.append(blyr)
-                        flow_buf_added = True
+                # flow レイヤーの直後にバッファ滲みレイヤーを挿入
+                if key == "flow":
+                    for blid in getattr(self, "_flow_buffer_layer_ids", []):
+                        blyr = proj.mapLayer(blid)
+                        if blyr is not None and blyr.isValid():
+                            terrain_lyrs.append(blyr)
         # Top -> bottom order: terrain raster > gpkg > tile > bg
         layer_stack = []
         for lyr in terrain_lyrs + [gpkg, tile, bg]:
@@ -2405,14 +2487,43 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             symbol.setColor(QColor(200, 0, 0, 160))
         lyr.triggerRepaint()
 
+    @staticmethod
+    def _notify_layer_style_changed(lyr):
+        """Renderer changes made before adding a layer still need an explicit update."""
+        if lyr is None:
+            return
+        try:
+            lyr.triggerRepaint()
+        except Exception:  # nosec B110
+            pass
+        try:
+            lyr.emitStyleChanged()
+        except Exception:  # nosec B110
+            pass
+
+    def _refresh_render_canvases(self):
+        for canvas in (
+            getattr(self, "preview_canvas", None),
+            self.iface.mapCanvas() if self.iface is not None else None,
+        ):
+            if canvas is None:
+                continue
+            try:
+                if hasattr(canvas, "clearCache"):
+                    canvas.clearCache()
+                canvas.refresh()
+            except Exception:  # nosec B110
+                pass
+
     # 低値透過フィルタ対象キー（twi, 流量系）
-    _FILTER_KEYS = {"twi", "flow_peak", "flow_mean", "flow_vtotal"}
+    _FILTER_KEYS = {"twi", "flow_peak", "flow_mean", "tc"}
 
     @staticmethod
     def _apply_raster_color(lyr, base_name, filter_mode="off"):
         """base_name ごとに目的別カラーランプを設定。
         固定値型: FS・統合リスクなど物理的意味のある値を使用。
         動的型: 実データの min/max に合わせてスケール（流量は対数スケール）。
+        "range" 付きは絶対値スケール（データに依らず固定レンジ）。
         filter_mode: 'off'=フラット, 'low'=低値透明線形, 'mid'=下半透明→上半線形"""
         import math
         from qgis.PyQt.QtGui import QColor
@@ -2441,12 +2552,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # 動的型: (QColor, label) のみ。値は実データ range に合わせて自動生成。
         # log=True のものは対数スケール（流量など分布が裾の長いデータ向け）。
         DYNAMIC = {
+            # Time load (Tc): 源頭≈0・幹川で立ち上がり出口で最大の右に裾長い場。
+            # 対数 + 小 floor で低い側を開き、外れ値は mean+3σ で頭打ち(robust)。
             "tc": {
-                "log": False,
+                "log": True,
+                "floor": 0.02,
+                "robust": True,
                 "colors": [
-                    (QColor(255, 255, 220), "Short (near outlet)"),
-                    (QColor(180, 210, 140), "Mid"),
-                    (QColor( 50, 120,  50), "Long (near summit)"),
+                    (QColor(255, 255, 220), "Short (headwater)"),
+                    (QColor(150, 200, 130), "Mid"),
+                    (QColor( 30, 100,  40), "Long (basin outlet)"),
                 ],
             },
             "twi": {
@@ -2457,6 +2572,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     (QColor(  0,  50, 180), "High"),
                 ],
             },
+            # Peak/Mean 負荷は絶対値スケール（"range" 固定）。両者で同一レンジ
+            # にして、色 = 実流量 [m³/s] を保ち Peak と Mean を見比べられる。
+            # Peak/Mean 負荷は log スケール。レンジは両レイヤー共通の
+            # データ実測 min/max（下の共有レンジ計算で "range" を注入）。
             "flow_peak": {
                 "log": True,
                 "colors": [
@@ -2473,27 +2592,47 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     (QColor(170,  50,   0), "High"),
                 ],
             },
-            "flow_vtotal": {
-                "log": True,
-                "colors": [
-                    (QColor(255, 228, 232), "Low"),
-                    (QColor(210,  50,  80), "Mid"),
-                    (QColor(130,   0,  45), "High"),
-                ],
-            },
         }
 
         # サンプル数を制限して高速化（全ピクセルスキャンは大規模ラスターで数秒かかる）
         from qgis.core import QgsRasterBandStats
         stats = lyr.dataProvider().bandStatistics(
             1,
-            QgsRasterBandStats.Min | QgsRasterBandStats.Max,
+            QgsRasterBandStats.Min | QgsRasterBandStats.Max
+            | QgsRasterBandStats.Mean | QgsRasterBandStats.StdDev,
             lyr.extent(),
             250_000,
         )
         vmin, vmax = stats.minimumValue, stats.maximumValue
+        vmean, vstd = stats.mean, stats.stdDev
         if vmin >= vmax:
             return
+
+        # Peak/Mean 負荷: 同フォルダの相方ラスターと min/max を共有し、
+        # 同一スケールで塗る（絶対値比較を保ちつつ実データ範囲に合わせる）。
+        if base_name in ("flow_peak", "flow_mean"):
+            lo, hi = vmin, vmax
+            _src = lyr.source().split("|")[0]
+            _sib = os.path.join(
+                os.path.dirname(_src),
+                "flow_mean.tif" if base_name == "flow_peak" else "flow_peak.tif")
+            if os.path.exists(_sib):
+                from qgis.core import QgsRasterLayer as _QRL
+                _sl = _QRL(_sib, "sib")
+                try:
+                    if _sl.isValid():
+                        _ss = _sl.dataProvider().bandStatistics(
+                            1, QgsRasterBandStats.Min | QgsRasterBandStats.Max,
+                            _sl.extent(), 250_000)
+                        lo = min(lo, _ss.minimumValue)
+                        hi = max(hi, _ss.maximumValue)
+                finally:
+                    # プロジェクト未追加の一時レイヤー。GDAL ハンドルを
+                    # 即手放す（Windows で相方 .tif がロック扱いにならない
+                    # よう明示破棄）。
+                    _sl = None
+                    del _sl
+            DYNAMIC[base_name]["range"] = (max(lo, 1e-6), hi)
 
         if base_name in FIXED:
             items = [
@@ -2504,20 +2643,27 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             cfg = DYNAMIC[base_name]
             colors = cfg["colors"]
             n = len(colors)
-            if cfg["log"] and vmin > 0:
-                log_min = math.log10(vmin)
-                log_max = math.log10(vmax)
+            # "range" 指定があれば絶対値スケール、無ければ実データ min/max
+            rng = cfg.get("range")
+            smin, smax = (rng if rng else (vmin, vmax))
+            if cfg.get("floor") is not None:
+                smin = max(smin, cfg["floor"])
+            if cfg.get("robust") and vstd > 0:
+                smax = max(min(smax, vmean + 3.0 * vstd), smin * 1.0001)
+            if cfg["log"] and smin > 0:
+                log_min = math.log10(smin)
+                log_max = math.log10(smax)
                 values = [10 ** (log_min + (log_max - log_min) * i / (n - 1))
                           for i in range(n)]
             else:
-                values = [vmin + (vmax - vmin) * i / (n - 1) for i in range(n)]
+                values = [smin + (smax - smin) * i / (n - 1) for i in range(n)]
             items = [
                 QgsColorRampShader.ColorRampItem(v, c, l)
                 for v, (c, l) in zip(values, colors)
             ]
 
             # 低値透過フィルタ適用（対象キーのみ）
-            if base_name in {"twi", "flow_peak", "flow_mean", "flow_vtotal"} and filter_mode in ("low", "mid"):
+            if base_name in {"twi", "flow_peak", "flow_mean", "tc"} and filter_mode in ("low", "mid"):
                 n = len(items)
                 if filter_mode == "low":
                     # 中間ストップを上限の85%に固定（low は弱めのフィルタ）
@@ -2540,8 +2686,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         shader_func = QgsColorRampShader()
         shader_func.setColorRampType(QgsColorRampShader.Interpolated)
         shader_func.setColorRampItemList(items)
-        shader_func.setMinimumValue(vmin)
-        shader_func.setMaximumValue(vmax)
+        shader_func.setMinimumValue(items[0].value)
+        shader_func.setMaximumValue(items[-1].value)
 
         raster_shader = QgsRasterShader()
         raster_shader.setRasterShaderFunction(shader_func)
@@ -2566,27 +2712,28 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.preview_canvas.refresh()
 
     # ── Flow フィルタ/バッファ状態アクセサ ─────────────────────────────
-    # flow_peak / flow_mean は共通状態、flow_vtotal（Total Flow Vol.）のみ
-    # 別トラックの状態を持つ。読み書きは必ずこのアクセサ経由で行う。
+    # Peak load / Mean load（レート）は共通状態、Time load（tc）のみ別トラック。
+    # tc はレートでないのでバッファは使わない（フィルタ状態のみ独立）。
+    # 読み書きは必ずこのアクセサ経由で行う。
     def _flow_filter_state(self, base_name=None):
-        if base_name == "flow_vtotal":
-            return self._filter_state_vtotal
+        if base_name == "tc":
+            return getattr(self, "_filter_state_tc", "off")
         return self._filter_state.get("flow", "off")
 
     def _set_flow_filter_state(self, base_name, value):
-        if base_name == "flow_vtotal":
-            self._filter_state_vtotal = value
+        if base_name == "tc":
+            self._filter_state_tc = value
         else:
             self._filter_state["flow"] = value
 
     def _flow_buffer_state_for_base(self, base_name=None):
-        if base_name == "flow_vtotal":
-            return self._flow_buffer_state_vtotal
+        if base_name == "tc":
+            return getattr(self, "_flow_buffer_state_tc", "off")
         return self._flow_buffer_state
 
     def _set_flow_buffer_state_for_base(self, base_name, value):
-        if base_name == "flow_vtotal":
-            self._flow_buffer_state_vtotal = value
+        if base_name == "tc":
+            self._flow_buffer_state_tc = value
         else:
             self._flow_buffer_state = value
 
@@ -2607,9 +2754,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
     def _sync_flow_aux_controls(self):
         """現在表示中の flow ベースに対応するフィルタ/バッファ状態を
-        Filter/Buffer ボタンの表示へ反映する。"""
-        base_name = self._loaded_terrain_basenames.get("flow")
+        Filter/Buffer ボタンの表示へ反映する。Peak/Mean と Tc で
+        フィルタ/バッファ状態は独立トラック。"""
+        base_name = getattr(self, "_loaded_terrain_basenames", {}).get("flow")
         self.btnFilterFlow.setText(self._flow_filter_state(base_name))
+        self.btnFlowBuffer.setEnabled(True)
         self._set_flow_buffer_button_state(
             self._flow_buffer_state_for_base(base_name)
         )
@@ -2652,7 +2801,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     # 本体の下から染み出すため、控えめな sigma でも視認できる。全 flow ベース
     # 共通（Mean/Total の専用 override は廃止。4.x の vtotal 特例も持ち込まない）。
     _FLOW_BUFFER_SIGMA  = {"weak": 1.5, "strong": 2.5}   # Gaussian sigma（ピクセル）
-    _FLOW_BUFFER_OPACITY = {"weak": 0.30, "strong": 0.45}  # 滲みレイヤーの不透明度
+    _FLOW_BUFFER_OPACITY = {"weak": 0.30, "strong": 0.33}  # 滲みレイヤーの不透明度
 
     @classmethod
     def _flow_buffer_sigma(cls, base_name, state):
@@ -2696,6 +2845,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         base_name = self._loaded_terrain_basenames.get("flow")
         state = self._flow_buffer_state_for_base(base_name)
         if state == "off":
+            self._normalize_terrain_group_order()
             self._refresh_preview_canvas()
             return
 
@@ -2769,6 +2919,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
             self._flow_buffer_layer_ids.append(blur_lyr.id())
 
+        self._normalize_terrain_group_order()
         self._refresh_preview_canvas()
 
     # (base_name, label, kind, ext)  ← 解析番号プレフィクスは _toggle_terrain_layer で付加
@@ -2783,9 +2934,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             ("twi",  "Wetland Terrain", "raster", ".tif"),
         ],
         "flow": [
-            ("flow_peak",   "Peak Flow: Qp[m³/s]",   "raster", ".tif"),
-            ("flow_mean",   "Mean Flow: Qm[m³/s]",   "raster", ".tif"),
-            ("flow_vtotal", "Total Flow Vol.: V[m³]", "raster", ".tif"),
+            ("flow_peak", "Peak load: Qp[m³/s]", "raster", ".tif"),
+            ("flow_mean", "Mean load: Qm[m³/s]", "raster", ".tif"),
+            ("tc",        "Time load: Tc[h]",    "raster", ".tif"),
         ],
         "integrated": [
             ("integrated_risk_index", "Overall Risk Index", "raster", ".tif"),
@@ -2801,10 +2952,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         "integrated":("Overall Risk",     None),
     }
 
-    # レイヤパネル内の順序: 値が大きいほど上（描画上位）
-    # 下から: stability → wetland → valley → flow → integrated（最上位）
-    # 下から: stability → integrated → wetland → valley → flow（最上位）
-    _KEY_RANK = {"stability": 0, "integrated": 1, "wetland": 2, "valley": 3, "flow": 4}
+    # レイヤパネル内の順序: 値が大きいほど上（描画前面）
+    # 下から: Slope Stability → Overall Risk → Valley → Wetland → Flow（最前面）
+    _KEY_RANK = {"stability": 0, "integrated": 1, "valley": 2, "wetland": 3, "flow": 4}
 
     def _btn(self, key):
         return {
@@ -2823,6 +2973,65 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             "flow":       self.spinOpacityFlow,
             "integrated": self.spinOpacityIntegrated,
         }[key]
+
+    def _normalize_terrain_group_order(self):
+        """グループ内の子ノード順を _KEY_RANK（上位＝高ランク）に正規化する。
+        flow のバッファ滲みレイヤーは flow 本体の直下に固める。挿入位置の
+        計算がバッファ層でずれても、切替後にここで並びを立て直す。
+        並べ替え中はキャンバスを freeze してノード単位の再描画を抑止する。"""
+        group = self._terrain_layer_group
+        if group is None:
+            return
+        try:
+            group.name()  # 削除済みなら RuntimeError
+        except RuntimeError:
+            return
+        proj = QgsProject.instance()
+        desired = []
+        for _k in sorted(self._loaded_terrain_layers,
+                         key=lambda x: self._KEY_RANK.get(x, 0), reverse=True):
+            for _lid in self._loaded_terrain_layers.get(_k, []):
+                if proj.mapLayer(_lid) is not None:
+                    desired.append(_lid)
+            if _k == "flow":
+                for _lid in self._flow_buffer_layer_ids:
+                    if proj.mapLayer(_lid) is not None:
+                        desired.append(_lid)
+        if not desired:
+            return
+        current = [n.layerId() for n in group.findLayers()]
+        if current == desired:
+            return
+        _canvases = [_c for _c in (
+            getattr(self, "preview_canvas", None),
+            self.iface.mapCanvas() if self.iface is not None else None,
+        ) if _c is not None]
+        for _c in _canvases:
+            try:
+                _c.freeze(True)
+            except Exception:  # nosec B110
+                pass
+        try:
+            for _i, _lid in enumerate(desired):
+                _n = group.findLayer(_lid)
+                if _n is None:
+                    continue
+                _clone = _n.clone()
+                group.removeChildNode(_n)
+                _pos = min(_i, len(group.children()))
+                group.insertChildNode(_pos, _clone)
+                _cn = group.findLayer(_lid)
+                if _cn is not None:
+                    _cn.setExpanded(False)
+        except Exception:  # nosec B110
+            pass
+        finally:
+            for _c in _canvases:
+                try:
+                    _c.freeze(False)
+                    _c.refresh()
+                except Exception:  # nosec B110
+                    pass
 
     def _insert_terrain_layer_ordered(self, key, lyr):
         """_KEY_RANK に従いグループ内の正しい位置にレイヤを挿入する。
@@ -2904,9 +3113,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 btn.setChecked(False)
                 btn.setText(label)
 
-    def _cycle_terrain_layer(self, key):
-        """クリック毎に 非表示→ファイル1→ファイル2→...→非表示 と循環する。"""
-        analysis_number = self.cmbAnalysisNumber.currentData()
+    def _cycle_terrain_layer(self, key, analysis_number=None):
+        """クリック毎に 非表示→ファイル1→ファイル2→...→非表示 と循環する。
+        analysis_number を明示指定するとコンボの選択に依存せず読み込む。"""
+        analysis_number = analysis_number or self.cmbAnalysisNumber.currentData()
         btn = self._btn(key)
         base_label = self._BTN_LABELS[key][0]
 
@@ -2965,7 +3175,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if partner and partner in self._exclusive_hidden:
                 saved = self._exclusive_hidden.pop(partner)
                 self._terrain_cycle_state[partner] = saved - 1
-                self._cycle_terrain_layer(partner)
+                self._cycle_terrain_layer(partner, analysis_number)
             self._refresh_preview_canvas()
             # レイヤ削除後にメインキャンバスを明示的にリフレッシュ
             if self.iface is not None:
@@ -3002,6 +3212,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             else:
                 self._apply_vector_style(lyr, base_name)
                 lyr.setOpacity(opacity)
+            self._notify_layer_style_changed(lyr)
             proj.addMapLayer(lyr, False)
             self._insert_terrain_layer_ordered(key, lyr)
             self._loaded_terrain_layers[key] = [lyr.id()]
@@ -3026,6 +3237,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             btn.setText(base_label)
             btn.setStyleSheet(
                 self._BTN_STYLE_BLOCKING if _blocking else self._BTN_STYLE_NORMAL)
+
+        # flow 経路は _apply_flow_buffer() 内で正規化済みなので二重に呼ばない
+        if key != "flow":
+            self._normalize_terrain_group_order()
 
     def _toggle_terrain_layer(self, key, checked):
         """チェックON→選択解析番号のファイルを読込、OFF→該当レイヤを削除"""
@@ -3072,6 +3287,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                         except Exception:  # nosec B110
                             pass
                         lyr.setOpacity(opacity)
+                    self._notify_layer_style_changed(lyr)
                     ids.append(lyr.id())
                     QgsProject.instance().addMapLayer(lyr, False)
                     self._insert_terrain_layer_ordered(key, lyr)
@@ -3814,9 +4030,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if self._terrain_cycle_state.get(key, -1) >= 0
         }
 
-    def _restore_terrain_display_state(self, state):
-        """保存済みの地形レイヤ表示状態を現在の解析番号へ再適用する。"""
-        analysis_number = self.cmbAnalysisNumber.currentData()
+    def _restore_terrain_display_state(self, state, analysis_number=None):
+        """保存済みの地形レイヤ表示状態を解析番号へ再適用する。"""
+        analysis_number = analysis_number or self.cmbAnalysisNumber.currentData()
         if not analysis_number:
             return
         for key in self._BTN_LABELS:
@@ -3826,13 +4042,25 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             # _cycle_terrain_layer() は現在 state から次状態へ進めるため、
             # 目標の1つ手前を仕込んでから1回進めて復元する。
             self._terrain_cycle_state[key] = desired_state - 1
-            self._cycle_terrain_layer(key)
+            self._cycle_terrain_layer(key, analysis_number)
+        self._refresh_render_canvases()
+
+    def _restore_pre_run_display_state(self, analysis_number=None):
+        """解析実行前に退避した表示状態を再適用する（使い切りで空にする）。"""
+        state = getattr(self, "_pre_run_display_state", {})
+        if state:
+            self._restore_terrain_display_state(state, analysis_number)
+        self._pre_run_display_state = {}
 
     def _unload_terrain_group(self, reset_controls=True):
         """プラグイン管理グループをカスタムプロパティで検索して削除する。
         Python参照（_terrain_layer_group）が stale でも確実に除去できる。"""
         import sip
-        layer_ids = []
+        layer_ids = set()
+        for ids in getattr(self, "_loaded_terrain_layers", {}).values():
+            layer_ids.update(ids)
+        layer_ids.update(getattr(self, "_flow_buffer_layer_ids", []))
+
         try:
             root = QgsProject.instance().layerTreeRoot()
             if not sip.isdeleted(root):
@@ -3842,9 +4070,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     if (hasattr(child, "customProperty") and
                             child.customProperty(self._GROUP_PROP) == "1"):
                         try:
-                            layer_ids += [
+                            layer_ids.update(
                                 n.layerId() for n in child.findLayers()
-                            ]
+                            )
                             root.removeChildNode(child)
                         except Exception:  # nosec B110
                             pass
@@ -3852,6 +4080,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             pass
         self._terrain_layer_group = None
         proj = QgsProject.instance()
+        if getattr(self, "preview_canvas", None) is not None:
+            try:
+                self.preview_canvas.setLayers([
+                    lyr for lyr in self.preview_canvas.layers()
+                    if lyr.id() not in layer_ids
+                ])
+                if hasattr(self.preview_canvas, "clearCache"):
+                    self.preview_canvas.clearCache()
+                self.preview_canvas.refresh()
+            except Exception:  # nosec B110
+                pass
         for lid in layer_ids:
             try:
                 if proj.mapLayer(lid):
@@ -3861,6 +4100,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._loaded_terrain_layers = {}
         self._flow_buffer_layer_ids = []
         self._exclusive_hidden = {}
+        self._loaded_terrain_basenames = {}
         if reset_controls:
             self._reset_load_buttons()
         try:
@@ -3869,6 +4109,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             pass
         if self.iface is not None:
             try:
+                if hasattr(self.iface.mapCanvas(), "clearCache"):
+                    self.iface.mapCanvas().clearCache()
                 self.iface.mapCanvas().refresh()
             except Exception:  # nosec B110
                 pass
@@ -4468,6 +4710,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lblAnalysisStatus.setText("Select at least one analysis type.")
             return
 
+        # 実行中に表示していた地形レイヤの表示状態を、クリーンアップで消える前に
+        # 退避しておき、完了後に新成果へ再適用する（上書き実行でも引き継ぐ）。
+        # ロック自動再実行の再入時は既に表示が消えているので取り直さない。
+        if not getattr(self, "_overwrite_retried", False):
+            self._pre_run_display_state = self._capture_terrain_display_state()
+
         # ── 解析面積チェック（プレビューキャンバス範囲） ──
         _limit_ha = self.cmbAreaLimit.currentData()
         if _limit_ha and _limit_ha > 0:
@@ -4547,21 +4795,126 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         def _release_folder_layers(_folder):
             _proj = QgsProject.instance()
-            _folder_norm = os.path.normcase(os.path.normpath(_folder))
+            _folder_norm = os.path.normcase(os.path.abspath(os.path.normpath(_folder)))
             _remove_ids = []
+            _source_paths = set()
+
+            def _norm_source_path(_path):
+                if not _path:
+                    return ""
+                _path = str(_path).strip().strip('"').strip("'")
+                if _path.lower().startswith("file:"):
+                    try:
+                        _path = QUrl(_path).toLocalFile() or _path
+                    except Exception:  # nosec B110
+                        pass
+                if _path.lower().startswith("gpkg:"):
+                    _path = _path[5:]
+                return os.path.normcase(os.path.abspath(os.path.normpath(_path)))
+
+            def _uri_paths(_lyr):
+                import re as _re
+                _uris = []
+                for _getter in (
+                    lambda: _lyr.source(),
+                    lambda: _lyr.dataProvider().dataSourceUri(),
+                ):
+                    try:
+                        _uri = _getter()
+                    except Exception:  # nosec B110
+                        continue
+                    if _uri:
+                        _uris.append(str(_uri))
+                try:
+                    from qgis.core import QgsProviderRegistry as _QPR
+                    _provider_key = _lyr.providerType()
+                    _metadata = _QPR.instance().providerMetadata(_provider_key)
+                    for _uri in list(_uris):
+                        try:
+                            _decoded = _metadata.decodeUri(_uri)
+                        except Exception:  # nosec B110
+                            continue
+                        if isinstance(_decoded, dict):
+                            for _key in ("path", "filename", "database", "dbname"):
+                                _val = _decoded.get(_key)
+                                if _val:
+                                    _uris.append(str(_val))
+                except Exception:  # nosec B110
+                    pass
+                _paths = set()
+                for _uri in _uris:
+                    for _m in _re.finditer(
+                            r"""(?:dbname|database)\s*=\s*'([^']+)'|(?:dbname|database)\s*=\s*"([^"]+)"|(?:dbname|database)\s*=\s*([^\s|]+)""",
+                            _uri):
+                        _paths.add(_norm_source_path(_m.group(1) or _m.group(2) or _m.group(3)))
+                    _paths.add(_norm_source_path(_uri.split("|", 1)[0]))
+                return {p for p in _paths if p}
+
+            def _flush_provider_connections():
+                # QgsProviderMetadata.invalidateConnections() は接続「名」を
+                # 期待する（ファイルパスではない）。以前はパスを渡していて
+                # 常に TypeError → no-op だった。保存済み GeoPackage 接続の
+                # うち対象ファイルを指すものを名前で特定して破棄する。解析
+                # 出力は通常ブラウザ未登録なので該当なし＝何もしないことが
+                # 多いが、登録済みフォルダを上書きするケースで効く。
+                # 引数なしの全体 invalidation は QGIS 3.44 + Windows で
+                # provider 側 access violation を誘発するため呼ばない。
+                if not _source_paths:
+                    return
+                try:
+                    from qgis.core import QgsProviderRegistry as _QPR
+                    _registry = _QPR.instance()
+                except Exception:  # nosec B110
+                    return
+                for _provider_key in ("ogr", "gdal"):
+                    try:
+                        _metadata = _registry.providerMetadata(_provider_key)
+                    except Exception:  # nosec B110
+                        continue
+                    if _metadata is None:
+                        continue
+                    if not hasattr(_metadata, "connections") or \
+                            not hasattr(_metadata, "invalidateConnections"):
+                        continue
+                    try:
+                        _conns = _metadata.connections(False)
+                    except Exception:  # nosec B110
+                        continue
+                    if not _conns:
+                        continue
+                    for _name, _conn in list(_conns.items()):
+                        try:
+                            _cn_uri = _norm_source_path(_conn.uri())
+                        except Exception:  # nosec B110
+                            _cn_uri = ""
+                        if not _cn_uri or _cn_uri not in _source_paths:
+                            continue
+                        try:
+                            _metadata.invalidateConnections(_name)
+                        except Exception:  # nosec B110
+                            pass
+
+            try:
+                for _root, _dirs, _files in os.walk(_folder):
+                    for _fname in _files:
+                        if _fname.lower().endswith((".gpkg", ".tif", ".tiff")):
+                            _source_paths.add(
+                                _norm_source_path(os.path.join(_root, _fname)))
+            except OSError:
+                pass
+
             for _lid, _lyr in list(_proj.mapLayers().items()):
                 try:
-                    _provider = _lyr.dataProvider()
-                    if not _provider:
-                        continue
-                    _src = _provider.dataSourceUri().split("|")[0]
-                    _src_norm = os.path.normcase(os.path.normpath(_src))
-                    if (_src_norm == _folder_norm or
-                            _src_norm.startswith(_folder_norm + os.sep)):
+                    _paths = _uri_paths(_lyr)
+                    if any(_src_norm == _folder_norm or
+                           _src_norm.startswith(_folder_norm + os.sep)
+                           for _src_norm in _paths):
                         _remove_ids.append(_lid)
+                        _source_paths.update(_paths)
                 except Exception:  # nosec B110
                     pass
             if not _remove_ids:
+                _flush_provider_connections()
                 return
             _remove_id_set = set(_remove_ids)
             if getattr(self, "preview_canvas", None) is not None:
@@ -4573,6 +4926,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     self.preview_canvas.refresh()
                 except Exception:  # nosec B110
                     pass
+            _removed_keys = set()
             for _key in list(getattr(self, "_loaded_terrain_layers", {}).keys()):
                 _kept = [
                     _lid for _lid in self._loaded_terrain_layers.get(_key, [])
@@ -4582,8 +4936,27 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     self._loaded_terrain_layers[_key] = _kept
                 else:
                     self._loaded_terrain_layers.pop(_key, None)
+                    self._loaded_terrain_basenames.pop(_key, None)
                     self._terrain_cycle_state[_key] = -1
+                    _removed_keys.add(_key)
+            self._exclusive_hidden = {
+                _key: _state for _key, _state in self._exclusive_hidden.items()
+                if _key not in _removed_keys
+            }
             _proj.removeMapLayers(_remove_ids)
+            for _canvas in (
+                getattr(self, "preview_canvas", None),
+                self.iface.mapCanvas() if self.iface is not None else None,
+            ):
+                if _canvas is None:
+                    continue
+                try:
+                    if hasattr(_canvas, "clearCache"):
+                        _canvas.clearCache()
+                    _canvas.refresh()
+                except Exception:  # nosec B110
+                    pass
+            _flush_provider_connections()
             QtWidgets.QApplication.processEvents()
 
         # プレビュー可視範囲でクリップ（キャンバスCRS → DEM CRS に変換してから渡す）
@@ -4640,11 +5013,27 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         seq = self._next_seq(self.chkOverwrite.isChecked())
         # 隠し一時フォルダ（解析完了後に1回だけリネーム → Thunar inotify を最小化）
         import shutil as _shutil
+        import time as _time
+
+        # 前回リネーム退避した .trash_* を掃除（GPKG 等のハンドルが解放されて
+        # いれば消える。まだロック中なら次回に持ち越す）。
+        try:
+            for _t in os.listdir(out_dir):
+                if _t.startswith(".trash_"):
+                    _shutil.rmtree(os.path.join(out_dir, _t), ignore_errors=True)
+        except OSError:
+            pass
+
         if self.chkOverwrite.isChecked():
             import re as _re
             import gc as _gc
-            import time as _time
             from qgis.PyQt.QtCore import QCoreApplication as _QCA
+            # Windows では表示中の GeoPackage がロックされるため、上書き
+            # 削除に入る前に全表示ボタンを OFF にし、管理レイヤを外す。
+            self._unload_terrain_group(reset_controls=True)
+            _gc.collect()
+            _QCA.processEvents()
+            _lock_err = None
             for name in os.listdir(out_dir):
                 if not (_re.fullmatch(r'\d{4}(\+\d+)?', name) and name[:3] == seq):
                     continue
@@ -4652,11 +5041,26 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 if not os.path.isdir(folder):
                     continue
                 _release_folder_layers(folder)
-                _removed = False
+                _gc.collect()
+                _QCA.processEvents()
+                # まず「リネームで退避」を試す。Windows は開いているファイルを
+                # 含むフォルダの削除は失敗するが、フォルダ名のリネームは通ることが
+                # 多い（SQLite/OGR は .gpkg ファイルを開くがフォルダは掴まない）。
+                _trash = os.path.join(out_dir, f".trash_{name}_{int(_time.time())}")
+                _cleared = False
+                try:
+                    os.rename(folder, _trash)
+                    _shutil.rmtree(_trash, ignore_errors=True)  # 消えなければ残す
+                    _cleared = True
+                except OSError:
+                    pass
+                # リネームも無理なら従来の rmtree リトライ
                 for _attempt in range(30):
+                    if _cleared:
+                        break
                     try:
                         _shutil.rmtree(folder)
-                        _removed = True
+                        _cleared = True
                         break
                     except (PermissionError, OSError) as _e:
                         _gc.collect()
@@ -4664,13 +5068,33 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                         if _attempt < 29:
                             _time.sleep(0.5)
                         else:
-                            self.lblAnalysisStatus.setVisible(True)
-                            self.lblAnalysisStatus.setText(
-                                f"Overwrite failed: {name} is still locked. {_e}"
-                            )
-                            return
-                if not _removed:
+                            _lock_err = (name, str(_e))
+                if _lock_err or not _cleared:
+                    if _lock_err is None:
+                        _lock_err = (name, "cleanup failed")
+                    break
+
+            if _lock_err is not None:
+                _lname, _lmsg = _lock_err
+                _base_msg = f"Overwrite failed: {_lname} is still locked. {_lmsg}"
+                # 1回目のロック失敗はメッセージを出したうえで解析を丸ごと再実行
+                # する。再入すると再実行側が "Resampling..." 等で lblAnalysisStatus
+                # を上書きするので、それまでに読めるだけの間（1.5秒）だけ遅らせる。
+                if not getattr(self, "_overwrite_retried", False):
+                    self._overwrite_retried = True
+                    self.lblAnalysisStatus.setVisible(True)
+                    self.lblAnalysisStatus.setText(_base_msg + "\n再度実行します…")
+                    _gc.collect()
+                    _QCA.processEvents()
+                    from qgis.PyQt.QtCore import QTimer as _QTimer
+                    _QTimer.singleShot(1500, self._run_terrain_analysis)
                     return
+                # 2回目も駄目ならエラー表示して諦める
+                self._overwrite_retried = False
+                self._pre_run_display_state = {}
+                self.lblAnalysisStatus.setVisible(True)
+                self.lblAnalysisStatus.setText(_base_msg)
+                return
         tmp_folder = os.path.join(out_dir, f".tmp_{seq}")
         if os.path.exists(tmp_folder):      # 中断残骸をクリア
             _shutil.rmtree(tmp_folder)
@@ -4679,7 +5103,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._cancel_analysis = False
         self.btnRunAnalysis.setEnabled(False)
         self.btnStopAnalysis.setEnabled(True)
-        self.lblAnalysisStatus.setVisible(False)
+        # 上書きロックの自動再実行中は「再度実行します…」の表示を残す
+        # （解析はこのまま即進む。次の状態テキストが出れば置き換わる）。
+        if not getattr(self, "_overwrite_retried", False):
+            self.lblAnalysisStatus.setVisible(False)
         self.progressAnalysis.setRange(0, 100)
         self.progressAnalysis.setValue(5)
         self.progressAnalysis.setVisible(True)
@@ -4796,43 +5223,46 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 if dsm_loader is not None and dsm_loader.data is not None \
                         and dsm_loader.data.shape == dem.data.shape:
                     cs = dsm_loader.data - dem.data
+                    # 時間‐面積法は各セルの局所 C で局所流出を作り、内部で
+                    # 下流累積するので、上流平均でなく per-cell C を渡す。
                     c_local, velocity_coef = ta.cs_to_flow_coefficients(cs)
-                    # C は上流域の面積加重平均を使用（修正合理式の理論的要件）
-                    c_accum = ta.flow_accumulation(dem.data, fdir, weight=c_local)
-                    runoff_coef = c_accum / np.maximum(accum, 1.0)
                     self.progressAnalysis.setValue(65)
                     _pe()
                 else:
-                    runoff_coef = self.spinRunoff.value()
+                    c_local = self.spinRunoff.value()
                     velocity_coef = self.spinVelocityCoef.value()
-                self.progressAnalysis.setValue(75)
+                self.progressAnalysis.setValue(72)
                 _pe()
                 local_tt = ta.compute_travel_time(
                     dem.data, fdir, dem.cell_size,
                     velocity_coef=velocity_coef,
                 )
                 tc = ta.compute_tc(dem.data, fdir, local_tt)
-                self.progressAnalysis.setValue(85)
+                self.progressAnalysis.setValue(78)
                 _pe()
-                Q_peak, Q_mean, V_total = ta.flow_routing_3metrics(
-                    accum, tc, dem.cell_size,
+
+                def _flow_prog(_frac):
+                    self.progressAnalysis.setValue(int(78 + 10 * _frac))
+                    _pe()
+
+                # 時間‐面積法（Clark 単位図法）による負荷3指標
+                Q_peak, Q_mean, _tc = ta.time_area_flow_metrics(
+                    dem.data, fdir, local_tt, tc, dem.cell_size,
+                    c_grid=c_local,
                     duration_h=self.spinDuration.value(),
                     i_peak_mmh=self.spinRainfall.value(),
-                    runoff_coef=runoff_coef,
                     total_mm=self.spinTotalRainfall.value(),
+                    progress_cb=_flow_prog,
                 )
                 p0 = rw.save_raster(tc, dem.gt, dem.crs_wkt, tmp_folder,
                                     "tc", overwrite=True)
-                saved.append(("Tc[h]", p0, "raster"))
+                saved.append(("Time load Tc[h]", p0, "raster"))
                 p1 = rw.save_raster(Q_peak, dem.gt, dem.crs_wkt, tmp_folder,
                                     "flow_peak", overwrite=True)
-                saved.append(("Qp[m³/s]", p1, "raster"))
+                saved.append(("Peak load Qp[m³/s]", p1, "raster"))
                 p2 = rw.save_raster(Q_mean, dem.gt, dem.crs_wkt, tmp_folder,
                                     "flow_mean", overwrite=True)
-                saved.append(("Qm[m³/s]", p2, "raster"))
-                p3 = rw.save_raster(V_total, dem.gt, dem.crs_wkt, tmp_folder,
-                                    "flow_vtotal", overwrite=True)
-                saved.append(("V[m³]", p3, "raster"))
+                saved.append(("Mean load Qm[m³/s]", p2, "raster"))
 
             # ── 統合リスク指標（FS/TWI/流量のいずれかがあれば自動生成） ──
             self.progressAnalysis.setValue(90)
@@ -4879,6 +5309,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             _dsm = getattr(self, "_dsm_loader", None)
             if _dsm is not None:
                 _dsm.data = None
+            # 上書きロックの自動リトライ枠をリセット（この実行が cleanup を通過
+            # したので、次の実行はまた1回だけ黙って再試行できる）。
+            self._overwrite_retried = False
 
         # ── ファイル数が確定したので解析番号を決定し tmp_folder を1回だけリネーム ──
         N = len(saved)
@@ -4930,39 +5363,31 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             pass
 
         # tmp_folder を最終フォルダ名に一括リネーム（inotify イベントを1回に集約）
+        # 通常は上の事前クリーンアップで folder は存在しないが、番号衝突等の
+        # 保険としてここでも「リネーム退避 → 無理なら rmtree」で退ける。
         if os.path.exists(folder):
-            # Windows ではレイヤーとして開いているファイルがロックされるため、
-            # 削除前に該当フォルダ内のレイヤーをプレビュー・内部参照・QgsProject から除去する
             _release_folder_layers(folder)
-            # Windows では removeMapLayers 後も OGR/GDAL のファイルハンドルが
-            # すぐに解放されないため、gc + processEvents でハンドル解放を促す
-            import sys as _sys
-            if _sys.platform == "win32":
-                import gc as _gc
-                import time as _time
-                from qgis.PyQt.QtCore import QCoreApplication as _QCA
-                _gc.collect()
-                _QCA.processEvents()
-                for _attempt in range(5):
+            import gc as _gc
+            from qgis.PyQt.QtCore import QCoreApplication as _QCA
+            _gc.collect()
+            _QCA.processEvents()
+            _trash2 = os.path.join(
+                out_dir, f".trash_{os.path.basename(folder)}_{int(_time.time())}")
+            try:
+                os.rename(folder, _trash2)
+                _shutil.rmtree(_trash2, ignore_errors=True)
+            except OSError:
+                for _attempt in range(10):
                     try:
                         _shutil.rmtree(folder)
                         break
-                    except PermissionError:
-                        if _attempt < 4:
+                    except (PermissionError, OSError):
+                        if _attempt < 9:
                             _time.sleep(0.3)
                             _gc.collect()
                             _QCA.processEvents()
                         else:
                             raise
-                    except OSError:
-                        if _attempt < 4:
-                            _time.sleep(0.3)
-                            _gc.collect()
-                            _QCA.processEvents()
-                        else:
-                            raise
-            else:
-                _shutil.rmtree(folder)
         os.rename(tmp_folder, folder)
         # saved のパスを新フォルダに更新
         saved = [(label, os.path.join(folder, os.path.basename(p)), kind)
@@ -4976,8 +5401,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             with QSignalBlocker(self.cmbAnalysisNumber):
                 self.cmbAnalysisNumber.setCurrentIndex(idx)
 
+        # 実行前に表示していた地形レイヤを新成果へ再適用する（上書き実行でも
+        # 引き継ぐ）。クリーンアップで表示が消えているため、_refresh_analysis_combo
+        # 経由の復元は空振りする。事前退避しておいた状態をここで適用する。
+        self._restore_pre_run_display_state(analysis_number)
+
         self._update_analysis_condition_label(analysis_number)
         names = ", ".join(n for n, _, _ in saved)
+
         self.progressAnalysis.setValue(100)
         self.progressAnalysis.setVisible(False)
         self.progressAnalysis.setRange(0, 0)
@@ -5017,7 +5448,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         s.setValue("dem_path", "" if self._dem_path in _vs_sentinels else self._dem_path)
         s.setValue("dsm_path", "" if self._dsm_path in _vs_sentinels else self._dsm_path)
         s.setValue("flow_buffer_state", self._flow_buffer_state)
-        s.setValue("flow_buffer_state_vtotal", self._flow_buffer_state_vtotal)
+        s.setValue("flow_buffer_state_tc", self._flow_buffer_state_tc)
 
         # ── レイヤー設定（layer ID） ──
         s.setValue("bg_layer_id",   self.cmbBackgroundLayer.currentData() or "")
@@ -5043,7 +5474,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         s.setValue("opacity_integrated", self.spinOpacityIntegrated.value())
         s.setValue("filter_state_wetland", self._filter_state.get("wetland", "off"))
         s.setValue("filter_state_flow",    self._filter_state.get("flow", "off"))
-        s.setValue("filter_state_flow_vtotal", self._filter_state_vtotal)
+        s.setValue("filter_state_flow_tc", self._filter_state_tc)
         s.setValue("chk_overwrite",       self.chkOverwrite.isChecked())
         s.setValue("chk_stability",       self.chkStability.isChecked())
         s.setValue("chk_valley",          self.chkValley.isChecked())
@@ -5233,9 +5664,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         _fb = s.value("flow_buffer_state", "off")
         if _fb in ("off", "weak", "strong"):
             self._flow_buffer_state = _fb
-        _fb_v = s.value("flow_buffer_state_vtotal", "off")
+        _fb_v = s.value("flow_buffer_state_tc", "off")
         if _fb_v in ("off", "weak", "strong"):
-            self._flow_buffer_state_vtotal = _fb_v
+            self._flow_buffer_state_tc = _fb_v
         self._sync_flow_aux_controls()
 
         # ── レイヤー設定 ──
@@ -5262,9 +5693,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if _fval in ("off", "low", "mid"):
                 self._filter_state[_fkey] = _fval
                 _fbtn.setText(_fval)
-        _fv = s.value("filter_state_flow_vtotal", "off")
+        _fv = s.value("filter_state_flow_tc", "off")
         if _fv in ("off", "low", "mid"):
-            self._filter_state_vtotal = _fv
+            self._filter_state_tc = _fv
         self._sync_flow_aux_controls()
         self.chkOverwrite.setChecked(    b("chk_overwrite",   True))
         self.chkStability.setChecked(    b("chk_stability",   True))
