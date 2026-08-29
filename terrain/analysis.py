@@ -12,6 +12,9 @@
   compute_twi        : TWI = ln(A / tan(β))
   stability_fs       : 無限斜面安定解析（FS）
   rational_flow      : 合理式による流量推測 [m³/s]
+  cum_travel_time_to_outlet : 各セル→出口の累積移動時間（時間‐面積法の基準）
+  triangular_hyetograph     : 三角形の設計ハイエトグラフ
+  time_area_flow_metrics    : 時間‐面積法/Clark 単位図法による負荷3指標
 """
 import numpy as np
 
@@ -424,6 +427,8 @@ def flow_routing_3metrics(accum, tc, cell_size, duration_h,
                           i_peak_mmh=50.0, runoff_coef=0.8,
                           total_mm=100.0):
     """
+    [DEPRECATED] time_area_flow_metrics() に置換。回帰比較用に保持。
+
     到達時間（Tc）を用いた修正合理式による流量3指標。
 
     有効集水面積 A_eff = A_total × min(1, duration_h / Tc)
@@ -453,6 +458,225 @@ def flow_routing_3metrics(accum, tc, cell_size, duration_h,
     Q_mean = (1.0 / 360.0) * runoff_coef * i_mean * area_eff_ha
     V_total = Q_mean * duration_h * 3600.0
     return Q_peak, Q_mean, V_total
+
+
+# ── 時間‐面積法（Clark 単位図法） ─────────────────────────────────────────
+#   参考: Clark, C.O. (1945) Storage and the unit hydrograph. Trans. ASCE 110.
+#         Chow, Maidment & Mays (1988) Applied Hydrology, §7–8.
+#         USDA NRCS National Engineering Handbook, Part 630 (Hydrology).
+#   適用範囲: 線形・時間不変系、地表流主体の小〜中流域（目安 〜数 km²）、
+#             単一設計ハイエトグラフ、D8 単一流向。指針であって厳密解ではない。
+
+def cum_travel_time_to_outlet(dem, flow_dir, local_tt):
+    """各セルから下流の領域出口までの累積移動時間 [h]。
+
+    compute_tc の Step 1 と同一。時間‐面積法の等到達時間（isochrone）基準
+    に使う。点 p の上流セル x の p への到達時間は
+    cum_tt[x] - cum_tt[p]（両者の差＝x→p 区間）で得られる。
+    """
+    rows, cols = dem.shape
+    DIR_OFFSET = {
+        1: (0, 1), 2: (1, 1), 4: (1, 0), 8: (1, -1),
+        16: (0, -1), 32: (-1, -1), 64: (-1, 0), 128: (-1, 1),
+    }
+    valid = ~np.isnan(dem)
+    r_arr, c_arr = np.where(valid)
+    elev = dem[r_arr, c_arr]
+    cum_tt = np.where(valid, local_tt, 0.0).astype(np.float64)
+    for idx in np.argsort(elev):          # 低い順（出口 → headwater）
+        r, c = int(r_arr[idx]), int(c_arr[idx])
+        d = int(flow_dir[r, c])
+        if d in DIR_OFFSET:
+            dr, dc = DIR_OFFSET[d]
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols and valid[nr, nc]:
+                cum_tt[r, c] = local_tt[r, c] + cum_tt[nr, nc]
+    cum_tt[~valid] = np.nan
+    return cum_tt
+
+
+def triangular_hyetograph(total_mm, duration_h, i_peak_mmh, peak_frac=0.4,
+                          n_sub=60):
+    """三角形の設計ハイエトグラフ。
+
+    高さ i_peak・面積 total_mm の三角形を作る（底辺 = 2·total/i_peak）。
+    底辺が duration_h を超える場合は底辺 = duration_h に詰め、実効ピークを
+    2·total/duration に下げる（＝ i_peak が平均強度を下回る指定は無効）。
+    山の位置は底辺の peak_frac（既定 0.4）。区間外は 0。
+
+    戻り値: (edges, intensity) — intensity[k] は [edges[k], edges[k+1]) の
+            平均強度 [mm/h]。edges は [0, duration_h] を n_sub 分割。
+    """
+    dur = max(float(duration_h), 1e-3)
+    tot = max(float(total_mm), 0.0)
+    i_mean = tot / dur
+    ipk = max(float(i_peak_mmh), 1e-6)
+    base = min(dur, 2.0 * tot / ipk) if ipk > 0 else dur
+    base = max(base, 1e-3)
+    ipk_eff = 2.0 * tot / base                      # 面積 = tot を保証
+    if ipk_eff < i_mean:                            # 念のため（数値誤差）
+        ipk_eff = 2.0 * i_mean
+        base = min(dur, 2.0 * tot / max(ipk_eff, 1e-9))
+    tp = peak_frac * base
+    edges = np.linspace(0.0, dur, n_sub + 1)
+    ctr = 0.5 * (edges[:-1] + edges[1:])
+    up = ipk_eff * (ctr / max(tp, 1e-9))
+    down = ipk_eff * (1.0 - (ctr - tp) / max(base - tp, 1e-9))
+    inten = np.where(ctr <= tp, up, down)
+    inten = np.where(ctr <= base, inten, 0.0)
+    inten = np.clip(inten, 0.0, None)
+    return edges, inten.astype(np.float64)
+
+
+def _downstream_order(dem):
+    """標高降順のセル座標列（累積処理用）を1回だけ作る。"""
+    valid = ~np.isnan(dem)
+    r_arr, c_arr = np.where(valid)
+    order = np.argsort(-dem[r_arr, c_arr])
+    return r_arr[order], c_arr[order]
+
+
+def _accumulate_downstream(rc_r, rc_c, flow_dir, weight, shape):
+    """事前ソート済み座標列で D8 下流累積（weight は 2D）。"""
+    rows, cols = shape
+    accum = weight.astype(np.float64).copy()
+    DIR_OFFSET = {
+        1: (0, 1), 2: (1, 1), 4: (1, 0), 8: (1, -1),
+        16: (0, -1), 32: (-1, -1), 64: (-1, 0), 128: (-1, 1),
+    }
+    for k in range(rc_r.size):
+        r, c = int(rc_r[k]), int(rc_c[k])
+        d = int(flow_dir[r, c])
+        if d in DIR_OFFSET:
+            dr, dc = DIR_OFFSET[d]
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols and not np.isnan(accum[nr, nc]):
+                accum[nr, nc] += accum[r, c]
+    return accum
+
+
+def _accumulate_downstream_multi(rc_r, rc_c, flow_dir, wstack, valid):
+    """weight スタック (rows,cols,M) を D8 下流累積（1回のセルループで M 本分）。
+
+    valid : 2D bool。無効セルへは伝播させない。
+    """
+    rows, cols, _ = wstack.shape
+    accum = wstack.astype(np.float64).copy()
+    DIR_OFFSET = {
+        1: (0, 1), 2: (1, 1), 4: (1, 0), 8: (1, -1),
+        16: (0, -1), 32: (-1, -1), 64: (-1, 0), 128: (-1, 1),
+    }
+    for k in range(rc_r.size):
+        r, c = int(rc_r[k]), int(rc_c[k])
+        d = int(flow_dir[r, c])
+        if d in DIR_OFFSET:
+            dr, dc = DIR_OFFSET[d]
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols and valid[nr, nc]:
+                accum[nr, nc, :] += accum[r, c, :]
+    return accum
+
+
+def time_area_flow_metrics(dem, flow_dir, local_tt, tc, cell_size,
+                           c_grid=0.8, duration_h=6.0,
+                           i_peak_mmh=50.0, total_mm=100.0,
+                           clark_k=0.75, n_time=24, progress_cb=None):
+    """時間‐面積法（Clark 単位図法）による負荷3指標。
+
+    各セルを流出点とみなし、上流域の等到達時間分布に設計ハイエトグラフを
+    畳み込んでハイドログラフ Q(p,t) を構成する。Clark 線形貯留
+    R = clark_k·Tc で平滑化してから:
+      Peak 負荷 = max_t Q(p,t)                         [m³/s]
+      Mean 負荷 = V(p) / ((duration_h + Tc(p))·3600)   [m³/s]
+      時間負荷  = Tc（入力をそのまま返す）             [h]
+    V(p) は総流出体積 [m³]（C·P_total·A、時間分布に不感）で内部中間値。
+
+    c_grid : スカラー流出係数 or 2D グリッド（DSM 由来）。
+    progress_cb : callable(frac) 省略可。0..1 の進捗を返す。
+
+    戻り値: (q_peak, q_mean, tc)  float32 2D / tc は入力そのまま。
+    """
+    valid = ~np.isnan(dem)
+    cum_tt = cum_travel_time_to_outlet(dem, flow_dir, local_tt)   # [h]
+    # 到達時間チェーンで NaN になったセル（nodata 隣接など）は解析対象外。
+    amask = (valid & np.isfinite(cum_tt) & np.isfinite(tc)
+             & np.isfinite(local_tt))
+    cum0 = np.where(amask, cum_tt, 0.0)
+    tc_pos = np.where(amask, np.maximum(tc, 0.0), 0.0)
+
+    edges, inten = triangular_hyetograph(total_mm, duration_h, i_peak_mmh)
+    n_bins = inten.size
+    storm_end = float(edges[-1])
+
+    def intensity_at(hours):
+        idx = np.searchsorted(edges, hours, side="right") - 1
+        inb = (idx >= 0) & (idx < n_bins)
+        return np.where(inb, inten[np.clip(idx, 0, n_bins - 1)], 0.0)
+
+    # 評価時刻 u（cum_tt 基準）。点 p のハイドログラフは
+    # u ∈ [cum_tt[p], cum_tt[p] + Tc[p] + storm_end] で非ゼロ。
+    if amask.any():
+        u_lo = float(cum0[amask].min())
+        u_hi = float((cum0 + tc_pos)[amask].max()) + storm_end
+        tc_med = float(np.median(tc_pos[amask]))
+    else:
+        u_lo, u_hi, tc_med = 0.0, storm_end, storm_end
+    if u_hi <= u_lo:
+        u_hi = u_lo + max(storm_end, 1.0)
+    span = u_hi - u_lo
+    # 分解能: 波形幅(storm_end)と中央値 Tc の小さい方を ~8 分割、n_time〜2*n_time
+    du_target = max(min(storm_end, tc_med if tc_med > 0 else storm_end) / 8.0,
+                    span / (2 * n_time), 1e-3)
+    n_eval = int(np.clip(round(span / du_target) + 1, n_time, 2 * n_time))
+    # 重みスタックのメモリ上限（〜240MB / float64）でステップ数を抑える
+    n_cap = max(10, int(3.0e7 / max(dem.size, 1)))
+    n_eval = int(min(n_eval, n_cap))
+    u = np.linspace(u_lo, u_hi, n_eval)
+    du = span / max(n_eval - 1, 1)                               # [h]
+
+    cell_area_m2 = cell_size * cell_size
+    mmh_to_ms = 1.0 / (1000.0 * 3600.0)                          # mm/h → m/s
+
+    rc_r, rc_c = _downstream_order(dem)
+
+    # 各 u の局所流出重み w(x, u_m) = C·面積·i(u_m − cum_tt[x])  [m³/s]
+    wstack = np.zeros(dem.shape + (n_eval,), dtype=np.float64)
+    cfac = c_grid * cell_area_m2 * mmh_to_ms
+    for m in range(n_eval):
+        i_u = intensity_at(u[m] - cum0)                          # [mm/h]
+        wstack[:, :, m] = np.where(amask, cfac * i_u, 0.0)
+        if progress_cb is not None:
+            progress_cb(0.5 * (m + 1) / n_eval)
+    g = _accumulate_downstream_multi(rc_r, rc_c, flow_dir, wstack, amask)
+    del wstack
+
+    # Clark 線形貯留（u 軸の離散リザーバ）: R = k·Tc
+    R = clark_k * tc_pos                                          # [h]
+    alpha = du / (R + du)                                        # per-cell 0..1
+    S = np.zeros(dem.shape, dtype=np.float64)
+    q_peak = np.zeros(dem.shape, dtype=np.float64)
+    for m in range(n_eval):
+        S = S + alpha * (np.where(amask, g[:, :, m], 0.0) - S)
+        np.maximum(q_peak, S, out=q_peak)
+        if progress_cb is not None:
+            progress_cb(0.5 + 0.5 * (m + 1) / n_eval)
+    del g
+
+    # 総体積 V [m³] = C · (total_mm/1000) · セル面積 を下流累積
+    v_w = np.where(amask, c_grid * (total_mm / 1000.0) * cell_area_m2, np.nan)
+    V = _accumulate_downstream(rc_r, rc_c, flow_dir, v_w, dem.shape)
+    V = np.where(amask, V, 0.0)
+
+    t_base_s = (duration_h + tc_pos) * 3600.0
+    q_mean = np.where(t_base_s > 0, V / t_base_s, 0.0)
+
+    # ハイドログラフの最大は平均を必ず上回る（物理的下限）。
+    # 離散評価の取りこぼしを埋めるため Mean で床を張る。
+    q_peak = np.maximum(q_peak, q_mean)
+
+    q_peak[~amask] = np.nan
+    q_mean[~amask] = np.nan
+    return q_peak.astype(np.float32), q_mean.astype(np.float32), tc
 
 
 def cs_to_flow_coefficients(cs_grid,
