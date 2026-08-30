@@ -473,13 +473,19 @@ def cum_travel_time_to_outlet(dem, flow_dir, local_tt):
 
 
 def triangular_hyetograph(total_mm, duration_h, i_peak_mmh, peak_frac=0.4,
-                          n_sub=60):
-    """三角形の設計ハイエトグラフ。
+                          n_sub=60, tail_mmh=1.0):
+    """三角形（＋下限裾）の設計ハイエトグラフ。
 
     高さ i_peak・面積 total_mm の三角形を作る（底辺 = 2·total/i_peak）。
     底辺が duration_h を超える場合は底辺 = duration_h に詰め、実効ピークを
     2·total/duration に下げる（＝ i_peak が平均強度を下回る指定は無効）。
-    山の位置は底辺の peak_frac（既定 0.4）。区間外は 0。
+    山の位置は底辺の peak_frac（既定 0.4）。
+
+    底辺が duration_h より短い（i_peak > 2·平均）ときは、三角形の後ろの
+    区間 [base, duration_h] を 0 でなく tail_mmh [mm/h] で埋め、そのぶんの
+    体積を三角形から差し引いて総量を total_mm に保つ。tail_mmh が平均強度
+    以上になる軽い降雨では裾を付けず従来どおり 0。既定 1.0 は i_peak 入力
+    の下限に一致（モデルが認める最小の降雨強度）。
 
     戻り値: (edges, intensity) — intensity[k] は [edges[k], edges[k+1]) の
             平均強度 [mm/h]。edges は [0, duration_h] を n_sub 分割。
@@ -494,13 +500,28 @@ def triangular_hyetograph(total_mm, duration_h, i_peak_mmh, peak_frac=0.4,
     if ipk_eff < i_mean:                            # 念のため（数値誤差）
         ipk_eff = 2.0 * i_mean
         base = min(dur, 2.0 * tot / max(ipk_eff, 1e-9))
+
+    # 三角形が duration の途中で終わるとき、末尾 [base, dur] を 0 でなく
+    # 下限裾 i_tail で埋める。体積補正:
+    #   0.5·base·ipk_eff + i_tail·(dur − base) = tot  を base について解く。
+    # i_tail が平均強度以上（裾だけで総量超過）になる軽雨では裾なし。
+    i_tail = 0.0
+    tail_req = max(float(tail_mmh), 0.0)
+    if base < dur - 1e-9 and 0.0 < tail_req < i_mean:
+        denom = 0.5 * ipk_eff - tail_req
+        if denom > 1e-9:
+            base_t = (tot - tail_req * dur) / denom
+            if 1e-3 < base_t < dur:
+                base = base_t
+                i_tail = tail_req
+
     tp = peak_frac * base
     edges = np.linspace(0.0, dur, n_sub + 1)
     ctr = 0.5 * (edges[:-1] + edges[1:])
     up = ipk_eff * (ctr / max(tp, 1e-9))
     down = ipk_eff * (1.0 - (ctr - tp) / max(base - tp, 1e-9))
     inten = np.where(ctr <= tp, up, down)
-    inten = np.where(ctr <= base, inten, 0.0)
+    inten = np.where(ctr <= base, inten, i_tail)
     inten = np.clip(inten, 0.0, None)
     return edges, inten.astype(np.float64)
 
