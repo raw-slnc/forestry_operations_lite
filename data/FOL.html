@@ -140,6 +140,13 @@ missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin
   <li>Selecting DSM data lets the runoff and velocity coefficients for flow estimation be calculated automatically from the DSM.</li>
 </ul>
 
+<h4>Virtual Shizuoka Features</h4>
+<ul>
+  <li>When using Virtual Shizuoka data, first pan or zoom the Design Preview to the area you want to analyze, then select VS LP/Grid DTM or VS LP -&gt; DSM. The plugin fetches data for the preview extent at the time of selection.</li>
+  <li>The fetched Virtual Shizuoka data extent is not continuously shown as a boundary in the preview. VS LP/Grid DTM is fetched again for the current preview extent when analysis starts. If VS LP -&gt; DSM is outside the analysis range, the plugin asks whether to fetch it again or cancel.</li>
+  <li>Local DEM/DSM files can be analyzed with partial overlap, using the available data. For Virtual Shizuoka data, fetch the data for the intended analysis range before running the analysis.</li>
+</ul>
+
 <h3>TIF / ZIP Layout</h3>
 <table>
   <tr><th>Pattern</th><th>Action</th></tr>
@@ -461,6 +468,13 @@ allowed); an overwrite run replaces the run folder and removes the written
   <li>DEM は汎用データか、地形解析を行う箇所のデータを選択してください。</li>
   <li>DSM データは、地表データの DEM データ設定と範囲を同じくするデータを選んでください。</li>
   <li>DSM データを選択することで流量推測における流出係数・流速係数がDSMを基に自動計算されます。</li>
+</ul>
+
+<h4>Virtual Shizuoka Features</h4>
+<ul>
+  <li>Virtual Shizuoka data を使う場合は、先に Design Preview を解析したい範囲へズーム・パンしてから、VS LP/Grid DTM または VS LP -&gt; DSM を選択してください。選択時点のプレビュー範囲に合わせてデータを取得します。</li>
+  <li>取得済みの Virtual Shizuoka data の範囲は、取得後にプレビュー上へ常時枠表示されるわけではありません。VS LP/Grid DTM は解析開始時に現在のプレビュー範囲で再取得します。VS LP -&gt; DSM が解析範囲から外れている場合は、再取得するかキャンセルするかを確認します。</li>
+  <li>通常のローカル DEM/DSM は一部範囲外でも利用可能な範囲で解析できます。Virtual Shizuoka data は、解析したい範囲を決めてから先に取得しておく使い方を推奨します。</li>
 </ul>
 
 <h3>TIF / ZIP の配置</h3>

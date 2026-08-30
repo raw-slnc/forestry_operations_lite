@@ -168,8 +168,8 @@ forestry_operations_lite/
     ├── tc.tif                    ← time of concentration [h]
     ├── flow_peak.tif             ← peak discharge Qp [m³/s]
     ├── flow_mean.tif             ← mean discharge Qm [m³/s]
-    ├── flow_vtotal.tif           ← total runoff volume V [m³]
     ├── integrated_risk_index.tif ← overall risk index (auto-generated)
+    ├── integrated_high_risk_mask.tif ← display raster for high-risk areas
     └── integrated_high_risk.gpkg ← high-risk area polygons
 ```
 
@@ -360,8 +360,8 @@ forestry_operations_lite/
     ├── tc.tif                    ← 到達時間 Tc [h]
     ├── flow_peak.tif             ← ピーク流量 Qp [m³/s]
     ├── flow_mean.tif             ← 平均流量 Qm [m³/s]
-    ├── flow_vtotal.tif           ← 総流出量 V [m³]
     ├── integrated_risk_index.tif ← 統合リスク指標（自動生成）
+    ├── integrated_high_risk_mask.tif ← 高リスクエリア表示用ラスタ
     └── integrated_high_risk.gpkg ← 高リスクエリアポリゴン
 ```
 

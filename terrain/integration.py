@@ -7,6 +7,7 @@
 
 出力:
   - integrated_risk_index.tif  : 0-6 の統合リスク指標
+  - integrated_high_risk_mask.tif : 高リスク域の表示用ラスタマスク
   - integrated_high_risk.gpkg  : 高リスク域(デフォルト: index>=3)
 """
 import glob
@@ -150,8 +151,14 @@ def build_integrated_index(
     high_mask = (index >= float(high_risk_threshold)) & ~np.isnan(index)
     if fs_caution_mask is not None:
         high_mask |= fs_caution_mask
+    mask_path = None
     zone_path = None
     if high_mask.any():
+        mask_arr = np.where(high_mask, 1.0, np.nan).astype(np.float32)
+        mask_path = rw.save_raster(
+            mask_arr, base.gt, base.crs_wkt, out_dir,
+            f"{analysis_prefix}integrated_high_risk_mask", overwrite=True
+        )
         zone_path = rw.mask_to_polygons(
             high_mask, base.gt, base.crs_wkt, out_dir,
             f"{analysis_prefix}integrated_high_risk", overwrite=True
@@ -159,6 +166,7 @@ def build_integrated_index(
 
     return {
         "integrated_risk_index": index_path,
+        "integrated_high_risk_mask": mask_path,
         "integrated_high_risk": zone_path,
         "sources": {"fs": fs_path, "twi": twi_path, "flow": flow_path},
         "thresholds": {

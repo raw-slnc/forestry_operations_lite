@@ -101,6 +101,65 @@ def mask_to_polygons(binary_mask, gt, crs_wkt, out_dir, layer_name, overwrite=Fa
     return path
 
 
+def dissolve_gpkg(src_path, out_dir, layer_name, overwrite=False):
+    """GPKG の全ポリゴンを1つの dissolved GPKG として保存する。"""
+    if not HAS_GDAL:
+        raise RuntimeError("GDAL is not available")
+    if not os.path.exists(src_path):
+        raise FileNotFoundError(src_path)
+    os.makedirs(out_dir, exist_ok=True)
+
+    src_ds = ogr.Open(src_path)
+    if src_ds is None:
+        raise RuntimeError(f"Could not open vector: {src_path}")
+    src_lyr = src_ds.GetLayer(0)
+    if src_lyr is None:
+        src_ds = None
+        raise RuntimeError(f"No vector layer: {src_path}")
+
+    geom_collection = ogr.Geometry(ogr.wkbGeometryCollection)
+    for feat in src_lyr:
+        geom = feat.GetGeometryRef()
+        if geom is not None and not geom.IsEmpty():
+            geom_collection.AddGeometry(geom)
+
+    dissolved = None
+    if not geom_collection.IsEmpty():
+        dissolved = geom_collection.UnaryUnion()
+    if dissolved is None or dissolved.IsEmpty():
+        src_ds = None
+        return None
+    if ogr.GT_Flatten(dissolved.GetGeometryType()) == ogr.wkbPolygon:
+        multi = ogr.Geometry(ogr.wkbMultiPolygon)
+        multi.AddGeometry(dissolved)
+        dissolved = multi
+
+    path = _resolve_path(out_dir, layer_name, ".gpkg", overwrite)
+    drv = ogr.GetDriverByName("GPKG")
+    if overwrite and os.path.exists(path):
+        drv.DeleteDataSource(path)
+    dst_ds = drv.CreateDataSource(path)
+    if dst_ds is None:
+        src_ds = None
+        raise RuntimeError(f"Could not create vector: {path}")
+
+    srs = src_lyr.GetSpatialRef()
+    dst_lyr = dst_ds.CreateLayer(layer_name, srs=srs, geom_type=ogr.wkbMultiPolygon)
+    fd = ogr.FieldDefn("value", ogr.OFTInteger)
+    dst_lyr.CreateField(fd)
+
+    out_feat = ogr.Feature(dst_lyr.GetLayerDefn())
+    out_feat.SetField("value", 1)
+    out_feat.SetGeometry(dissolved)
+    dst_lyr.CreateFeature(out_feat)
+
+    out_feat = None
+    dst_ds.FlushCache()
+    dst_ds = None
+    src_ds = None
+    return path
+
+
 def values_to_points(data, threshold_gt, gt, crs_wkt, out_dir, layer_name, overwrite=False):
     """
     data > threshold_gt のセルをポイントとしてGPKGに保存。
