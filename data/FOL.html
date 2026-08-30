@@ -145,6 +145,8 @@ missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin
   <li>When using Virtual Shizuoka data, first pan or zoom the Design Preview to the area you want to analyze, then select VS LP/Grid DTM or VS LP -&gt; DSM. The plugin fetches data for the preview extent at the time of selection.</li>
   <li>The fetched Virtual Shizuoka data extent is not continuously shown as a boundary in the preview. VS LP/Grid DTM is fetched again for the current preview extent when analysis starts. If VS LP -&gt; DSM is outside the analysis range, the plugin asks whether to fetch it again or cancel.</li>
   <li>Local DEM/DSM files can be analyzed with partial overlap, using the available data. For Virtual Shizuoka data, fetch the data for the intended analysis range before running the analysis.</li>
+  <li>VS LP -&gt; DSM downloads LAS files (~237 MB per tile) into <code>vs_lp_ground/</code> under the analysis output folder. There is no time-based expiry: after each successful VS LP -&gt; DSM run only the LAS tiles used by that run are kept and older LAS files are removed. Re-running the same area reuses the cached LAS without re-downloading. Delete <code>vs_lp_ground/</code> manually to reclaim space.</li>
+  <li>VS LP/Grid DTM and other DEM tiles are cached in <code>dem/</code> and <code>vs_lp_grid/</code>, and are removed automatically once no saved analysis run references them as its DEM.</li>
 </ul>
 
 <h3>TIF / ZIP Layout</h3>
@@ -219,10 +221,23 @@ All parameters describe the properties of the "topsoil down to the hard layer".<
   <tr>
     <td><strong>FS threshold</strong></td>
     <td>
-      Try different thresholds (e.g. 1.5 for danger, 2.5 for caution) to see how the distribution changes.<br>
-      Prefer on-site test values if available.
+      Not a physical value — a review setting (default 1.2). See <em>How to use the FS threshold</em> below.
     </td>
   </tr>
+</table>
+
+<h4>How to use the FS threshold (design FS)</h4>
+<p>FS itself is a physical quantity computed from the four site parameters (φ, c', z, m). The FS threshold is <strong>not</strong> a physical value — it is how conservative you choose to be, set from the consequence of failure, the permanence of the operation, and the level of uncertainty. It is not a per-site number; site conditions go into the four parameters.</p>
+<ul>
+  <li><strong>FS 1.0</strong> is the slope-stability boundary — the state where the forces are in balance.</li>
+  <li><strong>FS threshold</strong>: how far above 1.0 the "caution" net is cast.</li>
+</ul>
+<table>
+  <tr><th>FS threshold</th><th>When to use (guide)</th></tr>
+  <tr><td>0.8</td><td>Check whether any especially hazardous spots exist (little to protect downslope / temporary work)</td></tr>
+  <tr><td>1.2 (default)</td><td>Pick up hazards worth noting (ordinary forest roads and operations)</td></tr>
+  <tr><td>1.5</td><td>Keep a safety margin (permanent roads, stream crossings, higher uncertainty)</td></tr>
+  <tr><td>2.0+</td><td>Sites needing special care (houses / key structures downslope, heavy-rain scenario)</td></tr>
 </table>
 
 <h3>Valley Terrain (TWI)</h3>
@@ -372,6 +387,9 @@ USDA NRCS National Engineering Handbook, Part 630.</p>
   <tr><td><code>flow_mean.tif</code></td><td>Mean load Qm [m³/s] — sustained discharge over (duration + Tc)</td></tr>
   <tr><td><code>tc.tif</code></td><td>Time load — time of concentration Tc [h]</td></tr>
 </table>
+<div class="note">
+  Analysis runs are saved in numbered subfolders (<code>0001</code>, <code>0002</code>, …) and are never deleted automatically &mdash; an overwrite run replaces its own number, otherwise runs accumulate. The next run number is (highest existing number) + 1: deleting a run in the middle leaves that number unused, while deleting the highest-numbered run frees it for reuse. Deleting a run folder also lets the DEM-tile cleanup free any <code>dem/</code> / <code>vs_lp_grid/</code> tile that no remaining run still references. To keep the output folder and its cache from growing without bound, delete run folders you no longer need directly in the file manager (the plugin does not need to be running).
+</div>
 </div>
 
 <!-- ============================================================ -->
@@ -475,6 +493,8 @@ allowed); an overwrite run replaces the run folder and removes the written
   <li>Virtual Shizuoka data を使う場合は、先に Design Preview を解析したい範囲へズーム・パンしてから、VS LP/Grid DTM または VS LP -&gt; DSM を選択してください。選択時点のプレビュー範囲に合わせてデータを取得します。</li>
   <li>取得済みの Virtual Shizuoka data の範囲は、取得後にプレビュー上へ常時枠表示されるわけではありません。VS LP/Grid DTM は解析開始時に現在のプレビュー範囲で再取得します。VS LP -&gt; DSM が解析範囲から外れている場合は、再取得するかキャンセルするかを確認します。</li>
   <li>通常のローカル DEM/DSM は一部範囲外でも利用可能な範囲で解析できます。Virtual Shizuoka data は、解析したい範囲を決めてから先に取得しておく使い方を推奨します。</li>
+  <li>VS LP -&gt; DSM は LAS ファイル（1タイル約 237 MB）を解析出力フォルダ内の <code>vs_lp_ground/</code> に保存します。期間による自動削除はなく、VS LP -&gt; DSM の実行が成功するたびに、その実行で使ったタイルの LAS だけを残して古い LAS を削除します。同じ範囲の再実行はキャッシュ済み LAS を再利用します（再ダウンロードなし）。容量を空けたいときは <code>vs_lp_ground/</code> を手動で削除してください。</li>
+  <li>VS LP/Grid DTM やその他の DEM タイルは <code>dem/</code> と <code>vs_lp_grid/</code> にキャッシュされ、どの保存済み解析からも DEM として参照されなくなると自動的に削除されます。</li>
 </ul>
 
 <h3>TIF / ZIP の配置</h3>
@@ -549,10 +569,23 @@ FS は傾斜角・内部摩擦角・粘着力・土壌深度・飽和率から�
   <tr>
     <td><strong>FS 閾値</strong></td>
     <td>
-      1.5 以下を危険、2.5 以下を要注意など、基準を変えて分布の変化を確認。<br>
-      現場試験値がある場合はそちらを優先してください。
+      物理量ではなくレビュー時の設定値（既定 1.2）。下の<em>FS 閾値の考え方</em>を参照。
     </td>
   </tr>
+</table>
+
+<h4>FS 閾値の考え方（design-FS）</h4>
+<p>FS そのものは 4つの現場パラメータ（φ・c'・z・m）から計算される物理量です。FS 閾値は物理量では<strong>なく</strong>、「どこまで危険を拾うか」というレビュー側の保守度で、被害の重大さ・施業の恒久性・不確実性から決めます。現場ごとに動かす数値ではありません（現場条件は 4パラメータ側で表現します）。</p>
+<ul>
+  <li><strong>FS1.0</strong> は斜面の安定性の境界値として、力のつり合いが取れている状態を表します。</li>
+  <li><strong>FS 閾値</strong>：1.0 より上に「要注意」の網をどこまで広げるか。</li>
+</ul>
+<table>
+  <tr><th>FS 閾値</th><th>使う場面（目安）</th></tr>
+  <tr><td>0.8</td><td>特に危険な箇所があるかを見る（下流に守るものが少ない／一時的作業）</td></tr>
+  <tr><td>1.2（既定）</td><td>注意すべき危険を拾う（通常の作業道・施業）</td></tr>
+  <tr><td>1.5</td><td>安全に余裕をみる（恒久林道・渡渉部・不確実性が高い）</td></tr>
+  <tr><td>2.0〜</td><td>特に慎重を要する現場（人家・重要構造物が下流／豪雨想定）</td></tr>
 </table>
 
 <h3>沢地形（TWI）</h3>
@@ -687,6 +720,9 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
   <tr><td><code>flow_mean.tif</code></td><td>Mean load Qm [m³/s] — （継続時間 + Tc）で割った持続的な流量</td></tr>
   <tr><td><code>tc.tif</code></td><td>Time load — 流達時間 Tc [h]</td></tr>
 </table>
+<div class="note">
+  解析結果は番号付きサブフォルダ（<code>0001</code>, <code>0002</code>, …）に保存され、自動削除は行いません。上書き解析は同じ番号を差し替えるだけで、それ以外は溜まっていきます。次の番号は「既存の最大番号 + 1」です。途中の番号を削除してもその番号は再使用されず、最大番号のフォルダを削除した場合のみ次でその番号が再利用されます。フォルダを削除すると、どの解析からも参照されなくなった <code>dem/</code> / <code>vs_lp_grid/</code> のタイルを DEM キャッシュ整理が解放できるようになります。出力フォルダとキャッシュが際限なく肥大しないよう、不要になった番号フォルダはファイルマネージャで直接削除してください（プラグインの起動は不要です）。
+</div>
 </div>
 
 <!-- ============================================================ -->
