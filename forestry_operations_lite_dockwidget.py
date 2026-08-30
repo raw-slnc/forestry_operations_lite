@@ -980,7 +980,7 @@ class LockedMapTool(QgsMapTool):
         pass  # ズーム阻止
 
 
-class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
+class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
     closingPlugin = pyqtSignal()
 
     def __init__(self, iface, parent=None):
@@ -989,7 +989,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.setupUi(self)
 
         self.preview_canvas = None
-        self._added_to_main_window = False
 
         self._syncing = False
         self._initializing = True     # 起動完了まで preview→main 同期をブロック
@@ -1045,11 +1044,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.chkLoadWetland    = QtWidgets.QPushButton("Wetland Terrain")
         self.chkLoadFlow       = QtWidgets.QPushButton("Flow Estimation")
         self.chkLoadIntegrated = QtWidgets.QPushButton("Overall Risk")
+        self.btnRiskType       = QtWidgets.QPushButton("Risk Type")
         for _b in (self.chkLoadStability, self.chkLoadValley,
                    self.chkLoadWetland, self.chkLoadFlow, self.chkLoadIntegrated):
             _b.setCheckable(True)
             _b.setEnabled(False)   # 解析データが存在するまでグレーアウト
             _b.setStyleSheet(self._BTN_STYLE_NORMAL)
+        self.chkLoadIntegrated.setFixedWidth(self.chkLoadIntegrated.sizeHint().width())
+        self.btnRiskType.setEnabled(False)
+        self.btnRiskType.setToolTip("Switch Overall Risk display type")
         self.btnTerrainToggle.setStyleSheet(
             "QPushButton{padding:2px 10px;}"
             "QPushButton:checked{background:#f0ff1a;color:#222;"
@@ -1420,7 +1423,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         import pathlib
         _fol_uri = pathlib.Path(os.path.dirname(__file__), "data", "FOL.html").as_uri()
-        _corner_lnk = QtWidgets.QLabel(f'<a href="{_fol_uri}">?</a>')
+        _corner_lnk = QtWidgets.QLabel(f'<a href="{_fol_uri}">Help</a>')
         _corner_lnk.setOpenExternalLinks(True)
         _corner_lnk.setToolTip("Open FOL documentation")
         _corner_lnk.setContentsMargins(0, 0, 4, 0)
@@ -1448,11 +1451,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         dm_row2.addWidget(self.btnTerrainToggle)
         dm_row2.addSpacing(6)
         for _b, _sp, _fb, _fb2 in (
-            (self.chkLoadStability,  self.spinOpacityStability,  None,                   None),
             (self.chkLoadValley,     self.spinOpacityValley,     None,                   None),
             (self.chkLoadWetland,    self.spinOpacityWetland,    self.btnFilterWetland,  None),
             (self.chkLoadFlow,       self.spinOpacityFlow,       self.btnFilterFlow,     self.btnFlowBuffer),
-            (self.chkLoadIntegrated, self.spinOpacityIntegrated, None,                   None),
+            (self.chkLoadIntegrated, self.spinOpacityIntegrated, self.btnRiskType,        None),
         ):
             dm_row2.addWidget(_b)
             if _fb2 is not None:
@@ -1472,6 +1474,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             (self.btnGpkgLayerVis, self.spinGpkgOpacity),
             (self.btnTileLayerVis, self.spinTileOpacity),
             (self.btnBgLayerVis,   self.spinBgOpacity),
+            (self.chkLoadStability,  self.spinOpacityStability),
         ):
             dm_row3.addWidget(_b)
             dm_row3.addWidget(_sp)
@@ -1506,6 +1509,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # chkLoad* / spinOpacity* / lblLoadStatus は _build_extended_ui で先行作成。
         self._loaded_terrain_layers = {}   # key → [layer_id, ...]
         self._terrain_cycle_state = {}     # key → int (-1=非表示, 0..N-1=表示中ファイル番号)
+        self._integrated_risk_type_state = 0  # 0=Overall Risk Index, 1=High Risk Areas
         self._filter_state = {"wetland": "off", "flow": "off"}  # off/low/mid
         self._flow_buffer_state = "off"  # off/weak/strong
         self._filter_state_tc = "off"  # Time load (tc) 専用 off/low/mid
@@ -1514,7 +1518,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._flow_buffer_mem_paths = []  # vsimem パス（解放用）
         self._loaded_terrain_basenames = {}  # key → base_name（フィルタ再適用用）
         self._terrain_layer_group = None   # QgsLayerTreeGroup or None
-        self._exclusive_hidden = {}        # 排他非表示中のキー → 保存済みcycle state
 
         # --- 解析種別 ---
         grpTypes = QtWidgets.QGroupBox("Analysis Types")
@@ -1910,6 +1913,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.chkLoadWetland.clicked.connect(lambda: self._cycle_terrain_layer("wetland"))
         self.chkLoadFlow.clicked.connect(lambda: self._cycle_terrain_layer("flow"))
         self.chkLoadIntegrated.clicked.connect(lambda: self._cycle_terrain_layer("integrated"))
+        self.btnRiskType.clicked.connect(self._cycle_integrated_risk_type)
         for _key, _sp in (
             ("stability",  self.spinOpacityStability),
             ("valley",     self.spinOpacityValley),
@@ -2170,7 +2174,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self._syncing = False
 
     def _finish_init(self):
-        """showMaximized()後にキャンバスサイズが確定してから呼ばれる。
+        """show()後にキャンバスサイズが確定してから呼ばれる。
         保存済みメイン状態を復元してからプレビューに同期し、双方向同期を有効化する。"""
         if self.preview_canvas is None:
             return
@@ -2235,6 +2239,29 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self._pending_apply_layer_display = False
         self._sync_main_to_preview(force=True)
 
+    def _ensure_startup_geometry(self):
+        screen = None
+        if self.iface is not None:
+            try:
+                center = self.iface.mainWindow().frameGeometry().center()
+                screen = QtWidgets.QApplication.screenAt(center)
+            except Exception:  # nosec B110
+                pass
+        if screen is None:
+            screen = QtWidgets.QApplication.screenAt(self.pos())
+        if screen is None:
+            screen = QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            return
+
+        avail = screen.availableGeometry()
+        geom = self.frameGeometry() if self.isVisible() else self.geometry()
+        width = geom.width()
+        height = geom.height()
+        x = avail.x() + max((avail.width() - width) // 2, 0)
+        y = avail.y() + max((avail.height() - height) // 2, 0)
+        self.move(x, y)
+
     def initialize_window_mode(self):
         standalone = True
         QSettings().setValue("forestry_operations_lite/standalone_window", True)
@@ -2252,20 +2279,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self._saved_main_center = mc.center()
                 self._saved_main_scale  = mc.scale()
                 self._saved_main_extent = mc.extent()   # extent を直接保存（setExtent で確実に復元できる）
-            if self.iface is not None and self._added_to_main_window:
-                self.iface.mainWindow().removeDockWidget(self)
-                self._added_to_main_window = False
-            self.setParent(None, Qt.Window)
-            self.showMaximized()
+            self.setWindowFlags(
+                Qt.Window
+                | Qt.WindowMinimizeButtonHint
+                | Qt.WindowMaximizeButtonHint
+                | Qt.WindowCloseButtonHint
+            )
+            self.show()
+            QTimer.singleShot(0, self._ensure_startup_geometry)
+            QTimer.singleShot(150, self._ensure_startup_geometry)
             QTimer.singleShot(300, self._finish_init)
         else:
-            if self.iface is not None and not self._added_to_main_window:
-                self.setParent(self.iface.mainWindow())
-                self.iface.addDockWidget(Qt.BottomDockWidgetArea, self)
-                self._added_to_main_window = True
-            self.setAllowedAreas(Qt.BottomDockWidgetArea)
-            if self.isFloating():
-                self.setFloating(False)
             self.show()
 
     def _refresh_preview_canvas(self):
@@ -2995,20 +3019,32 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         except RuntimeError:
             return
         proj = QgsProject.instance()
-        desired = []
+        desired_ids = []
         for _k in sorted(self._loaded_terrain_layers,
                          key=lambda x: self._KEY_RANK.get(x, 0), reverse=True):
             for _lid in self._loaded_terrain_layers.get(_k, []):
                 if proj.mapLayer(_lid) is not None:
-                    desired.append(_lid)
+                    desired_ids.append(_lid)
             if _k == "flow":
                 for _lid in self._flow_buffer_layer_ids:
                     if proj.mapLayer(_lid) is not None:
-                        desired.append(_lid)
-        if not desired:
+                        desired_ids.append(_lid)
+        if not desired_ids:
             return
         current = [n.layerId() for n in group.findLayers()]
-        if current == desired:
+        if current == desired_ids:
+            return
+        checked_by_id = {}
+        for _n in group.findLayers():
+            try:
+                checked_by_id[_n.layerId()] = _n.itemVisibilityChecked()
+            except Exception:  # nosec B110
+                pass
+        desired_layers = [
+            _lyr for _lyr in (proj.mapLayer(_lid) for _lid in desired_ids)
+            if _lyr is not None
+        ]
+        if not desired_layers:
             return
         _canvases = [_c for _c in (
             getattr(self, "preview_canvas", None),
@@ -3020,16 +3056,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             except Exception:  # nosec B110
                 pass
         try:
-            for _i, _lid in enumerate(desired):
-                _n = group.findLayer(_lid)
-                if _n is None:
-                    continue
-                _clone = _n.clone()
-                group.removeChildNode(_n)
-                _pos = min(_i, len(group.children()))
-                group.insertChildNode(_pos, _clone)
+            group.reorderGroupLayers(desired_layers)
+            for _lid, _was_checked in checked_by_id.items():
                 _cn = group.findLayer(_lid)
                 if _cn is not None:
+                    _cn.setItemVisibilityChecked(_was_checked)
                     _cn.setExpanded(False)
         except Exception:  # nosec B110
             pass
@@ -3064,10 +3095,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         if node:
             node.setExpanded(False)
 
-    # stability ↔ integrated の排他ペア
-    _EXCLUSIVE = {"stability": "integrated", "integrated": "stability"}
-
-    # 表示ボタンの通常スタイル（青ON）と排他抑制中スタイル（赤ON）
+    # 表示ボタンの通常スタイル（青ON）
     _BTN_STYLE_NORMAL = (
         "QPushButton{padding:2px 10px;}"
         "QPushButton:checked{background:#3a7fd5;color:white;"
@@ -3080,13 +3108,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         "QPushButton{padding:2px 10px;}"
         "QPushButton:checked{background:#27ae60;color:white;"
         "border:1px solid #1e8449;border-radius:3px;}"
-    )
-    _BTN_STYLE_BLOCKING = (
-        "QPushButton{padding:2px 10px;}"
-        "QPushButton:checked{background:#c0392b;color:white;"
-        "border:1px solid #922b21;border-radius:3px;}"
-        "QPushButton:disabled{color:#aaa;background:#f2f2f2;"
-        "border:1px solid #ddd;border-radius:3px;}"
     )
 
     def _hide_key(self, key):
@@ -3109,7 +3130,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         btn = self._btn(key)
         with QSignalBlocker(btn):
             btn.setChecked(False)
-            btn.setText(self._BTN_LABELS[key][0])
+            btn.setText(self._terrain_button_label(key))
             btn.setStyleSheet(self._BTN_STYLE_NORMAL)
 
     def _reset_load_buttons(self):
@@ -3119,14 +3140,60 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             btn = self._btn(key)
             with QSignalBlocker(btn):
                 btn.setChecked(False)
-                btn.setText(label)
+                btn.setText(self._terrain_button_label(key))
+        self._update_risk_type_button()
 
-    def _cycle_terrain_layer(self, key, analysis_number=None):
+    def _update_risk_type_button(self):
+        if not hasattr(self, "btnRiskType"):
+            return
+        self.btnRiskType.setText("Risk Type")
+        if hasattr(self, "chkLoadIntegrated"):
+            self.chkLoadIntegrated.setText(self._integrated_button_label())
+
+    def _integrated_button_label(self):
+        state = getattr(self, "_integrated_risk_type_state", 0)
+        return "Overall Risk" if state == 0 else "High Risk"
+
+    def _terrain_button_label(self, key):
+        if key == "integrated":
+            return self._integrated_button_label()
+        return self._BTN_LABELS[key][0]
+
+    def _cycle_integrated_risk_type(self):
+        old_state = self._integrated_risk_type_state
+        self._integrated_risk_type_state = (
+            1 if self._integrated_risk_type_state == 0 else 0
+        )
+        self._update_risk_type_button()
+        if self._terrain_cycle_state.get("integrated", -1) != -1:
+            shown = self._cycle_terrain_layer(
+                "integrated", desired_state=self._integrated_risk_type_state)
+            if shown is False:
+                self._integrated_risk_type_state = old_state
+                self._update_risk_type_button()
+
+    def _terrain_display_patterns(self, key, out_dir, analysis_number,
+                                  integrated_state=None):
+        if key != "integrated":
+            return self._TERRAIN_PATTERNS[key]
+
+        if integrated_state is None:
+            integrated_state = getattr(self, "_integrated_risk_type_state", 0)
+
+        if integrated_state == 0:
+            return [
+                ("integrated_risk_index", "Overall Risk Index", "raster", ".tif"),
+            ]
+        return [
+            ("integrated_high_risk", "High Risk Areas", "vector", ".gpkg"),
+        ]
+
+    def _cycle_terrain_layer(self, key, analysis_number=None, desired_state=None):
         """クリック毎に 非表示→ファイル1→ファイル2→...→非表示 と循環する。
         analysis_number を明示指定するとコンボの選択に依存せず読み込む。"""
         analysis_number = analysis_number or self.cmbAnalysisNumber.currentData()
         btn = self._btn(key)
-        base_label = self._BTN_LABELS[key][0]
+        base_label = self._terrain_button_label(key)
 
         if not analysis_number:
             self.lblLoadStatus.setText("Select an analysis run")
@@ -3135,30 +3202,55 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             return
 
         out_dir = self._terrain_output_dir()
+        current = self._terrain_cycle_state.get(key, -1)
+        if key == "integrated":
+            n = len(self._TERRAIN_PATTERNS[key])
+            if desired_state is not None:
+                next_state = desired_state
+            else:
+                next_state = -1 if current != -1 else self._integrated_risk_type_state
+            patterns = (
+                [] if next_state == -1 else
+                self._terrain_display_patterns(
+                    key, out_dir, analysis_number, next_state)
+            )
+        else:
+            patterns = self._terrain_display_patterns(key, out_dir, analysis_number)
+            next_state = None
+
         available = []
-        for pat in self._TERRAIN_PATTERNS[key]:
+        for pat in patterns:
             color_name, label, kind, ext = pat[0], pat[1], pat[2], pat[3]
             file_base = pat[4] if len(pat) > 4 else color_name
             path = os.path.join(out_dir, analysis_number, f"{file_base}{ext}")
             if os.path.exists(path):
                 available.append((color_name, label, kind, path))
 
-        if not available:
+        if key != "integrated" and not available:
             self.lblLoadStatus.setText("No file")
             with QSignalBlocker(btn):
                 btn.setChecked(False)
-            return
+            return False
+
+        if key != "integrated":
+            # 次の状態へ (-1=非表示, 0..N-1=ファイルインデックス)
+            n = len(available)
+            next_state = (
+                desired_state if desired_state is not None
+                else current + 1 if current + 1 < n else -1
+            )
+
+        if next_state >= n or (next_state != -1 and not available):
+            self.lblLoadStatus.setText("No file")
+            with QSignalBlocker(btn):
+                btn.setChecked(current != -1)
+            return False
 
         # 現在表示中のレイヤを削除
         proj = QgsProject.instance()
         for lid in self._loaded_terrain_layers.pop(key, []):
             if proj.mapLayer(lid):
                 proj.removeMapLayer(lid)
-
-        # 次の状態へ (-1=非表示, 0..N-1=ファイルインデックス)
-        current = self._terrain_cycle_state.get(key, -1)
-        n = len(available)
-        next_state = current + 1 if current + 1 < n else -1
         self._terrain_cycle_state[key] = next_state
 
         if next_state == -1:
@@ -3178,33 +3270,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 for mp in self._flow_buffer_mem_paths:
                     _gdal.Unlink(mp)
                 self._flow_buffer_mem_paths = []
-            # 排他ペアを復元（stability ↔ integrated）
-            partner = self._EXCLUSIVE.get(key)
-            if partner and partner in self._exclusive_hidden:
-                saved = self._exclusive_hidden.pop(partner)
-                self._terrain_cycle_state[partner] = saved - 1
-                self._cycle_terrain_layer(partner, analysis_number)
             self._refresh_preview_canvas()
             # レイヤ削除後にメインキャンバスを明示的にリフレッシュ
             if self.iface is not None:
                 self.iface.mapCanvas().refresh()
-            return
+            return True
 
         # ファイルを読み込んで表示
         self._ensure_terrain_group(analysis_number)
-        # 初回ON時のみ排他ペアを非表示（stability ↔ integrated）
-        _blocking = False
-        if current == -1:
-            partner = self._EXCLUSIVE.get(key)
-            if partner:
-                partner_state = self._terrain_cycle_state.get(partner, -1)
-                if partner_state != -1:
-                    self._exclusive_hidden.pop(key, None)   # 自身の古い記録をクリア
-                    self._exclusive_hidden[partner] = partner_state
-                    self._hide_key(partner)
-                    _blocking = True
-
-        base_name, label, kind, path = available[next_state]
+        load_index = 0 if key == "integrated" else next_state
+        base_name, label, kind, path = available[load_index]
         lyr = (QgsRasterLayer(path, label) if kind == "raster"
                else QgsVectorLayer(path, label, "ogr"))
         if lyr.isValid():
@@ -3239,16 +3314,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         else:
             self.lblLoadStatus.setText(f"Load error: {label}")
             self._terrain_cycle_state[key] = current  # 状態を戻す
+            return False
 
         with QSignalBlocker(btn):
             btn.setChecked(True)
             btn.setText(base_label)
-            btn.setStyleSheet(
-                self._BTN_STYLE_BLOCKING if _blocking else self._BTN_STYLE_NORMAL)
+            btn.setStyleSheet(self._BTN_STYLE_NORMAL)
 
         # flow 経路は _apply_flow_buffer() 内で正規化済みなので二重に呼ばない
         if key != "flow":
             self._normalize_terrain_group_order()
+        return True
 
     def _toggle_terrain_layer(self, key, checked):
         """チェックON→選択解析番号のファイルを読込、OFF→該当レイヤを削除"""
@@ -3273,7 +3349,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self._ensure_terrain_group(analysis_number)
             added = []
             ids = []
-            for pat in self._TERRAIN_PATTERNS[key]:
+            patterns = self._terrain_display_patterns(key, out_dir, analysis_number)
+            for pat in patterns:
                 color_name, label, kind, ext = pat[0], pat[1], pat[2], pat[3]
                 file_base = pat[4] if len(pat) > 4 else color_name
                 path = os.path.join(out_dir, analysis_number, f"{file_base}{ext}")
@@ -3306,7 +3383,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if added:
                 names = ", ".join(added)
                 n_added = len(added)
-                n_total = len(self._TERRAIN_PATTERNS[key])
+                n_total = len(patterns)
                 if n_added > 1 or n_total > 1:
                     status = f"Showing {names} ({n_added}/{n_total})."
                 else:
@@ -3964,7 +4041,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # トグルボタンの有効/無効を更新
         has_data = self.cmbAnalysisNumber.count() > 1
         for _b in (self.chkLoadStability, self.chkLoadValley,
-                   self.chkLoadWetland, self.chkLoadFlow, self.chkLoadIntegrated):
+                   self.chkLoadWetland, self.chkLoadFlow, self.chkLoadIntegrated,
+                   self.btnRiskType):
             _b.setEnabled(has_data)
         # 解析番号に紐づかない DEM キャッシュを削除
         self._gc_dem_cache()
@@ -4047,6 +4125,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             desired_state = state.get(key, -1)
             if desired_state < 0:
                 continue
+            if key == "integrated":
+                self._integrated_risk_type_state = desired_state
+                self._update_risk_type_button()
+                self._cycle_terrain_layer(key, analysis_number, desired_state=desired_state)
+                continue
             # _cycle_terrain_layer() は現在 state から次状態へ進めるため、
             # 目標の1つ手前を仕込んでから1回進めて復元する。
             self._terrain_cycle_state[key] = desired_state - 1
@@ -4107,7 +4190,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 pass
         self._loaded_terrain_layers = {}
         self._flow_buffer_layer_ids = []
-        self._exclusive_hidden = {}
         self._loaded_terrain_basenames = {}
         if reset_controls:
             self._reset_load_buttons()
@@ -4954,7 +5036,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     self.preview_canvas.refresh()
                 except Exception:  # nosec B110
                     pass
-            _removed_keys = set()
             for _key in list(getattr(self, "_loaded_terrain_layers", {}).keys()):
                 _kept = [
                     _lid for _lid in self._loaded_terrain_layers.get(_key, [])
@@ -4966,11 +5047,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     self._loaded_terrain_layers.pop(_key, None)
                     self._loaded_terrain_basenames.pop(_key, None)
                     self._terrain_cycle_state[_key] = -1
-                    _removed_keys.add(_key)
-            self._exclusive_hidden = {
-                _key: _state for _key, _state in self._exclusive_hidden.items()
-                if _key not in _removed_keys
-            }
             _proj.removeMapLayers(_remove_ids)
             for _canvas in (
                 getattr(self, "preview_canvas", None),
@@ -5500,6 +5576,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         s.setValue("opacity_wetland",    self.spinOpacityWetland.value())
         s.setValue("opacity_flow",       self.spinOpacityFlow.value())
         s.setValue("opacity_integrated", self.spinOpacityIntegrated.value())
+        s.setValue("integrated_risk_type", self._integrated_risk_type_state)
         s.setValue("filter_state_wetland", self._filter_state.get("wetland", "off"))
         s.setValue("filter_state_flow",    self._filter_state.get("flow", "off"))
         s.setValue("filter_state_flow_tc", self._filter_state_tc)
@@ -5716,6 +5793,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.spinOpacityWetland.setValue(   i("opacity_wetland",    70))
         self.spinOpacityFlow.setValue(      i("opacity_flow",       70))
         self.spinOpacityIntegrated.setValue(i("opacity_integrated", 70))
+        self._integrated_risk_type_state = i("integrated_risk_type", 0)
+        if self._integrated_risk_type_state not in (0, 1):
+            self._integrated_risk_type_state = 0
+        self._update_risk_type_button()
         for _fkey, _fbtn in (("wetland", self.btnFilterWetland), ("flow", self.btnFilterFlow)):
             _fval = s.value(f"filter_state_{_fkey}", "off")
             if _fval in ("off", "low", "mid"):
