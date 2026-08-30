@@ -138,6 +138,7 @@ missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin
   <li>Select a general-purpose DEM, or one covering the area where you'll run the terrain analysis.</li>
   <li>Select a DSM covering the same extent as the DEM data.</li>
   <li>Selecting DSM data lets the runoff and velocity coefficients for flow estimation be calculated automatically from the DSM.</li>
+  <li>For Virtual Shizuoka data, first set the preview to the intended analysis area, then select VS LP/Grid. The plugin fetches data that covers that area; if a later analysis extent falls outside the fetched data, choose whether to fetch again or cancel.</li>
 </ul>
 
 <h3>TIF / ZIP Layout</h3>
@@ -461,6 +462,7 @@ the written <code>.qml</code> files — re-export to regenerate them.</p>
   <li>DEM は汎用データか、地形解析を行う箇所のデータを選択してください。</li>
   <li>DSM データは、地表データの DEM データ設定と範囲を同じくするデータを選んでください。</li>
   <li>DSM データを選択することで流量推測における流出係数・流速係数がDSMを基に自動計算されます。</li>
+  <li>Virtual Shizuoka data を使う場合は、先にプレビューを解析予定範囲へ移動してから VS LP/Grid を設定してください。プラグインはその範囲を収めるデータを取得し、後で解析範囲が取得済みデータの外に出た場合は、再取得するかキャンセルするかを確認します。</li>
 </ul>
 
 <h3>TIF / ZIP の配置</h3>

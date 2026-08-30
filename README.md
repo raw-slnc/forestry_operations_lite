@@ -15,6 +15,7 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 - Layer settings (background / tile / GPKG) displayed in the preview independent of analysis data
 - Map lock: fix the preview to the analysis extent while continuing to navigate the main window freely
 - Analysis results are grouped and managed by run number in the QGIS layer panel
+- Overall Risk and High Risk are selected with **Risk Type** and shown with the same display button; Slope Stability can be overlaid independently
 - Preview status bar shows centre coordinates, scale, area (ha), and CRS
 
 ![QGIS Main Window](forestry_operations_lite_QGIS_window.png)
@@ -135,6 +136,7 @@ Use the **Open in WODMI** button to open the exported ZIP directly in the WebODM
 3. Set background / tile / GPKG layers under **Layer Settings**
 4. Run terrain analysis — results are added to the QGIS layer panel grouped by run number
 5. Toggle analysis layers on/off using the buttons in the preview panel
+6. Use **Risk Type** to switch the Overall Risk button between Overall Risk and High Risk display
 
 ---
 
@@ -172,7 +174,6 @@ forestry_operations_lite/
     ├── tc.tif                    ← time of concentration [h]
     ├── flow_peak.tif             ← peak discharge Qp [m³/s]
     ├── flow_mean.tif             ← mean discharge Qm [m³/s]
-    ├── flow_vtotal.tif           ← total runoff volume V [m³]
     ├── integrated_risk_index.tif ← overall risk index (auto-generated)
     └── integrated_high_risk.gpkg ← high-risk area polygons
 ```
@@ -213,6 +214,7 @@ https://paypal.me/rawslnc
 - 解析データの有無に関わらず、レイヤー設定（背景・タイル・GPKG）をプレビューに表示
 - 地図ロック：解析範囲にプレビューを固定しながら、メインウィンドウは自由に操作可能
 - 解析結果はQGISレイヤーパネルに解析番号グループで管理
+- Overall Risk と High Risk は **Risk Type** で選択し、同じ表示ボタンで切替表示。Slope Stability は独立して重ね表示できます
 - プレビューステータスバーに中心座標・縮尺・面積（ha）・CRSを表示
 
 ---
@@ -330,6 +332,7 @@ DEM読込時のタイル範囲に基づいて全データが取得されるた�
 3. **レイヤー設定** で背景・タイル・GPKGレイヤーを設定
 4. 地形解析を実行 — 解析結果は解析番号グループとしてQGISレイヤーパネルに追加
 5. プレビューパネルのボタンで解析レイヤーの表示/非表示を切替
+6. **Risk Type** で Overall Risk ボタンの表示対象を Overall Risk / High Risk に切り替え
 
 ---
 
@@ -367,7 +370,6 @@ forestry_operations_lite/
     ├── tc.tif                    ← 到達時間 Tc [h]
     ├── flow_peak.tif             ← ピーク流量 Qp [m³/s]
     ├── flow_mean.tif             ← 平均流量 Qm [m³/s]
-    ├── flow_vtotal.tif           ← 総流出量 V [m³]
     ├── integrated_risk_index.tif ← 統合リスク指標（自動生成）
     └── integrated_high_risk.gpkg ← 高リスクエリアポリゴン
 ```
