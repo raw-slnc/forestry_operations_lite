@@ -254,16 +254,16 @@ def compute_twi(accum, slope_deg, cell_size):
     return twi
 
 
-def stability_fs(slope_deg, phi_deg=35.0, c_kpa=0.0, z_m=1.0,
+def stability_fs(slope_deg, phi_deg=30.0, c_kpa=3.0, z_m=0.5,
                  m=0.5, gamma_s=18.0, gamma_w=9.81):
     """
     無限斜面安定解析
     FS = (c' + (γs - m*γw)*z*cos²θ*tanφ') / (γs*z*sinθ*cosθ)
 
     slope_deg : 傾斜[度]
-    phi_deg   : 内部摩擦角φ'[度]  default=35
-    c_kpa     : 粘着力c'[kPa]     default=0
-    z_m       : 土壌深度[m]        default=1.0
+    phi_deg   : 内部摩擦角φ'[度]  default=30
+    c_kpa     : 粘着力c'[kPa]     default=3
+    z_m       : 土壌深度[m]        default=0.5
     m         : 飽和率(0-1)        default=0.5
     gamma_s   : 土壌単位重量[kN/m³] default=18.0
     gamma_w   : 水単位重量[kN/m³]   default=9.81

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
  <class>LoggingRoadPlannerDockWidgetBase</class>
- <widget class="QDockWidget" name="LoggingRoadPlannerDockWidgetBase">
+ <widget class="QWidget" name="LoggingRoadPlannerDockWidgetBase">
   <property name="geometry">
    <rect>
     <x>0</x>
@@ -13,8 +13,22 @@
   <property name="windowTitle">
    <string>Logging Road Planner</string>
   </property>
-  <widget class="QWidget" name="dockWidgetContents">
-   <layout class="QVBoxLayout" name="verticalLayout">
+  <layout class="QVBoxLayout" name="topLevelLayout">
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
+   <item>
+    <widget class="QWidget" name="dockWidgetContents">
+     <layout class="QVBoxLayout" name="verticalLayout">
     <item>
      <widget class="QGroupBox" name="grpTerrain">
       <property name="title">
@@ -399,8 +413,10 @@
       </layout>
      </widget>
     </item>
-   </layout>
-  </widget>
+     </layout>
+    </widget>
+   </item>
+  </layout>
  </widget>
  <resources/>
  <connections/>

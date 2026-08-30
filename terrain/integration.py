@@ -65,7 +65,7 @@ def _read_raster(path):
 def build_integrated_index(
     out_dir,
     analysis_prefix="",
-    fs_caution=1.5,
+    fs_caution=1.2,
     twi_caution=8.0,
     flow_caution=0.5,
     high_risk_threshold=3,
@@ -173,7 +173,7 @@ def build_integrated_index(
 def build_multiplicative_index(
     out_dir,
     analysis_prefix="",
-    fs_caution=1.5,
+    fs_caution=1.2,
     twi_caution=8.0,
     flow_caution=0.5,
     overwrite=True,
@@ -272,7 +272,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="terrain_analysis の統合リスク指標を作成")
     parser.add_argument("out_dir", help="terrain_analysis ディレクトリ")
-    parser.add_argument("--fs-caution", type=float, default=1.5)
+    parser.add_argument("--fs-caution", type=float, default=1.2)
     parser.add_argument("--twi-caution", type=float, default=8.0)
     parser.add_argument("--flow-caution", type=float, default=0.5)
     parser.add_argument("--high-risk-threshold", type=float, default=3.0)
