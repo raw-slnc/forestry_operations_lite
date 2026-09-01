@@ -443,6 +443,25 @@ allowed); an overwrite run replaces the run folder and removes the written
 <code>.qml</code> files.</p>
 </div>
 
+<!-- ============================================================ -->
+<div class="sec">
+<h2>WebODM Importer Integration</h2>
+
+<p>When the current QGIS project contains datasets managed by <code>webodm_importer</code>,
+their WebODM DTM/DSM assets can be selected directly from the DEM/DSM browser in
+Forestry Operations Lite.</p>
+
+<ul>
+  <li>Open <strong>Browse</strong> for DEM or DSM. A <strong>WebODM Importer DTM/DSM</strong>
+      section appears after the normal local and online data sources.</li>
+  <li>The DEM browser lists <code>odm_dem/dtm.tif</code>; the DSM browser lists
+      <code>odm_dem/dsm.tif</code>.</li>
+  <li>Datasets exported from Forestry Operations Lite and then imported back through
+      <code>webodm_importer</code> are intentionally excluded, so round-trip FOL outputs
+      do not appear as source data candidates.</li>
+</ul>
+</div>
+
 <hr>
 <p style="font-size:0.8em;color:#888;text-align:center;">
   Forestry Operations Lite &nbsp;|&nbsp; Developed by Avid Tree Work
@@ -767,6 +786,23 @@ Peak / Mean のみ有効（Time load では無効）。</p>
 いる場合は、その滲みを実ラスタとして書き出しサブグループに追加します。積み順は解析グループと
 同じ（Flow が前面、背景地形が最背面）。同じ番号を再エクスポートしても前回分は残ります（重複可）。
 上書き解析は解析番号フォルダごと差し替わるため書き出した <code>.qml</code> も消えます。</p>
+</div>
+
+<!-- ============================================================ -->
+<div class="sec">
+<h2>webodm_importer 連携</h2>
+
+<p>現在の QGIS プロジェクトに <code>webodm_importer</code> 管理のデータがある場合、
+WebODM の DTM/DSM アセットを Forestry Operations Lite の DEM/DSM ブラウザから直接選択できます。</p>
+
+<ul>
+  <li>DEM または DSM の <strong>Browse</strong> を開くと、通常のローカル/オンライン候補の後ろに
+      <strong>WebODM Importer DTM/DSM</strong> セクションが表示されます。</li>
+  <li>DEM ブラウザでは <code>odm_dem/dtm.tif</code>、DSM ブラウザでは
+      <code>odm_dem/dsm.tif</code> を候補にします。</li>
+  <li>Forestry Operations Lite から書き出したZIPを <code>webodm_importer</code> で読み戻した
+      データは意図的に除外します。FOL由来の往復出力は入力候補として表示しません。</li>
+</ul>
 </div>
 
 <hr>

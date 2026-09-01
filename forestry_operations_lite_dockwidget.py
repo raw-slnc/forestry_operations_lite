@@ -338,6 +338,101 @@ class DemBrowserDialog(QtWidgets.QDialog):
             or canvas_rect.yMinimum() > ymax
         )
 
+    def _webodm_importer_dem_items(self, filter_on=False):
+        """Return WebODM Importer-managed DTM/DSM files for the current project."""
+        project_dir = self._project_home_path()
+        if not project_dir:
+            return []
+
+        base = os.path.join(project_dir, "webodm_importer_data")
+        if not os.path.isdir(base):
+            return []
+
+        rel = self._webodm_dem_relpath()
+        kind = "DSM" if self._mode == "dsm" else "DTM"
+        items = []
+        for dataset in sorted(os.listdir(base)):
+            folder = os.path.join(base, dataset)
+            if not os.path.isdir(folder):
+                continue
+            if self._is_fol_webodm_import(folder, project_dir):
+                continue
+            path = os.path.join(folder, rel)
+            if not os.path.isfile(path):
+                continue
+            if filter_on and not self._overlaps_canvas(path):
+                continue
+            items.append((dataset, kind, path))
+        return items
+
+    def _webodm_dem_relpath(self):
+        return "odm_dem/dsm.tif" if self._mode == "dsm" else "odm_dem/dtm.tif"
+
+    @staticmethod
+    def _project_home_path():
+        project = QgsProject.instance()
+        return project.homePath() or project.absolutePath()
+
+    def _select_zip_tif_name(self, names):
+        """Return the DEM/DSM TIFF entry to use from a ZIP."""
+        entry_map = {n.replace("\\", "/"): n for n in names}
+        preferred = self._webodm_dem_relpath()
+        if preferred in entry_map:
+            return entry_map[preferred]
+
+        webodm_like = any(
+            n.startswith(("odm_dem/", "odm_orthophoto/", "entwine_pointcloud/"))
+            for n in entry_map
+        )
+        if webodm_like:
+            return None
+
+        tif_names = [n for n in names if n.lower().endswith((".tif", ".tiff"))]
+        return tif_names[0] if tif_names else None
+
+    @staticmethod
+    def _read_webodm_import_meta(folder):
+        meta_path = os.path.join(folder, ".import_meta.json")
+        if not os.path.isfile(meta_path):
+            return {}
+        try:
+            import json as _json
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = _json.load(f)
+            return meta if isinstance(meta, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _is_fol_webodm_import(self, folder, project_dir):
+        """True when a WebODM Importer folder was created from this plugin's export ZIP."""
+        folder_name = os.path.basename(os.path.normpath(folder))
+        if folder_name.startswith("FOL_"):
+            return True
+
+        meta = self._read_webodm_import_meta(folder)
+        source = str(meta.get("source") or "")
+        if not source:
+            return False
+
+        return self._is_fol_source_path(source, project_dir)
+
+    @staticmethod
+    def _is_fol_source_path(path, project_dir=None):
+        source_path = os.path.normpath(str(path))
+        if project_dir and not os.path.isabs(source_path):
+            source_path = os.path.join(project_dir, source_path)
+        source_path = os.path.abspath(source_path)
+        if project_dir:
+            fol_dir = os.path.abspath(os.path.join(project_dir, "forestry_operations_lite"))
+            try:
+                if os.path.commonpath([source_path, fol_dir]) == fol_dir:
+                    return True
+            except ValueError:
+                pass
+
+        name = os.path.basename(source_path)
+        return name.startswith("FOL_") and name.endswith("-all.zip")
+
     # GSI タイルソースを示すセンチネル値
     GSI_DEM1A_SENTINEL  = "__GSI_DEM1A__"
     GSI_DEM5A_SENTINEL  = "__GSI_DEM5A__"
@@ -487,6 +582,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
             QtWidgets.QApplication.processEvents()
 
             try:
+                project_dir = self._project_home_path()
                 files = sorted(
                     f for f in os.listdir(d)
                     if f.lower().endswith((".tif", ".tiff", ".zip"))
@@ -494,6 +590,8 @@ class DemBrowserDialog(QtWidgets.QDialog):
                 added = 0
                 for fname in files:
                     fpath = os.path.join(d, fname)
+                    if self._is_fol_source_path(fpath, project_dir):
+                        continue
                     if filter_on and fname.lower().endswith((".tif", ".tiff")) \
                             and not self._overlaps_canvas(fpath):
                         continue
@@ -509,11 +607,17 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
                 # ZIP入りサブフォルダを結合候補として表示
                 try:
+                    project_dir = self._project_home_path()
                     subdirs = sorted(
                         sd for sd in os.listdir(d)
                         if os.path.isdir(os.path.join(d, sd))
-                        and any(f.lower().endswith(".zip")
-                                for f in os.listdir(os.path.join(d, sd)))
+                        and not self._is_fol_source_path(os.path.join(d, sd), project_dir)
+                        and any(
+                            f.lower().endswith(".zip")
+                            and not self._is_fol_source_path(
+                                os.path.join(d, sd, f), project_dir)
+                            for f in os.listdir(os.path.join(d, sd))
+                        )
                     )
                     if subdirs:
                         sec_dir = QtWidgets.QListWidgetItem("── ZIP merge folders ────────────────")
@@ -522,7 +626,11 @@ class DemBrowserDialog(QtWidgets.QDialog):
                         self._list.addItem(sec_dir)
                         for sname in subdirs:
                             spath = os.path.join(d, sname)
-                            n = sum(1 for f in os.listdir(spath) if f.lower().endswith(".zip"))
+                            n = sum(
+                                1 for f in os.listdir(spath)
+                                if f.lower().endswith(".zip")
+                                and not self._is_fol_source_path(os.path.join(spath, f), project_dir)
+                            )
                             item = QtWidgets.QListWidgetItem(f"📁 {sname}  ({n} files)")
                             item.setData(Qt.ItemDataRole.UserRole, spath)
                             self._list.addItem(item)
@@ -579,6 +687,22 @@ class DemBrowserDialog(QtWidgets.QDialog):
             else:  # dsm
                 _vs_section("── VIRTUAL SHIZUOKA DSM (Shizuoka) ──")
                 _vs_item("🌿  VS LP → DSM  0.5m  (Shizuoka, auto-fetch)", self.VS_LP_GROUND_SENTINEL)
+
+        # ── WebODM Importer 管理データ（プロジェクトフォルダ内）──
+        webodm_items = self._webodm_importer_dem_items(filter_on=filter_on)
+        if webodm_items:
+            section_kind = "DSM" if self._mode == "dsm" else "DTM"
+            sec_webodm = QtWidgets.QListWidgetItem(f"── WebODM Importer {section_kind} ─────────────")
+            sec_webodm.setFlags(Qt.ItemFlag.NoItemFlags)
+            sec_webodm.setForeground(QColor("#4a4a8a"))
+            f_webodm = QFont(); f_webodm.setBold(True)
+            sec_webodm.setFont(f_webodm)
+            self._list.addItem(sec_webodm)
+            for dataset, kind, path in webodm_items:
+                item = QtWidgets.QListWidgetItem(f"📁 {dataset} / {kind}")
+                item.setData(Qt.ItemDataRole.UserRole, path)
+                item.setToolTip(path)
+                self._list.addItem(item)
 
     # ── アイテム選択 ─────────────────────────────────────────────
 
@@ -677,7 +801,12 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
     def _inspect_dir_item(self, dir_path):
         """ZIP結合フォルダ選択時の情報表示。"""
-        zips = sorted(f for f in os.listdir(dir_path) if f.lower().endswith(".zip"))
+        project_dir = self._project_home_path()
+        zips = sorted(
+            f for f in os.listdir(dir_path)
+            if f.lower().endswith(".zip")
+            and not self._is_fol_source_path(os.path.join(dir_path, f), project_dir)
+        )
         if not zips:
             self._lbl_info.setText("No ZIP files found")
             self._btn_ok.setEnabled(False)
@@ -706,11 +835,11 @@ class DemBrowserDialog(QtWidgets.QDialog):
             self._btn_ok.setEnabled(False)
             return
 
-        tif_names = [n for n in names if n.lower().endswith((".tif", ".tiff"))]
+        tif_name = self._select_zip_tif_name(names)
         txt_names = [n for n in names if n.lower().endswith("_dem.txt")]
 
-        if tif_names:
-            vsipath = f"/vsizip/{zip_path}/{tif_names[0]}"
+        if tif_name:
+            vsipath = f"/vsizip/{zip_path}/{tif_name}"
             info = self._read_dem_extent(vsipath)
             if info:
                 xmin, ymin, xmax, ymax, wkt = info
@@ -724,12 +853,12 @@ class DemBrowserDialog(QtWidgets.QDialog):
                 w = round(xmax - xmin, 1)
                 h = round(ymax - ymin, 1)
                 self._lbl_info.setText(
-                    f"[ZIP TIF] {tif_names[0]}\n"
+                    f"[ZIP TIF] {tif_name}\n"
                     f"Extent: X {xmin:.1f}–{xmax:.1f}  /  Y {ymin:.1f}–{ymax:.1f}"
                     f"  ({w} × {h})  |  {crs_str}"
                 )
             else:
-                self._lbl_info.setText(f"[ZIP TIF] {tif_names[0]}")
+                self._lbl_info.setText(f"[ZIP TIF] {tif_name}")
             self._btn_ok.setEnabled(True)
 
         elif txt_names:
@@ -757,7 +886,8 @@ class DemBrowserDialog(QtWidgets.QDialog):
             self._btn_ok.setEnabled(True)
 
         else:
-            self._lbl_info.setText("Unsupported ZIP format (no TIF or _DEM.txt found)")
+            expected = self._webodm_dem_relpath()
+            self._lbl_info.setText(f"Unsupported ZIP format (no {expected} or _DEM.txt found)")
             self._btn_ok.setEnabled(False)
 
     # ── エクステント判定（VIRTUAL SHIZUOKA）────────────────────────
@@ -810,9 +940,12 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
         # フォルダ選択 → 内部ZIP全件を結合
         if os.path.isdir(path):
+            project_dir = self._project_home_path()
             zip_paths = sorted(
                 os.path.join(path, f)
-                for f in os.listdir(path) if f.lower().endswith(".zip")
+                for f in os.listdir(path)
+                if f.lower().endswith(".zip")
+                and not self._is_fol_source_path(os.path.join(path, f), project_dir)
             )
             if not zip_paths:
                 return
@@ -888,11 +1021,11 @@ class DemBrowserDialog(QtWidgets.QDialog):
         try:
             with _zf.ZipFile(zip_path, "r") as zf:
                 names = zf.namelist()
-                tif_names = [n for n in names if n.lower().endswith((".tif", ".tiff"))]
+                tif_name = self._select_zip_tif_name(names)
                 txt_names = [n for n in names if n.lower().endswith("_dem.txt")]
 
-                if tif_names:
-                    return f"/vsizip/{zip_path}/{tif_names[0]}"
+                if tif_name:
+                    return f"/vsizip/{zip_path}/{tif_name}"
 
                 if txt_names:
                     txt_name = txt_names[0]
