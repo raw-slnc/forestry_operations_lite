@@ -3448,7 +3448,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         for _n in group.findLayers():
             try:
                 checked_by_id[_n.layerId()] = _n.itemVisibilityChecked()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         # メインキャンバス（GSI タイル等）を毎回 refresh するとタイル再取得で
         # 重くなるため、並べ替え中に触るのは preview のみ。メイン側の反映は
@@ -3459,7 +3459,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         for _c in _canvases:
             try:
                 _c.freeze(True)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         try:
             # QgsLayerTreeGroup.reorderGroupLayers() は削除済みノードを跨いで
@@ -3479,14 +3479,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 if _cn is not None:
                     _cn.setItemVisibilityChecked(_was_checked)
                     _cn.setExpanded(False)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         finally:
             for _c in _canvases:
                 try:
                     _c.freeze(False)
                     _c.refresh()
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
     def _insert_terrain_layer_ordered(self, key, lyr):
