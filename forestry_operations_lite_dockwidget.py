@@ -5884,7 +5884,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 if src.lower().startswith("file:"):
                     src = QUrl(src).toLocalFile() or src
                 src = os.path.normcase(os.path.abspath(os.path.normpath(src)))
-            except Exception:  # nosec B110
+            except Exception:  # nosec B112
                 continue
             if src == target:
                 remove_ids.append(lid)

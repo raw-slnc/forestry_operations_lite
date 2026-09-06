@@ -2,7 +2,7 @@
 
 A QGIS plugin for terrain analysis supporting forestry site assessment.
 
-![UI Panel](forestry_operations_lite_UI_panel.png)
+![UI Panel](forestry_operations_lite_UI_panel.jpg)
 
 ---
 
@@ -18,7 +18,7 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 - Analysis results are grouped and managed by run number in the QGIS layer panel
 - Preview status bar shows centre coordinates, scale, area (ha), and CRS
 
-![QGIS Main Window](forestry_operations_lite_QGIS_window.png)
+![QGIS Main Window](forestry_operations_lite_QGIS_window.jpg)
 
 ---
 
@@ -28,7 +28,7 @@ Use **Run Export** under **Terrain Data > CS Map Export** to create a CS-style t
 
 > **Note:** The color balance is tuned for Forestry Operations Lite so analysis layers such as flow, wetness, and terrain features remain easy to interpret.
 
-![CS-style terrain visualization with flow estimation overlay](image.png)
+![CS-style terrain visualization with flow estimation overlay](cs_style_map_example.jpg)
 
 The CS立体図 method was proposed by Nagano Prefecture Forestry Research Center. The method is described as open, but exported maps also depend on the license and attribution requirements of the input DEM.
 
@@ -237,7 +237,7 @@ https://paypal.me/rawslnc
 
 > **注意:** 本プラグインでは、流量・湿潤・地形特徴などの解析データを判断しやすいよう、CS系地形表現の色味を調整しています。
 
-![CS系地形表現に流量解析を重ねた表示例](image.png)
+![CS系地形表現に流量解析を重ねた表示例](cs_style_map_example.jpg)
 
 CS立体図は長野県林業総合センターが考案した地形表現図法です。図法自体はオープンと説明されていますが、出力した地図の利用条件は入力DEMのライセンス・出典表示条件にも従います。
 
