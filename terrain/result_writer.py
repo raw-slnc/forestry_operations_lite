@@ -70,13 +70,17 @@ def save_rgba_raster(data, gt, crs_wkt, out_dir, name_prefix, overwrite=False):
         os.remove(path)
     rows, cols, bands = data.shape
     drv = gdal.GetDriverByName("GTiff")
-    ds = drv.Create(path, cols, rows, bands, gdal.GDT_Byte,
-                    options=[
-                        "COMPRESS=LZW",
-                        "TILED=YES",
-                        "PHOTOMETRIC=RGB",
-                        "BIGTIFF=IF_NEEDED",
-                    ])
+    create_opts = [
+        "COMPRESS=LZW",
+        "TILED=YES",
+        "PHOTOMETRIC=RGB",
+        "BIGTIFF=IF_NEEDED",
+    ]
+    if bands == 4:
+        # 4帯目を非乗算アルファとしてタグ付け（EXTRASAMPLES=2）。
+        # これがないと GDAL/QGIS がただの余分な帯として扱い透過しない。
+        create_opts.append("ALPHA=YES")
+    ds = drv.Create(path, cols, rows, bands, gdal.GDT_Byte, options=create_opts)
     ds.SetGeoTransform(gt)
     ds.SetProjection(crs_wkt)
     arr = data.astype(np.uint8, copy=False)

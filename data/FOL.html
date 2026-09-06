@@ -404,6 +404,9 @@ USDA NRCS National Engineering Handbook, Part 630.</p>
 
 <h3>CS MAP Export</h3>
 <p><strong>Run Export</strong> under <strong>Terrain Data &gt; CS Map Export</strong> creates a CS-style terrain visualization from the selected DEM. Local DEM files are exported as a whole raster; fetched sources such as VS LP/Grid, GSI DEM, and Terrarium use the currently fetched DEM raster. When <strong>Add Tile Layer</strong> is checked, the exported raster is added to QGIS and selected directly in <strong>Layer Settings &gt; Tile Layer</strong>.</p>
+<div class="note">
+  <strong>Input data:</strong> a CS-style map only resolves micro-relief that is genuinely present in the DEM, and it assumes a LiDAR-grade ground surface. A photogrammetric DTM (e.g. from WebODM / drone imagery) has low ground-surface accuracy: under forest canopy the ground is largely interpolated between sparse points, so fine structure in the CS map can be an interpolation artifact rather than real terrain. Prefer LiDAR, or open-terrain / leaf-off captures; treat forested photogrammetric results as indicative only.
+</div>
 <div class="important-note">
   <strong>Note:</strong> The color balance is tuned for Forestry Operations Lite so analysis layers such as flow, wetness, and terrain features remain easy to interpret.
 </div>
@@ -773,6 +776,9 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
 
 <h3>CS MAP Export</h3>
 <p><strong>Terrain Data &gt; CS Map Export</strong> の <strong>Run Export</strong> で、選択中のDEMからCS系の地形表現ラスタを作成します。ローカルDEMファイルはラスタ全体、VS LP/Grid・GSI DEM・Terrarium などの取得型ソースは現在取得済みのDEMラスタ全体を対象にします。<strong>Add Tile Layer</strong> をオンにすると、出力したラスタをQGISに追加し、<strong>Layer Settings &gt; Tile Layer</strong> に直接設定します。</p>
+<div class="note">
+  <strong>入力データについて:</strong> CS系表現図は DEM に実在する微地形しか描けず、LiDAR 級の地表面を前提とします。写真測量由来の DTM（WebODM／ドローン空撮など）は地表面精度が低く、特に林冠下では疎な地表点の間を補間しているだけなので、CS図に出る細かい構造は実地形ではなく補間アーティファクトのことがあります。LiDAR、または開放地・落葉期・十分に管理された撮影を優先し、林内の写真測量結果は参考程度に扱ってください。
+</div>
 <div class="important-note">
   <strong>注意:</strong> 本プラグインでは、流量・湿潤・地形特徴などの解析データを判断しやすいよう、CS系地形表現の色味を調整しています。
 </div>

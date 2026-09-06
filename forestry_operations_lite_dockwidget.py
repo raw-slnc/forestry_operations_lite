@@ -28,6 +28,9 @@ class _StopAnalysis(Exception):
 
 _RESAMPLE_THRESHOLD = 0.2   # これより細かい解像度（m）は自動リサンプル対象
 _RESAMPLE_TARGET    = 0.5   # リサンプル後の解像度（m）
+# CS Map Export 専用のリサンプル閾値。CS 立体図は微地形の描出が目的なので、
+# 解析（0.2m）より低い 0.1m まではネイティブ解像度を保持する。
+_CS_MAP_RESAMPLE_THRESHOLD = 0.1
 
 
 def _resample_dem(src, target_cell_size=_RESAMPLE_TARGET):
@@ -1546,6 +1549,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.lblCsMapExportStatus.setWordWrap(True)
         self.lblCsMapExportStatus.setStyleSheet("color:#555;font-size:8pt;")
         cs_export_layout.addWidget(self.lblCsMapExportStatus)
+        self.lblCsMapDataNote = QtWidgets.QLabel(
+            "Assumes a LiDAR-grade DEM. Photogrammetric (WebODM) DTM has low "
+            "ground-surface accuracy, especially under canopy — prefer "
+            "open-terrain or leaf-off captures."
+        )
+        self.lblCsMapDataNote.setWordWrap(True)
+        self.lblCsMapDataNote.setStyleSheet("color:#8a6d00;font-size:8pt;")
+        cs_export_layout.addWidget(self.lblCsMapDataNote)
         self.lblCsMapAbout = QtWidgets.QLabel(
             '<a href="cs_style_about">about CS-style terrain visualization</a>'
         )
@@ -3156,10 +3167,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     @staticmethod
     def _apply_cs_map_style(lyr):
-        """CS MAPのRGBバンドをそのままカラー表示する。"""
+        """CS MAPのRGBバンドをそのままカラー表示する。
+        4帯目（alpha）があれば透過帯として指定し、データ外を透明にする
+        （解析ラスタの SetNoDataValue と同じ役割）。"""
         from qgis.core import QgsContrastEnhancement, QgsMultiBandColorRenderer
 
         renderer = QgsMultiBandColorRenderer(lyr.dataProvider(), 1, 2, 3)
+        if lyr.bandCount() >= 4:
+            renderer.setAlphaBand(4)
         for band, setter_name in (
             (1, "setRedContrastEnhancement"),
             (2, "setGreenContrastEnhancement"),
@@ -6063,7 +6078,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.lblCsMapExportStatus.setText("DEM has no valid elevation values.")
             return None
 
-        if loader.cell_size < _RESAMPLE_THRESHOLD:
+        if loader.cell_size < _CS_MAP_RESAMPLE_THRESHOLD:
             self.lblCsMapExportStatus.setText(
                 f"Resampling {loader.cell_size:.3f}m -> {_RESAMPLE_TARGET}m ..."
             )
@@ -6097,7 +6112,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.progressCsMapExport.setValue(45)
             QtWidgets.QApplication.processEvents()
             rgba = cm.compute_cs_map(dem.data, dem.cell_size)
-            rgb = rgba[:, :, :3]
 
             export_dir = os.path.join(self._terrain_output_dir(), "cs_map")
             name = "cs_map" if self.chkOverwrite.isChecked() else (
@@ -6107,7 +6121,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             if self.chkOverwrite.isChecked():
                 self._remove_layers_for_source_path(out_path)
             path = rw.save_rgba_raster(
-                rgb, dem.gt, dem.crs_wkt, export_dir, name, overwrite=True
+                rgba, dem.gt, dem.crs_wkt, export_dir, name, overwrite=True
             )
             if not os.path.exists(path) or os.path.getsize(path) <= 0:
                 raise RuntimeError(f"CS MAP file was not written: {path}")
