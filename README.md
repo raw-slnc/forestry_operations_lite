@@ -11,6 +11,7 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 - Load DEM from local files or tile services (GSI elevation tiles for Japan; AWS Terrarium for global coverage)
 - Optional DSM — when loaded alongside DEM, canopy height is used to refine flow coefficients automatically
 - Compute **slope stability** (infinite-slope factor of safety), **TWI** (Topographic Wetness Index), **valley terrain**, and **flow estimation**
+- Export a **CS MAP** terrain visualization from the current DEM extent, with optional direct assignment to Layer Settings > Tile Layer
 - Preview canvas with bidirectional sync to the QGIS main map window
 - Layer settings (background / tile / GPKG) displayed in the preview independent of analysis data
 - Map lock: fix the preview to the analysis extent while continuing to navigate the main window freely
@@ -18,6 +19,18 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 - Preview status bar shows centre coordinates, scale, area (ha), and CRS
 
 ![QGIS Main Window](forestry_operations_lite_QGIS_window.png)
+
+---
+
+## CS MAP Export
+
+Use **Run Export** under **Terrain Data > CS Map Export** to create a CS-style terrain map from the selected DEM. Local DEM files are exported as a whole raster; fetched sources such as VS LP/Grid, GSI DEM, and Terrarium use the currently fetched DEM raster. When **Add Tile Layer** is checked, the exported raster is added to QGIS and selected directly in **Layer Settings > Tile Layer** so it appears in the preview as a base terrain layer.
+
+> **Note:** The color balance is tuned for Forestry Operations Lite so analysis layers such as flow, wetness, and terrain features remain easy to interpret.
+
+![CS-style terrain visualization with flow estimation overlay](image.png)
+
+The CS立体図 method was proposed by Nagano Prefecture Forestry Research Center. The method is described as open, but exported maps also depend on the license and attribution requirements of the input DEM.
 
 ---
 
@@ -159,6 +172,10 @@ forestry_operations_lite/
 │   ├── FOL_YYYYMMDD-all.zip
 │   └── FOL_YYYYMMDD_2-all.zip                ← sequential if same day
 │
+├── cs_map/                       # Standalone CS MAP exports
+│   ├── cs_map.tif                             ← overwrite mode
+│   └── cs_map_YYYYMMDD_HHMMSS.tif             ← non-overwrite mode
+│
 └── {run_number}/                 # Analysis results (e.g. 0011, 0012, 0010+2)
     ├── params.json               ← analysis parameters
     ├── stability_fs.tif          ← slope stability factor of safety
@@ -205,11 +222,24 @@ https://paypal.me/rawslnc
 - ローカルファイルまたはタイルサービス（国土地理院標高タイル・AWS Terrarium全球対応）からDEMを読み込み
 - DSMオプション — DEMと併せて読み込むと、樹冠高から流出係数を自動算出
 - **斜面安定性**（無限斜面安全率）・**TWI**（地形湿潤指数）・**沢地形**・**流量推測**を計算
+- 現在のDEM範囲から **CS MAP** 地形表現を出力し、Layer Settings > Tile Layer へ直接割り当て可能
 - QGISメインマップとの双方向同期プレビューキャンバス
 - 解析データの有無に関わらず、レイヤー設定（背景・タイル・GPKG）をプレビューに表示
 - 地図ロック：解析範囲にプレビューを固定しながら、メインウィンドウは自由に操作可能
 - 解析結果はQGISレイヤーパネルに解析番号グループで管理
 - プレビューステータスバーに中心座標・縮尺・面積（ha）・CRSを表示
+
+---
+
+## CS MAP Export
+
+**Terrain Data > CS Map Export** の **Run Export** で、選択中のDEMからCS系の地形表現ラスタを作成します。ローカルDEMファイルはラスタ全体、VS LP/Grid・GSI DEM・Terrarium などの取得型ソースは現在取得済みのDEMラスタ全体を対象にします。**Add Tile Layer** をオンにすると、出力したラスタをQGISへ追加し、**Layer Settings > Tile Layer** に直接設定します。
+
+> **注意:** 本プラグインでは、流量・湿潤・地形特徴などの解析データを判断しやすいよう、CS系地形表現の色味を調整しています。
+
+![CS系地形表現に流量解析を重ねた表示例](image.png)
+
+CS立体図は長野県林業総合センターが考案した地形表現図法です。図法自体はオープンと説明されていますが、出力した地図の利用条件は入力DEMのライセンス・出典表示条件にも従います。
 
 ---
 
@@ -350,6 +380,10 @@ forestry_operations_lite/
 ├── zip/                          # WebODM Importer向けエクスポートZIP（静岡限定）
 │   ├── FOL_YYYYMMDD-all.zip
 │   └── FOL_YYYYMMDD_2-all.zip                ← 同日2回目以降
+│
+├── cs_map/                       # 単独CS MAP出力
+│   ├── cs_map.tif                             ← 上書きモード
+│   └── cs_map_YYYYMMDD_HHMMSS.tif             ← 非上書きモード
 │
 └── {解析番号}/                   # 解析結果（例: 0011, 0012, 0010+2）
     ├── params.json               ← 解析パラメータ

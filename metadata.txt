@@ -2,19 +2,19 @@
 name=Forestry Operations Lite
 qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
-description=Terrain analysis for forestry sites: DEM/DSM loading, slope, TWI, stability index, and time-area flow-load estimation.
+description=Terrain analysis for forestry sites: DEM/DSM loading, slope, TWI, stability index, CS MAP export, and time-area flow-load estimation.
 version=1.2.0
 author=Hideharu Masai
 email=hideharumasai@void.mints.ne.jp
 
-about=Supports forestry site assessment through terrain analysis using DEM/DSM data. Computes slope, topographic wetness index (TWI), infinite-slope stability factor of safety, and time-area flow-load estimation (Clark unit hydrograph). Requires numpy, GDAL, and scipy (bundled with most QGIS installations). Support: https://paypal.me/rawslnc
+about=Supports forestry site assessment through terrain analysis using DEM/DSM data. Computes slope, topographic wetness index (TWI), infinite-slope stability factor of safety, CS MAP terrain visualization, and time-area flow-load estimation (Clark unit hydrograph). Requires numpy, GDAL, and scipy (bundled with most QGIS installations). Support: https://paypal.me/rawslnc
 
 tracker=https://github.com/raw-slnc/forestry_operations_lite/issues
 repository=https://github.com/raw-slnc/forestry_operations_lite
 
 hasProcessingProvider=no
 changelog=
-    1.2.0 - Rebuilt Flow analysis with the time-area method (Clark unit hydrograph), adding Qp, Qm, and Tc outputs with improved visualization and filtering. Rainfall input handling, layer/export behavior, and Windows overwrite support were refined. High Risk Areas now use a faster raster-mask workflow, older results can be converted, and DEM/DSM selection can include WebODM Importer-managed terrain assets. Also adjusted design-storm handling and updated the help documentation.
+    1.2.0 - Rebuilt Flow analysis with the time-area method (Clark unit hydrograph), adding Qp, Qm, and Tc outputs with improved visualization and filtering. Add standalone CS Map Export under Terrain Data; it is based on CS-style terrain visualization and uses a color balance tuned for Forestry Operations Lite so analysis layers such as flow, wetness, and terrain features remain easy to interpret. The CS output can be added directly to QGIS and assigned to Layer Settings > Tile Layer, stays disabled until DEM data is available, shows local export progress, and uses stable RGB output for QGIS layer-property adjustments. Rainfall input handling, layer/export behavior, and Windows overwrite support were refined. High Risk Areas now use a faster raster-mask workflow, older results can be converted, and DEM/DSM selection can include WebODM Importer-managed terrain assets. The startup window layout was compacted, with preview controls kept visible and cleaner left-panel spacing. Also adjusted design-storm handling and updated the manual. Documentation and About text note CS立体図 attribution, the independent FOL implementation, and input-data licensing. [IMPORTANT] Improved preview rendering stability for terrain layer switching. Further refinements may follow based on field testing.
     1.1.0 - Add Hillshade (DTM) and Elevation Background terrain products with dedicated visibility and opacity controls; add standalone Export for analysis result layers, preserving opacity, filters, visibility, flow buffer layers, and QGIS-editable raster styles; separate Total Flow Vol. filter/buffer display settings from Peak/Mean Flow; fix startup/project-load analysis selector refresh, layer combo ordering, analysis layer stacking, raster opacity/filter persistence, pseudocolor raster style editing in QGIS Properties, flat-ground stability output, and WebODM Importer launch from Virtual Shizuoka export when the installed webodm_importer exposes the QGIS 4.x _show_panel opener instead of the older _toggle_panel method
     1.0.3 - Fix a serious UI bug: the Terrain Data tab's GPKG/Tile/Background layer combo boxes had no width limit and, depending on loaded layer names, could force the whole left panel into horizontal scrolling on Windows; combo boxes are now capped to the same width as the DEM/DSM path fields, and the WebODM Export group title was shortened (detail moved to a note label below the buttons)
     1.0.2 - Fix crash on plugin load when scipy is not installed (missing Qgis.MessageLevel enum scoping); add scipy requirement notice to Terrain Data tab (hidden automatically when scipy is available) and update FOL.html help with a bilingual EN/JA scipy install guide; convert the plugin window from a QDockWidget-based floating panel to a plain top-level QWidget window, removing a dock-area registration step that could affect the width of QGIS's Layers panel on first launch and a non-functional dock/float toggle button on the window's title bar
@@ -41,7 +41,7 @@ changelog=
     0.1.1 - UI overhaul: English UI, parameter tabs restructured (1 item/row with hints), layout spacing fixed, tab height auto-fit
     0.1.0 - Initial release
 
-tags=python,forestry,terrain,dem,slope,twi,stability,flow direction,mfd
+tags=python,forestry,terrain,dem,slope,twi,stability,flow direction,mfd,cs map
 
 homepage=https://github.com/raw-slnc/forestry_operations_lite
 category=Raster

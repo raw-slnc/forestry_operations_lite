@@ -89,7 +89,11 @@ class ForestryOperationsLite:
 
     def unload(self):
         if self.dockwidget is not None:
-            self.dockwidget.close()
+            host = getattr(self.dockwidget, '_host_window', None)
+            if host is not None:
+                host.close()
+            else:
+                self.dockwidget.close()
             self.dockwidget = None
         for action in self.actions:
             self.iface.removePluginRasterMenu(self.menu, action)

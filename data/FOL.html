@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Forestry Operations Lite — Help</title>
+<title>Forestry Operations Lite — Manual</title>
 <style>
   body { font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", sans-serif;
          font-size: 14px; line-height: 1.7; color: #333; max-width: 860px;
@@ -23,6 +23,8 @@
   code { background: #f4f4f4; padding: 1px 5px; border-radius: 3px; font-size: 0.88em; }
   .note{ background: #fffbe6; border-left: 3px solid #e6c800;
          padding: 8px 12px; margin: 10px 0; font-size: 0.9em; }
+  .important-note{ background: #eef6f0; border-left: 4px solid #4a7c4e;
+         padding: 9px 12px; margin: 10px 0; font-size: 0.92em; font-weight: 500; }
   .concept-link {
     background: linear-gradient(135deg, #eef6f0, #f8fbf4);
     border: 1px solid #b9d0bb; border-left: 6px solid #4a7c4e;
@@ -92,8 +94,8 @@
 <body>
 
 <div class="title-row">
-  <h1 class="lang-en">Forestry Operations Lite — Help</h1>
-  <h1 class="lang-ja">Forestry Operations Lite — ヘルプ</h1>
+  <h1 class="lang-en">Forestry Operations Lite — Manual</h1>
+  <h1 class="lang-ja">Forestry Operations Lite — マニュアル</h1>
   <div class="lang-switch">
     <span id="optEn" class="lang-opt active" onclick="setLang('en')">EN</span><span class="lang-sep">/</span><span id="optJp" class="lang-opt" onclick="setLang('jp')">JP</span>
   </div>
@@ -148,6 +150,9 @@ missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin
   <li>VS LP -&gt; DSM downloads LAS files (~237 MB per tile) into <code>vs_lp_ground/</code> under the analysis output folder. There is no time-based expiry: after each successful VS LP -&gt; DSM run only the LAS tiles used by that run are kept and older LAS files are removed. Re-running the same area reuses the cached LAS without re-downloading. Delete <code>vs_lp_ground/</code> manually to reclaim space.</li>
   <li>VS LP/Grid DTM and other DEM tiles are cached in <code>dem/</code> and <code>vs_lp_grid/</code>, and are removed automatically once no saved analysis run references them as its DEM.</li>
 </ul>
+<div class="note">
+  Virtual Shizuoka data is provided under a dual license: CC BY 4.0 / ODbL.
+</div>
 
 <h3>TIF / ZIP Layout</h3>
 <table>
@@ -386,6 +391,7 @@ USDA NRCS National Engineering Handbook, Part 630.</p>
   <tr><td><code>flow_peak.tif</code></td><td>Peak load Qp [m³/s] — maximum instantaneous discharge</td></tr>
   <tr><td><code>flow_mean.tif</code></td><td>Mean load Qm [m³/s] — sustained discharge over (duration + Tc)</td></tr>
   <tr><td><code>tc.tif</code></td><td>Time load — time of concentration Tc [h]</td></tr>
+  <tr><td><code>cs_map/cs_map*.tif</code></td><td>Standalone CS MAP export from the selected or fetched DEM raster</td></tr>
 </table>
 <div class="note">
   Analysis runs are saved in numbered subfolders (<code>0001</code>, <code>0002</code>, …) and are never deleted automatically &mdash; an overwrite run replaces its own number, otherwise runs accumulate. The next run number is (highest existing number) + 1: deleting a run in the middle leaves that number unused, while deleting the highest-numbered run frees it for reuse. Deleting a run folder also lets the DEM-tile cleanup free any <code>dem/</code> / <code>vs_lp_grid/</code> tile that no remaining run still references. To keep the output folder and its cache from growing without bound, delete run folders you no longer need directly in the file manager (the plugin does not need to be running).
@@ -395,6 +401,15 @@ USDA NRCS National Engineering Handbook, Part 630.</p>
 <!-- ============================================================ -->
 <div class="sec">
 <h2>Feature Descriptions</h2>
+
+<h3>CS MAP Export</h3>
+<p><strong>Run Export</strong> under <strong>Terrain Data &gt; CS Map Export</strong> creates a CS-style terrain visualization from the selected DEM. Local DEM files are exported as a whole raster; fetched sources such as VS LP/Grid, GSI DEM, and Terrarium use the currently fetched DEM raster. When <strong>Add Tile Layer</strong> is checked, the exported raster is added to QGIS and selected directly in <strong>Layer Settings &gt; Tile Layer</strong>.</p>
+<div class="important-note">
+  <strong>Note:</strong> The color balance is tuned for Forestry Operations Lite so analysis layers such as flow, wetness, and terrain features remain easy to interpret.
+</div>
+<div class="note">
+  CS立体図 is a terrain visualization method proposed by Nagano Prefecture Forestry Research Center. The method is described as open, but exported maps also follow the license and attribution requirements of the input DEM.
+</div>
 
 <h3>Slope Stability</h3>
 <p>Computes the stability factor FS using the infinite slope model. FS &lt; 1.0 indicates collapse risk,
@@ -515,6 +530,9 @@ Forestry Operations Lite.</p>
   <li>VS LP -&gt; DSM は LAS ファイル（1タイル約 237 MB）を解析出力フォルダ内の <code>vs_lp_ground/</code> に保存します。期間による自動削除はなく、VS LP -&gt; DSM の実行が成功するたびに、その実行で使ったタイルの LAS だけを残して古い LAS を削除します。同じ範囲の再実行はキャッシュ済み LAS を再利用します（再ダウンロードなし）。容量を空けたいときは <code>vs_lp_ground/</code> を手動で削除してください。</li>
   <li>VS LP/Grid DTM やその他の DEM タイルは <code>dem/</code> と <code>vs_lp_grid/</code> にキャッシュされ、どの保存済み解析からも DEM として参照されなくなると自動的に削除されます。</li>
 </ul>
+<div class="note">
+  Virtual Shizuoka データは、CC BY 4.0 / ODbL のデュアルライセンスで提供されています。
+</div>
 
 <h3>TIF / ZIP の配置</h3>
 <table>
@@ -738,6 +756,7 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
   <tr><td><code>flow_peak.tif</code></td><td>Peak load Qp [m³/s] — 最大瞬間流量</td></tr>
   <tr><td><code>flow_mean.tif</code></td><td>Mean load Qm [m³/s] — （継続時間 + Tc）で割った持続的な流量</td></tr>
   <tr><td><code>tc.tif</code></td><td>Time load — 流達時間 Tc [h]</td></tr>
+  <tr><td><code>cs_map/cs_map*.tif</code></td><td>選択中または取得済みDEMラスタから作成する単独CS MAP出力</td></tr>
 </table>
 <div class="note">
   解析結果は番号付きサブフォルダ（<code>0001</code>, <code>0002</code>, …）に保存され、自動削除は行いません。上書き解析は同じ番号を差し替えるだけで、それ以外は溜まっていきます。次の番号は「既存の最大番号 + 1」です。途中の番号を削除してもその番号は再使用されず、最大番号のフォルダを削除した場合のみ次でその番号が再利用されます。フォルダを削除すると、どの解析からも参照されなくなった <code>dem/</code> / <code>vs_lp_grid/</code> のタイルを DEM キャッシュ整理が解放できるようになります。出力フォルダとキャッシュが際限なく肥大しないよう、不要になった番号フォルダはファイルマネージャで直接削除してください（プラグインの起動は不要です）。
@@ -747,6 +766,15 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
 <!-- ============================================================ -->
 <div class="sec">
 <h2>機能説明</h2>
+
+<h3>CS MAP Export</h3>
+<p><strong>Terrain Data &gt; CS Map Export</strong> の <strong>Run Export</strong> で、選択中のDEMからCS系の地形表現ラスタを作成します。ローカルDEMファイルはラスタ全体、VS LP/Grid・GSI DEM・Terrarium などの取得型ソースは現在取得済みのDEMラスタ全体を対象にします。<strong>Add Tile Layer</strong> をオンにすると、出力したラスタをQGISに追加し、<strong>Layer Settings &gt; Tile Layer</strong> に直接設定します。</p>
+<div class="important-note">
+  <strong>注意:</strong> 本プラグインでは、流量・湿潤・地形特徴などの解析データを判断しやすいよう、CS系地形表現の色味を調整しています。
+</div>
+<div class="note">
+  CS立体図は長野県林業総合センターが考案した地形表現図法です。図法自体はオープンと説明されていますが、出力した地図の利用条件は入力DEMのライセンス・出典表示条件にも従います。
+</div>
 
 <h3>斜面安定</h3>
 <p>無限斜面モデルによる安定性係数 FS を算出。FS &lt; 1.0 で崩壊リスク、FS &lt; 1.5 で注意域。

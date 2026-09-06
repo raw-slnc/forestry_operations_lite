@@ -1,6 +1,7 @@
 import os
 import shutil
 
+import numpy as np
 from qgis.PyQt import QtWidgets, uic
 from qgis.PyQt.QtCore import QEvent, QSettings, QSignalBlocker, Qt, QUrl, pyqtSignal
 from qgis.PyQt.QtGui import QDesktopServices
@@ -1113,6 +1114,45 @@ class LockedMapTool(QgsMapTool):
         pass  # ズーム阻止
 
 
+class ForestryOperationsLiteWindow(QtWidgets.QMainWindow):
+    """コンテンツウィジェットをホストするだけの薄いトップレベルウィンドウ。
+    QMainWindow は生成した時点で自動的にトップレベル化されるため、QWidgetを
+    毎回Windowフラグ・HWNDオーナー関係の解除で矯正し続ける必要がない
+    （kozu_xml_integrator の KozuMainWindow と同じ方式）。"""
+
+    _STARTUP_ASPECT_RATIO = 1.842
+    _STARTUP_WIDTH_PADDING = 1.03
+
+    def __init__(self, content, parent=None):
+        super().__init__(parent)
+        self.content = content
+        self.setCentralWidget(content)
+        self.setWindowTitle(content.windowTitle())
+        content_min_width = content.minimumSizeHint().width()
+        startup_width = round(max(1200, content_min_width) * self._STARTUP_WIDTH_PADDING)
+        startup_height = max(600, round(startup_width / self._STARTUP_ASPECT_RATIO))
+        self.setMinimumSize(max(900, content_min_width), 600)
+        self.resize(startup_width, startup_height)
+
+    def changeEvent(self, event):
+        """ネイティブの最大化/復元（タイトルバーの最大化ボタン・ダブルクリック）
+        が起きたら、コンテンツ側の Fullscreen チェックボックスを実状態へ追従させる。
+        WindowStateChange はトップレベルであるこのウィンドウ側で受け取る。"""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            cb = getattr(self.content, "chkFullscreen", None)
+            if cb is not None:
+                with QSignalBlocker(cb):
+                    cb.setChecked(self.isMaximized())
+
+    def closeEvent(self, event):
+        # コンテンツ側の後片付け（設定保存・シグナル切断等）をそのまま再利用する。
+        # content は埋め込み済みでトップレベルではないため、ネイティブのクローズ
+        # イベントは自動では content に届かない。
+        self.content.closeEvent(event)
+        super().closeEvent(event)
+
+
 class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
     closingPlugin = pyqtSignal()
 
@@ -1122,6 +1162,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.setupUi(self)
 
         self.preview_canvas = None
+        self._host_window = None  # ForestryOperationsLiteWindow（表示用のトップレベルホスト）
         self._added_to_main_window = False
 
         self._syncing = False
@@ -1133,6 +1174,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._pending_apply_layer_display = False
         self._preview_has_layers = False
         self._post_init_scheduled = False
+        self._terrain_project_update_depth = 0
         self._apply_japanese_base_labels()
         self._build_extended_ui()
         self._connect_extended_signals()
@@ -1151,6 +1193,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # 起動時点で既存の解析結果を選択可能にする（呼ばないと解析番号コンボが
         # 空のままで、読込ボタンもグレーアウトしたまま = 起動直後は選択できない）
         self._refresh_analysis_combo(select_latest=False)
+        self._update_cs_map_export_state()
 
     def changeEvent(self, event):
         """ネイティブの最大化/復元（タイトルバーの最大化ボタン・ダブルクリック）
@@ -1165,18 +1208,21 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         super().changeEvent(event)
 
     def _show_as_window(self):
-        if self.iface is not None and not self._added_to_main_window:
-            self.setParent(self.iface.mainWindow())
-            self._added_to_main_window = True
-        self.setWindowFlag(Qt.WindowType.Window, True)
-        if self.isMinimized():
-            self.showNormal()
+        """kozu_xml_integrator と同じ方式：QMainWindow でホストして自動的に
+        トップレベル化する。QWidget自身をWindowフラグ・HWNDオーナー解除で
+        毎回矯正する必要がない（parent無しならそもそもオーナー関係が発生しない）。"""
+        first_time = self._host_window is None
+        if first_time:
+            import sys
+            parent = None if sys.platform.startswith('win') else self.iface.mainWindow()
+            self._host_window = ForestryOperationsLiteWindow(self, parent=parent)
+        win = self._host_window
+        if win.isMinimized():
+            win.showNormal()
         else:
-            self.show()
-        self._ensure_startup_size()
-        self._ensure_alt_tab_visible()
-        self.raise_()
-        self.activateWindow()
+            win.show()
+        win.raise_()
+        win.activateWindow()
 
     def _ensure_alt_tab_visible(self):
         """フロート時のウィンドウ種別はデフォルトで Qt::Tool になり、
@@ -1223,36 +1269,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         except (OSError, AttributeError, ValueError):
             pass
 
-    def _ensure_startup_size(self):
-        """フロート直後は十分な初期サイズが確保されないことがあるため、
-        画面の大部分（余白5%）を使うサイズを明示的に設定する。"""
-        screen = QtWidgets.QApplication.screenAt(self.pos())
-        if screen is None:
-            screen = QtWidgets.QApplication.primaryScreen()
-        if screen is None:
-            return
-        avail = screen.availableGeometry()
-        margin_w = int(avail.width() * 0.05)
-        margin_h = int(avail.height() * 0.05)
-        self.setGeometry(
-            avail.x() + margin_w,
-            avail.y() + margin_h,
-            avail.width() - margin_w * 2,
-            avail.height() - margin_h * 2,
-        )
-
     def _toggle_floating_fullscreen(self, checked):
         """独立ウィンドウをネイティブの最大化/通常状態で切り替える。
-        タイトルバーの最大化ボタン・ダブルクリックと同じ1状態を操作する。"""
-        if not self.isVisible():
+        タイトルバーの最大化ボタン・ダブルクリックと同じ1状態を操作する。
+        ホストウィンドウは QMainWindow で parent無し（Windows）のため、
+        Qtがオーナーを再設定してAlt+Tabから外れる問題自体が起きず、
+        HWNDオーナーの再解除は不要。"""
+        win = self._host_window
+        if win is None or not win.isVisible():
             return
-        if checked and not self.isMaximized():
-            self.showMaximized()
-        elif not checked and self.isMaximized():
-            self.showNormal()
-        # ネイティブの最大化/復元は Qt がメインウィンドウをオーナーに
-        # 再設定することがあり Alt+Tab 個別表示が壊れるため再解除する。
-        self._detach_native_window_owner()
+        if checked and not win.isMaximized():
+            win.showMaximized()
+        elif not checked and win.isMaximized():
+            win.showNormal()
 
     def _apply_japanese_base_labels(self):
         self.setWindowTitle("Forestry Operations Lite")
@@ -1288,10 +1317,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.chkLoadIntegrated.setToolTip(
             "Cycle: Risk Off → Overall Risk → High Risk")
         # ラベルが状態（Risk Off / Overall Risk / High Risk）で変わるため、
-        # 最長ラベル幅 + 余白で固定し、切替時に幅が動かないようにする。
-        _fm = self.chkLoadIntegrated.fontMetrics()
+        # 最長ラベル "Overall Risk" 表示時の sizeHint 幅で固定し、切替時に幅が
+        # 動かないようにする（sizeHint はボタンの padding/border も含むので、
+        # fontMetrics + 手動余白より確実）。この後段の setMinimumWidth ループの
+        # 対象からは除外している（除外しないと最小幅が上書きされてしまう）。
+        _prev_lbl = self.chkLoadIntegrated.text()
+        self.chkLoadIntegrated.setText("Overall Risk")
         self.chkLoadIntegrated.setFixedWidth(
-            _fm.horizontalAdvance("Overall Risk") + 30)
+            self.chkLoadIntegrated.sizeHint().width() + 6)
+        self.chkLoadIntegrated.setText(_prev_lbl)
         self.btnTerrainToggle.setStyleSheet(
             "QPushButton{padding:2px 10px;}"
             "QPushButton:checked{background:#f0ff1a;color:#222;"
@@ -1339,6 +1373,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.btnFlowBuffer = QtWidgets.QPushButton("Buffer: Off")
         self.btnFlowBuffer.setToolTip("Apply blur to flow layer: Off→Low→High")
         self.btnFlowBuffer.setStyleSheet("font-size:8pt; padding:1px 2px;")
+        # ラベルが off/low/high で変わるため、最長ラベル表示時の sizeHint 幅で
+        # 固定し、切替時に幅が動かないようにする。この後段の setMinimumWidth
+        # ループの対象からは除外している（除外しないと上書きされてしまう）。
+        _bf_prev = self.btnFlowBuffer.text()
+        self.btnFlowBuffer.setText("Buffer: High")
+        self.btnFlowBuffer.setFixedWidth(
+            self.btnFlowBuffer.sizeHint().width() + 4)
+        self.btnFlowBuffer.setText(_bf_prev)
 
         self.lblLoadStatus = QtWidgets.QLabel("")
         self.lblLoadStatus.setStyleSheet("color:#555;font-size:8pt;")
@@ -1411,6 +1453,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             _sbl.addWidget(_val)
             _sbl.addSpacing(8)
         _sbl.addStretch(1)
+        self.lblPluginCredit = QtWidgets.QLabel("Developed by Avid Tree Work")
+        self.lblPluginCredit.setStyleSheet("color: #888; font-size: 8pt;")
+        self.lblPluginCredit.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        _sbl.addWidget(self.lblPluginCredit)
         preview_layout.addWidget(_sb)
 
         self.chkStandaloneWindow = QtWidgets.QCheckBox("Open in standalone window")
@@ -1467,6 +1513,50 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         layer_layout.addWidget(self.btnRefreshLayerList,        3, 0, 1, 2)
         layer_layout.setColumnStretch(1, 1)
 
+        # ── CS-style terrain visualization export ────────────────────────
+        self.grpCsMapExport = QtWidgets.QGroupBox("CS Map Export")
+        cs_export_layout = QtWidgets.QVBoxLayout(self.grpCsMapExport)
+        cs_export_layout.setContentsMargins(8, 4, 8, 6)
+        cs_export_layout.setSpacing(4)
+        cs_row = QtWidgets.QHBoxLayout()
+        cs_row.setSpacing(6)
+        self.btnCsMapExport = QtWidgets.QPushButton("Run Export")
+        self.btnCsMapExport.setToolTip("Load DEM to enable CS MAP export")
+        self.chkCsMapAddTile = QtWidgets.QCheckBox("Add Tile Layer")
+        self.chkCsMapAddTile.setChecked(True)
+        self.chkCsMapAddTile.setToolTip(
+            "Add the exported CS MAP to QGIS and select it in Layer Settings > Tile Layer"
+        )
+        self.btnCsMapExport.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.chkCsMapAddTile.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        cs_row.addWidget(self.btnCsMapExport, 4)
+        cs_row.addWidget(self.chkCsMapAddTile, 1)
+        cs_export_layout.addLayout(cs_row)
+        self.progressCsMapExport = QtWidgets.QProgressBar()
+        self.progressCsMapExport.setRange(0, 0)
+        self.progressCsMapExport.setVisible(False)
+        cs_export_layout.addWidget(self.progressCsMapExport)
+        self.lblCsMapExportStatus = QtWidgets.QLabel("")
+        self.lblCsMapExportStatus.setWordWrap(True)
+        self.lblCsMapExportStatus.setStyleSheet("color:#555;font-size:8pt;")
+        cs_export_layout.addWidget(self.lblCsMapExportStatus)
+        self.lblCsMapAbout = QtWidgets.QLabel(
+            '<a href="cs_style_about">about CS-style terrain visualization</a>'
+        )
+        self.lblCsMapAbout.setStyleSheet("font-size:8pt;")
+        self.lblCsMapAbout.setTextInteractionFlags(
+            Qt.TextInteractionFlag.LinksAccessibleByMouse
+        )
+        self.lblCsMapAbout.setOpenExternalLinks(False)
+        self.lblCsMapAbout.setAlignment(Qt.AlignmentFlag.AlignRight)
+        cs_export_layout.addWidget(self.lblCsMapAbout)
+
         # ── 地表データ（tabDataSettings へ）──────────────────────────────
         self.grpDem = QtWidgets.QGroupBox("Terrain Data")
         dem_lay = QtWidgets.QGridLayout(self.grpDem)
@@ -1512,6 +1602,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         _bg_lay.addWidget(_bg_note)
 
         self._dem_path = ""
+        self._dem_actual_path = ""
+        self._cs_map_dem_path = ""
         self._dsm_path = ""
         self._partial_outside_warned = False   # reset when DEM changes
         self._dem_loading = False
@@ -1572,6 +1664,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         ds_layout.addWidget(self.grpVsExport)
         ds_layout.addWidget(self.grpTerrainBg)
         ds_layout.addWidget(self.grpLayers)
+        ds_layout.addWidget(self.grpCsMapExport)
 
         self.grpScipy = QtWidgets.QGroupBox(
             "scipy required (Flow Buffer / DEM resampling / SHC)"
@@ -1618,7 +1711,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             pass
         ds_layout.addWidget(self.grpScipy)
 
-        grpHint = QtWidgets.QGroupBox("Data Setup")
+        _btn_data_setup = QtWidgets.QPushButton("▶  Data Setup")
+        _btn_data_setup.setCheckable(True)
+        _btn_data_setup.setChecked(False)
+        _btn_data_setup.setStyleSheet(
+            "QPushButton { text-align:left; padding:4px 6px; font-size:8pt; "
+            "background:#e8e8e8; border:1px solid #ccc; border-radius:3px; }"
+            "QPushButton:checked { background:#d0d8e8; }"
+        )
+        ds_layout.addWidget(_btn_data_setup)
+
+        grpHint = QtWidgets.QGroupBox()
         hint_lay = QtWidgets.QVBoxLayout(grpHint)
         hint_lay.setSpacing(4)
         _warn = QtWidgets.QLabel(
@@ -1643,7 +1746,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             lbl = QtWidgets.QLabel(text)
             lbl.setWordWrap(True)
             hint_lay.addWidget(lbl)
+        grpHint.setVisible(False)
         ds_layout.addWidget(grpHint)
+
+        def _toggle_data_setup(checked):
+            _btn_data_setup.setText(("▼" if checked else "▶") + "  Data Setup")
+            grpHint.setVisible(checked)
+        _btn_data_setup.toggled.connect(_toggle_data_setup)
 
         # ── Tips アコーディオン ──────────────────────────────────
         _btn_tips = QtWidgets.QPushButton("▶  Tips")
@@ -1697,12 +1806,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             _btn_tips.setText(("▼" if checked else "▶") + "  Tips")
             _tips_body.setVisible(checked)
         _btn_tips.toggled.connect(_toggle_tips)
-
-        _lbl_credit = QtWidgets.QLabel("Developed by Avid Tree Work")
-        _lbl_credit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _lbl_credit.setStyleSheet("color: #888; font-size: 8pt; padding: 4px 0;")
-        ds_layout.addWidget(_lbl_credit)
-        ds_layout.addStretch()
+        ds_layout.addStretch(1)
 
         self.tabTerrain = QtWidgets.QWidget()
         self._build_terrain_tab(self.tabTerrain)
@@ -1712,7 +1816,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         import pathlib
         _fol_uri = pathlib.Path(os.path.dirname(__file__), "data", "FOL.html").as_uri()
-        _corner_lnk = QtWidgets.QLabel(f'<a href="{_fol_uri}">Help</a>')
+        _corner_lnk = QtWidgets.QLabel(f'<a href="{_fol_uri}">Manual</a>')
         _corner_lnk.setOpenExternalLinks(True)
         _corner_lnk.setToolTip("Open FOL documentation")
         _corner_lnk.setContentsMargins(0, 0, 4, 0)
@@ -1761,6 +1865,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         )
         dm_row2.addWidget(self.chkFullscreen)
         dm_vlay.addLayout(dm_row2)
+        for _control in (
+            self.btnTerrainToggle,
+            self.chkLoadValley,
+            self.chkLoadWetland,
+            self.chkLoadFlow,
+            # btnFlowBuffer / chkLoadIntegrated は上で最長ラベル幅に固定済みなので対象外
+            self.chkMapLock,
+            self.chkFullscreen,
+        ):
+            _control.setMinimumWidth(_control.sizeHint().width())
         # Row3: レイヤー表示 ON/OFF + 透過率（GPKG / Tile / Background）
         dm_row3 = QtWidgets.QHBoxLayout()
         dm_row3.setSpacing(2)
@@ -1781,9 +1895,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         right_layout.addWidget(grpDisplayMgmt)
         right_layout.addWidget(self.grpPreviewCanvas, stretch=1)
 
+        right_min_width = max(
+            720,
+            grpDisplayMgmt.minimumSizeHint().width(),
+            grpDisplayMgmt.sizeHint().width(),
+        )
+        self.rightPane.setMinimumWidth(right_min_width)
         self.mainSplitter.setStretchFactor(0, 1)
         self.mainSplitter.setStretchFactor(1, 1)
-        self.mainSplitter.setSizes([480, 720])
+        self.mainSplitter.setSizes([480, right_min_width])
         self.verticalLayout.addWidget(self.mainSplitter)
 
     def _build_terrain_tab(self, parent):
@@ -2037,7 +2157,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             f"解像度が {_RESAMPLE_THRESHOLD}m 未満のため、"
             f"解析前に {_RESAMPLE_TARGET}m へ自動リサンプルします。"
         )
-        _al_lay.addWidget(self.lblResample)
         # 右カラム（Stop ボタン）
         self.btnStopAnalysis = QtWidgets.QPushButton("Stop")
         self.btnStopAnalysis.setEnabled(False)
@@ -2045,6 +2164,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             "QPushButton:enabled{background:#c0392b;color:white;border-radius:3px;}"
             "QPushButton:disabled{color:#aaa;}"
         )
+        _control_height = max(
+            self.cmbAreaLimit.sizeHint().height(),
+            self.btnStopAnalysis.sizeHint().height(),
+        )
+        self.lblResample.setFixedHeight(_control_height)
+        self.lblResample.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.btnStopAnalysis.setFixedHeight(_control_height)
+        _al_lay.addWidget(self.lblResample)
         _al_lay.addWidget(self.btnStopAnalysis, 1)
         lay.addWidget(grpAreaLimit)
 
@@ -2076,11 +2206,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.btnExport = QtWidgets.QPushButton("Export")
         export_lay.addWidget(self.btnExport)
         lay.addWidget(grpExport)
-
-        _lbl_credit_a = QtWidgets.QLabel("Developed by Avid Tree Work")
-        _lbl_credit_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _lbl_credit_a.setStyleSheet("color: #888; font-size: 8pt; padding: 4px 0;")
-        lay.addWidget(_lbl_credit_a)
         lay.addStretch(1)
 
         # チェックボックス連動でパラメータタブを更新
@@ -2142,6 +2267,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.btnOpenWodmi.clicked.connect(self._on_open_wodmi)
         self.btnVsCancel.clicked.connect(self._on_vs_cancel)
         self.btnRunAnalysis.clicked.connect(self._run_terrain_analysis)
+        self.btnCsMapExport.clicked.connect(self._on_cs_map_export_clicked)
+        self.lblCsMapAbout.linkActivated.connect(self._show_cs_map_about)
         self.btnExport.clicked.connect(self._on_export_clicked)
         self.btnStopAnalysis.clicked.connect(self._on_stop_analysis)
         self.chkLoadStability.clicked.connect(lambda: self._cycle_terrain_layer("stability"))
@@ -2196,6 +2323,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             for ids in getattr(self, "_loaded_terrain_layers", {}).values()
             for lid in ids
         }
+        terrain_ids.update(getattr(self, "_flow_buffer_layer_ids", []))
         # mapLayers().values() はプロジェクトへの登録順であり、レイヤーパネル
         # の見た目の並びとは一致しないため、レイヤーツリーを辿った順序を使う。
         for node in QgsProject.instance().layerTreeRoot().findLayers():
@@ -2211,6 +2339,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._set_combo_data(self.cmbTileLayer, tile_data)
         self._set_combo_data(self.cmbGpkgLayer, gpkg_data)
         self._restore_layer_combos_if_unset()
+        if getattr(self, "_terrain_project_update_depth", 0) > 0:
+            self._preview_debug_log(
+                "refresh_layer_combos.defer_apply",
+                depth=self._terrain_project_update_depth,
+            )
+            return
         if self.preview_canvas is not None:
             if self.preview_canvas.width() == 0 or self.preview_canvas.height() == 0:
                 self._pending_apply_layer_display = True
@@ -2501,11 +2635,178 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._show_as_window()
         QTimer.singleShot(300, self._finish_init)
 
+    def _preview_debug_log_path(self):
+        """Preview rendering diagnostics log path."""
+        try:
+            return os.path.join(self._terrain_output_dir(), "preview_debug.log")
+        except Exception:  # nosec B110
+            return os.path.join(
+                os.path.expanduser("~"),
+                ".qgis",
+                "forestry_operations_lite",
+                "preview_debug.log",
+            )
+
+    def _preview_debug_rect(self, rect):
+        if rect is None:
+            return None
+        try:
+            return {
+                "xmin": rect.xMinimum(),
+                "ymin": rect.yMinimum(),
+                "xmax": rect.xMaximum(),
+                "ymax": rect.yMaximum(),
+                "empty": rect.isEmpty(),
+            }
+        except Exception as exc:  # nosec B110
+            return {"error": repr(exc)}
+
+    def _preview_debug_point(self, pt):
+        if pt is None:
+            return None
+        try:
+            return {"x": pt.x(), "y": pt.y()}
+        except Exception as exc:  # nosec B110
+            return {"error": repr(exc)}
+
+    def _preview_debug_crs(self, crs):
+        if crs is None:
+            return None
+        try:
+            return {
+                "authid": crs.authid(),
+                "description": crs.description(),
+                "valid": crs.isValid(),
+            }
+        except Exception as exc:  # nosec B110
+            return {"error": repr(exc)}
+
+    def _preview_debug_layer_info(self, lyr):
+        if lyr is None:
+            return None
+        info = {}
+        for key, getter in (
+            ("id", lambda: lyr.id()),
+            ("name", lambda: lyr.name()),
+            ("type", lambda: int(lyr.type())),
+            ("valid", lambda: lyr.isValid()),
+            ("crs", lambda: self._preview_debug_crs(lyr.crs())),
+            ("extent", lambda: self._preview_debug_rect(lyr.extent())),
+            ("opacity", lambda: lyr.opacity()),
+            ("source", lambda: lyr.source()),
+        ):
+            try:
+                info[key] = getter()
+            except Exception as exc:  # nosec B110
+                info[key] = {"error": repr(exc)}
+        try:
+            provider = lyr.dataProvider()
+            info["provider"] = provider.name() if provider is not None else None
+        except Exception as exc:  # nosec B110
+            info["provider"] = {"error": repr(exc)}
+        try:
+            renderer = lyr.renderer()
+            info["renderer"] = renderer.type() if renderer is not None else None
+        except Exception as exc:  # nosec B110
+            info["renderer"] = {"error": repr(exc)}
+        return info
+
+    def _preview_debug_canvas_state(self, canvas=None):
+        canvas = canvas or self.preview_canvas
+        if canvas is None:
+            return None
+        state = {}
+        for key, getter in (
+            ("width", lambda: canvas.width()),
+            ("height", lambda: canvas.height()),
+            ("scale", lambda: canvas.scale()),
+            ("center", lambda: self._preview_debug_point(canvas.center())),
+            ("extent", lambda: self._preview_debug_rect(canvas.extent())),
+            ("destination_crs", lambda: self._preview_debug_crs(canvas.mapSettings().destinationCrs())),
+            ("is_frozen", lambda: canvas.isFrozen()),
+            ("render_flag", lambda: canvas.renderFlag()),
+            ("current_layer_ids", lambda: [lyr.id() for lyr in canvas.layers()]),
+        ):
+            try:
+                state[key] = getter()
+            except Exception as exc:  # nosec B110
+                state[key] = {"error": repr(exc)}
+        return state
+
+    def _preview_debug_state(self):
+        try:
+            analysis_number = self.cmbAnalysisNumber.currentData()
+        except Exception:  # nosec B110
+            analysis_number = None
+        return {
+            "analysis_number": analysis_number,
+            "loaded_terrain_layers": dict(getattr(self, "_loaded_terrain_layers", {})),
+            "loaded_terrain_basenames": dict(getattr(self, "_loaded_terrain_basenames", {})),
+            "terrain_cycle_state": dict(getattr(self, "_terrain_cycle_state", {})),
+            "flow_buffer_layer_ids": list(getattr(self, "_flow_buffer_layer_ids", [])),
+            "flow_buffer_mem_paths": list(getattr(self, "_flow_buffer_mem_paths", [])),
+            "filter_state": dict(getattr(self, "_filter_state", {})),
+            "flow_buffer_state": getattr(self, "_flow_buffer_state", None),
+            "filter_state_tc": getattr(self, "_filter_state_tc", None),
+            "flow_buffer_state_tc": getattr(self, "_flow_buffer_state_tc", None),
+            "terrain_layers_visible": getattr(self, "_terrain_layers_visible", None),
+            "map_locked": getattr(self, "_map_locked", None),
+            "syncing": getattr(self, "_syncing", None),
+            "preview_has_layers": getattr(self, "_preview_has_layers", None),
+            "pending_apply_layer_display": getattr(self, "_pending_apply_layer_display", None),
+            "terrain_project_update_depth": getattr(self, "_terrain_project_update_depth", None),
+        }
+
+    def _preview_debug_log(self, event, **payload):
+        """Append preview diagnostics as JSONL; diagnostics must never affect UI."""
+        try:
+            import json
+            from datetime import datetime
+
+            path = self._preview_debug_log_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            row = {
+                "ts": datetime.now().isoformat(timespec="milliseconds"),
+                "event": event,
+                "payload": payload,
+                "state": self._preview_debug_state(),
+            }
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+        except Exception:  # nosec B110
+            pass
+
+    def _begin_terrain_project_update(self, reason):
+        self._terrain_project_update_depth = (
+            getattr(self, "_terrain_project_update_depth", 0) + 1
+        )
+        self._preview_debug_log(
+            "terrain_project_update.begin",
+            reason=reason,
+            depth=self._terrain_project_update_depth,
+        )
+
+    def _end_terrain_project_update(self, reason):
+        self._terrain_project_update_depth = max(
+            0, getattr(self, "_terrain_project_update_depth", 0) - 1
+        )
+        self._preview_debug_log(
+            "terrain_project_update.end",
+            reason=reason,
+            depth=self._terrain_project_update_depth,
+        )
+
     def _refresh_preview_canvas(self):
         if self.preview_canvas is None:
+            self._preview_debug_log("refresh_preview_canvas.skip", reason="no_canvas")
             return
         if self.preview_canvas.width() == 0 or self.preview_canvas.height() == 0:
             self._pending_apply_layer_display = True
+            self._preview_debug_log(
+                "refresh_preview_canvas.skip",
+                reason="zero_size",
+                canvas=self._preview_debug_canvas_state(),
+            )
             return
         bg   = self._get_selected_layer(self.cmbBackgroundLayer)
         tile = self._get_selected_layer(self.cmbTileLayer)
@@ -2547,9 +2848,23 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             if lyr is not None and lyr.isValid():
                 layer_stack.append(lyr)
         self._preview_has_layers = bool(layer_stack)
+        self._preview_debug_log(
+            "refresh_preview_canvas.before",
+            selected_layers={
+                "gpkg": self._preview_debug_layer_info(gpkg),
+                "tile": self._preview_debug_layer_info(tile),
+                "background": self._preview_debug_layer_info(bg),
+            },
+            terrain_layer_stack=[self._preview_debug_layer_info(lyr) for lyr in terrain_lyrs],
+            layer_stack=[self._preview_debug_layer_info(lyr) for lyr in layer_stack],
+            canvas_before=self._preview_debug_canvas_state(),
+        )
         _prev_syncing = getattr(self, "_syncing", False)
+        # キャンバス自体への blockSignals はやめる（QgsMapCanvas はレイヤ/範囲変更→
+        # 再描画の内部シグナル連鎖で動くため、止めると環境によって再描画がキック
+        # されず真っ白のまま残ることがある）。メインキャンバスとの相互同期抑止は
+        # _syncing フラグだけで十分。
         self._syncing = True
-        self.preview_canvas.blockSignals(True)
         try:
             if self.iface is not None:
                 main = self.iface.mapCanvas()
@@ -2567,11 +2882,49 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     self.preview_canvas.zoomScale(main.scale())
                 elif self.preview_canvas.extent().isEmpty():
                     pass  # 0px キャンバスには setExtent も不可
+        except Exception as exc:
+            self._preview_debug_log(
+                "refresh_preview_canvas.error",
+                error=repr(exc),
+                canvas=self._preview_debug_canvas_state(),
+            )
+            raise
         finally:
-            self.preview_canvas.blockSignals(False)
             self._syncing = _prev_syncing
+        self._preview_debug_log(
+            "refresh_preview_canvas.after_set_layers",
+            layer_stack_ids=[lyr.id() for lyr in layer_stack],
+            canvas_after=self._preview_debug_canvas_state(),
+        )
         self.preview_canvas.refresh()
+        self._preview_debug_log(
+            "refresh_preview_canvas.refresh_requested",
+            canvas=self._preview_debug_canvas_state(),
+        )
+        # 範囲変更（_zoom_preview_to_* 等）が一連で走ったあと、イベントループが
+        # 一周してから最終の再描画を1回確実にキックする（真っ白対策）。
+        from qgis.PyQt.QtCore import QTimer
+        QTimer.singleShot(0, self._final_preview_refresh)
         self._update_preview_status()
+
+    def _final_preview_refresh(self):
+        from qgis.PyQt import sip
+        canvas = self.preview_canvas
+        if canvas is None:
+            self._preview_debug_log("final_preview_refresh.skip", reason="no_canvas")
+            return
+        if sip.isdeleted(canvas):
+            self._preview_debug_log("final_preview_refresh.skip", reason="deleted_canvas")
+            return
+        self._preview_debug_log(
+            "final_preview_refresh.before",
+            canvas=self._preview_debug_canvas_state(canvas),
+        )
+        canvas.refresh()
+        self._preview_debug_log(
+            "final_preview_refresh.after",
+            canvas=self._preview_debug_canvas_state(canvas),
+        )
 
     def _zoom_preview_to_layer_if_needed(self, lyr):
         """レイヤ範囲がプレビューキャンバスと重ならない場合のみズーム。
@@ -2753,6 +3106,28 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
     _FILTER_KEYS = {"twi", "flow_peak", "flow_mean", "tc"}
 
     @staticmethod
+    def _raster_band_stat_flags(*names):
+        try:
+            from qgis.core import Qgis
+            stat_enum = Qgis.RasterBandStatistic
+        except (ImportError, AttributeError):
+            stat_enum = None
+        if stat_enum is not None:
+            try:
+                flag = getattr(stat_enum, names[0])
+                for name in names[1:]:
+                    flag |= getattr(stat_enum, name)
+                return flag
+            except AttributeError:
+                pass
+
+        from qgis.core import QgsRasterBandStats
+        flag = getattr(QgsRasterBandStats.Stats, names[0])
+        for name in names[1:]:
+            flag |= getattr(QgsRasterBandStats.Stats, name)
+        return flag
+
+    @staticmethod
     def _apply_hillshade_style(lyr):
         """Hillshadeをグレースケール＋乗算(Multiply)ブレンドで描画する。
         乗算なら明部は下のElevation Backgroundの色を保ったまま陰影だけが
@@ -2778,6 +3153,32 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         except AttributeError:
             multiply_mode = getattr(QPainter, "CompositionMode_Multiply")
         lyr.setBlendMode(multiply_mode)
+
+    @staticmethod
+    def _apply_cs_map_style(lyr):
+        """CS MAPのRGBバンドをそのままカラー表示する。"""
+        from qgis.core import QgsContrastEnhancement, QgsMultiBandColorRenderer
+
+        renderer = QgsMultiBandColorRenderer(lyr.dataProvider(), 1, 2, 3)
+        for band, setter_name in (
+            (1, "setRedContrastEnhancement"),
+            (2, "setGreenContrastEnhancement"),
+            (3, "setBlueContrastEnhancement"),
+        ):
+            setter = getattr(renderer, setter_name, None)
+            if setter is None:
+                continue
+            enhancement = QgsContrastEnhancement(lyr.dataProvider().dataType(band))
+            enhancement.setMinimumValue(0.0)
+            enhancement.setMaximumValue(255.0)
+            try:
+                algo = QgsContrastEnhancement.ContrastEnhancementAlgorithm.NoEnhancement
+            except AttributeError:
+                algo = getattr(QgsContrastEnhancement, "NoEnhancement", None)
+            if algo is not None:
+                enhancement.setContrastEnhancementAlgorithm(algo)
+            setter(enhancement)
+        lyr.setRenderer(renderer)
 
     @staticmethod
     def _apply_raster_color(lyr, base_name, filter_mode="off"):
@@ -2873,11 +3274,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         }
 
         # サンプル数を制限して高速化（全ピクセルスキャンは大規模ラスターで数秒かかる）
-        from qgis.core import QgsRasterBandStats
         stats = lyr.dataProvider().bandStatistics(
             1,
-            QgsRasterBandStats.Stats.Min | QgsRasterBandStats.Stats.Max
-            | QgsRasterBandStats.Stats.Mean | QgsRasterBandStats.Stats.StdDev,
+            ForestryOperationsLiteDockWidget._raster_band_stat_flags(
+                "Min", "Max", "Mean", "StdDev"
+            ),
             lyr.extent(),
             250_000,
         )
@@ -2900,8 +3301,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 try:
                     if _sl.isValid():
                         _ss = _sl.dataProvider().bandStatistics(
-                            1, QgsRasterBandStats.Stats.Min
-                            | QgsRasterBandStats.Stats.Max,
+                            1,
+                            ForestryOperationsLiteDockWidget._raster_band_stat_flags(
+                                "Min", "Max"
+                            ),
                             _sl.extent(), 250_000)
                         lo = min(lo, _ss.minimumValue)
                         hi = max(hi, _ss.maximumValue)
@@ -3073,6 +3476,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         else:
             current = self._filter_state.get(key, "off")
         next_state = states[(states.index(current) + 1) % len(states)]
+        self._preview_debug_log(
+            "toggle_filter.start",
+            key=key,
+            base_name=base_name,
+            current=current,
+            next_state=next_state,
+            loaded_ids=list(self._loaded_terrain_layers.get(key, [])),
+        )
         if key == "flow":
             self._set_flow_filter_state(base_name, next_state)
         else:
@@ -3083,21 +3494,42 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         # 表示中のラスタレイヤへ即時再適用
         if base_name is None:
+            self._preview_debug_log(
+                "toggle_filter.skip",
+                key=key,
+                reason="no_base_name",
+            )
             return
         proj = QgsProject.instance()
+        reapplied = []
         for lid in self._loaded_terrain_layers.get(key, []):
             lyr = proj.mapLayer(lid)
             if lyr is None or lyr.type() != lyr.RasterLayer:
+                self._preview_debug_log(
+                    "toggle_filter.layer_skip",
+                    key=key,
+                    layer_id=lid,
+                    reason="missing_or_not_raster",
+                )
                 continue
             opacity = lyr.opacity()
             self._apply_raster_color(lyr, base_name, next_state)
             lyr.renderer().setOpacity(opacity)
             lyr.setOpacity(opacity)
             lyr.triggerRepaint()
+            reapplied.append(self._preview_debug_layer_info(lyr))
         if key == "flow" and self._flow_buffer_state_for_base(base_name) != "off":
             self._apply_flow_buffer()
         if self.preview_canvas is not None:
             self.preview_canvas.refresh()
+        self._preview_debug_log(
+            "toggle_filter.finish",
+            key=key,
+            base_name=base_name,
+            next_state=next_state,
+            reapplied_layers=reapplied,
+            canvas=self._preview_debug_canvas_state(),
+        )
 
     # バッファ強度ごとのブラー半径（ピクセル）
     _FLOW_BUFFER_SIGMA  = {"weak": 1.5, "strong": 2.5}   # Gaussian sigma（ピクセル）
@@ -3181,6 +3613,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         base_name = self._loaded_terrain_basenames.get("flow")
         cur = self._flow_buffer_state_for_base(base_name)
         nxt = states[(states.index(cur) + 1) % len(states)]
+        self._preview_debug_log(
+            "cycle_flow_buffer",
+            base_name=base_name,
+            current=cur,
+            next_state=nxt,
+        )
         self._set_flow_buffer_state_for_base(base_name, nxt)
         self._set_flow_buffer_button_state(nxt)
         self._apply_flow_buffer()
@@ -3194,34 +3632,74 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         from qgis.core import QgsLayerTreeLayer
 
         proj = QgsProject.instance()
+        self._preview_debug_log(
+            "apply_flow_buffer.start",
+            existing_buffer_layer_ids=list(self._flow_buffer_layer_ids),
+            existing_mem_paths=list(self._flow_buffer_mem_paths),
+        )
 
         # 既存バッファレイヤーを削除
-        for lid in self._flow_buffer_layer_ids:
-            if proj.mapLayer(lid):
-                proj.removeMapLayer(lid)
+        removed_ids = []
+        self._begin_terrain_project_update("apply_flow_buffer.remove_old")
+        try:
+            for lid in self._flow_buffer_layer_ids:
+                if proj.mapLayer(lid):
+                    proj.removeMapLayer(lid)
+                    removed_ids.append(lid)
+        finally:
+            self._end_terrain_project_update("apply_flow_buffer.remove_old")
         self._flow_buffer_layer_ids = []
         from osgeo import gdal as _gdal
+        unlinked_paths = []
         for mp in self._flow_buffer_mem_paths:
             _gdal.Unlink(mp)
+            unlinked_paths.append(mp)
         self._flow_buffer_mem_paths = []
 
         base_name = self._loaded_terrain_basenames.get("flow")
         state = self._flow_buffer_state_for_base(base_name)
+        self._preview_debug_log(
+            "apply_flow_buffer.after_clear",
+            base_name=base_name,
+            state=state,
+            removed_ids=removed_ids,
+            unlinked_paths=unlinked_paths,
+        )
         if state == "off":
             self._normalize_terrain_group_order()
             self._refresh_preview_canvas()
+            self._preview_debug_log(
+                "apply_flow_buffer.finish",
+                base_name=base_name,
+                state=state,
+                reason="off",
+                created_layers=[],
+            )
             return
 
         opacity = self._FLOW_BUFFER_OPACITY[state]
+        created_layers = []
 
         for lid in self._loaded_terrain_layers.get("flow", []):
             lyr = proj.mapLayer(lid)
             if lyr is None or lyr.type() != lyr.RasterLayer:
+                self._preview_debug_log(
+                    "apply_flow_buffer.layer_skip",
+                    layer_id=lid,
+                    reason="missing_or_not_raster",
+                )
                 continue
             sigma = self._flow_buffer_sigma(base_name, state)
             src_path = lyr.source()
             ds = gdal.Open(src_path)
             if ds is None:
+                self._preview_debug_log(
+                    "apply_flow_buffer.layer_skip",
+                    layer=self._preview_debug_layer_info(lyr),
+                    reason="gdal_open_failed",
+                    src_path=src_path,
+                    sigma=sigma,
+                )
                 continue
 
             data     = ds.GetRasterBand(1).ReadAsArray().astype(np.float32)
@@ -3241,6 +3719,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             drv = gdal.GetDriverByName("GTiff")
             out = drv.Create(mem_path, data.shape[1], data.shape[0], 1, gdal.GDT_Float32)
             if out is None:
+                self._preview_debug_log(
+                    "apply_flow_buffer.layer_skip",
+                    layer=self._preview_debug_layer_info(lyr),
+                    reason="gdal_create_failed",
+                    mem_path=mem_path,
+                    sigma=sigma,
+                    shape=list(data.shape),
+                )
                 continue
             # Create 成功直後に登録 — 以降の例外でも Unlink が保証される
             self._flow_buffer_mem_paths.append(mem_path)
@@ -3256,6 +3742,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
             blur_lyr = QgsRasterLayer(mem_path, f"{lyr.name()} blur")
             if not blur_lyr.isValid():
+                self._preview_debug_log(
+                    "apply_flow_buffer.layer_skip",
+                    layer=self._preview_debug_layer_info(lyr),
+                    reason="blur_layer_invalid",
+                    mem_path=mem_path,
+                    sigma=sigma,
+                    shape=list(data.shape),
+                )
                 continue
 
             if base_name:
@@ -3263,7 +3757,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                                          self._flow_filter_state(base_name))
             blur_lyr.renderer().setOpacity(opacity)
             blur_lyr.setOpacity(opacity)
-            proj.addMapLayer(blur_lyr, False)
+            self._begin_terrain_project_update("apply_flow_buffer.add_blur")
+            try:
+                proj.addMapLayer(blur_lyr, False)
+            finally:
+                self._end_terrain_project_update("apply_flow_buffer.add_blur")
 
             # flow レイヤーの直下に挿入
             group = self._terrain_layer_group
@@ -3280,9 +3778,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     node.setExpanded(False)
 
             self._flow_buffer_layer_ids.append(blur_lyr.id())
+            created_layers.append(self._preview_debug_layer_info(blur_lyr))
 
         self._normalize_terrain_group_order()
         self._refresh_preview_canvas()
+        self._preview_debug_log(
+            "apply_flow_buffer.finish",
+            base_name=base_name,
+            state=state,
+            created_layers=created_layers,
+            canvas=self._preview_debug_canvas_state(),
+        )
 
     # (base_name, label, kind, ext)  ← 解析番号プレフィクスは _toggle_terrain_layer で付加
     _TERRAIN_PATTERNS = {
@@ -3417,16 +3923,27 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self._rain_bounds_busy = False
 
     def _normalize_terrain_group_order(self):
-        """グループ内の子ノード順を _KEY_RANK（上位＝高ランク）に正規化する。
-        flow のバッファ滲みレイヤーは flow 本体の直下に固める。挿入位置の
-        計算がバッファ層でずれても、切替後にここで並びを立て直す。
-        並べ替え中はキャンバスを freeze してノード単位の再描画を抑止する。"""
+        """ログ用に順序差分を確認する。
+
+        QGIS 4/Windows では layer tree node の clone/remove/insert が
+        QgsProject 側の layer id を stale 化することがあるため、ここでは
+        破壊的な並べ替えをしない。プレビュー順は _refresh_preview_canvas()
+        の layer_stack で確定し、メイン側は追加時の挿入位置で整える。
+        """
         group = self._terrain_layer_group
         if group is None:
+            self._preview_debug_log(
+                "normalize_terrain_group_order.skip",
+                reason="no_group",
+            )
             return
         try:
             group.name()  # 削除済みなら RuntimeError
         except RuntimeError:
+            self._preview_debug_log(
+                "normalize_terrain_group_order.skip",
+                reason="deleted_group",
+            )
             return
         proj = QgsProject.instance()
         desired_ids = []
@@ -3440,54 +3957,28 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     if proj.mapLayer(_lid) is not None:
                         desired_ids.append(_lid)
         if not desired_ids:
+            self._preview_debug_log(
+                "normalize_terrain_group_order.skip",
+                reason="no_desired_ids",
+            )
             return
         current = [n.layerId() for n in group.findLayers()]
         if current == desired_ids:
+            self._preview_debug_log(
+                "normalize_terrain_group_order.skip",
+                reason="already_ordered",
+                current=current,
+                desired_ids=desired_ids,
+            )
             return
-        checked_by_id = {}
-        for _n in group.findLayers():
-            try:
-                checked_by_id[_n.layerId()] = _n.itemVisibilityChecked()
-            except Exception:  # nosec B110
-                pass
-        # メインキャンバス（GSI タイル等）を毎回 refresh するとタイル再取得で
-        # 重くなるため、並べ替え中に触るのは preview のみ。メイン側の反映は
-        # QGIS のレイヤーツリー→キャンバス連携に任せる。
-        _canvases = [_c for _c in (
-            getattr(self, "preview_canvas", None),
-        ) if _c is not None]
-        for _c in _canvases:
-            try:
-                _c.freeze(True)
-            except Exception:  # nosec B110
-                pass
-        try:
-            # QgsLayerTreeGroup.reorderGroupLayers() は削除済みノードを跨いで
-            # dereference する use-after-free があり Windows/Qt5 でクラッシュする
-            # （QGIS 3.30 で追加、master でも未修正）。ID で取り直しながら
-            # clone → removeChildNode → insertChildNode で並べ替える。
-            for _i, _lid in enumerate(desired_ids):
-                _n = group.findLayer(_lid)
-                if _n is None:
-                    continue
-                _was_checked = checked_by_id.get(_lid, _n.itemVisibilityChecked())
-                _clone = _n.clone()
-                group.removeChildNode(_n)
-                _pos = min(_i, len(group.children()))
-                group.insertChildNode(_pos, _clone)
-                _cn = group.findLayer(_lid)
-                if _cn is not None:
-                    _cn.setItemVisibilityChecked(_was_checked)
-                    _cn.setExpanded(False)
-        except Exception:  # nosec B110
-            pass
-        finally:
-            for _c in _canvases:
-                try:
-                    _c.freeze(False)
-                    _c.refresh()
-                except Exception:  # nosec B110
-                    pass
+        self._preview_debug_log(
+            "normalize_terrain_group_order.skip",
+            reason="skip_node_reorder_qgis4_windows",
+            current=current,
+            desired_ids=desired_ids,
+            canvas=self._preview_debug_canvas_state(),
+        )
+        return
 
     def _insert_terrain_layer_ordered(self, key, lyr):
         """_KEY_RANK に従いグループ内の正しい位置にレイヤを挿入する。
@@ -3509,6 +4000,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             if not hasattr(child, 'layerId'):
                 continue
             child_lid = child.layerId()
+            if child_lid in self._flow_buffer_layer_ids:
+                if self._KEY_RANK.get("flow", 0) > rank:
+                    insert_pos += 1
+                continue
             for k, lids in self._loaded_terrain_layers.items():
                 if child_lid in lids and self._KEY_RANK.get(k, 0) > rank:
                     insert_pos += 1
@@ -3532,6 +4027,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         "QPushButton:checked{background:#27ae60;color:white;"
         "border:1px solid #1e8449;border-radius:3px;}"
     )
+
     def _hide_key(self, key):
         """キーのレイヤをプロジェクトから削除し、ボタンをOFF状態にする。
         cycle state は -1 にリセットする（状態保存は呼び出し側が行う）。"""
@@ -3691,15 +4187,27 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         analysis_number = self.cmbAnalysisNumber.currentData()
         btn = self._btn(key)
         base_label = self._terrain_button_label(key)
+        current = self._terrain_cycle_state.get(key, -1)
+        self._preview_debug_log(
+            "cycle_terrain_layer.start",
+            key=key,
+            desired_state=desired_state,
+            analysis_number=analysis_number,
+            current=current,
+        )
 
         if not analysis_number:
             self.lblLoadStatus.setText("Select an analysis run")
             with QSignalBlocker(btn):
                 btn.setChecked(False)
+            self._preview_debug_log(
+                "cycle_terrain_layer.skip",
+                key=key,
+                reason="no_analysis_number",
+            )
             return False
 
         out_dir = self._terrain_output_dir()
-        current = self._terrain_cycle_state.get(key, -1)
         if key == "integrated":
             # 3状態サイクル: -1(Risk Off) → 0(Overall Risk) → 1(High Risk) → -1
             n = len(self._TERRAIN_PATTERNS[key])
@@ -3733,6 +4241,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.lblLoadStatus.setText("No file")
                 with QSignalBlocker(btn):
                     btn.setChecked(False)
+                self._preview_debug_log(
+                    "cycle_terrain_layer.skip",
+                    key=key,
+                    reason="no_file",
+                    patterns=patterns,
+                    out_dir=out_dir,
+                    analysis_number=analysis_number,
+                )
                 return False
             # 次の状態へ (-1=非表示, 0..N-1=ファイルインデックス)
             n = len(available)
@@ -3741,19 +4257,47 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 else current + 1 if current + 1 < n else -1
             )
 
+        self._preview_debug_log(
+            "cycle_terrain_layer.available",
+            key=key,
+            current=current,
+            next_state=next_state,
+            available=available,
+        )
         if next_state >= n or (next_state != -1 and not available):
             self.lblLoadStatus.setText("No file")
             with QSignalBlocker(btn):
                 btn.setChecked(current != -1)
+            self._preview_debug_log(
+                "cycle_terrain_layer.skip",
+                key=key,
+                reason="next_state_out_of_range",
+                current=current,
+                next_state=next_state,
+                available=available,
+            )
             return False
         self._terrain_cycle_state[key] = next_state
         base_label = self._terrain_button_label(key)   # 状態更新後のラベル
 
         # 現在表示中のレイヤを削除
         proj = QgsProject.instance()
-        for lid in self._loaded_terrain_layers.pop(key, []):
-            if proj.mapLayer(lid):
-                proj.removeMapLayer(lid)
+        old_ids = list(self._loaded_terrain_layers.get(key, []))
+        removed_ids = []
+        self._begin_terrain_project_update(f"cycle_terrain_layer.remove_old.{key}")
+        try:
+            for lid in self._loaded_terrain_layers.pop(key, []):
+                if proj.mapLayer(lid):
+                    proj.removeMapLayer(lid)
+                    removed_ids.append(lid)
+        finally:
+            self._end_terrain_project_update(f"cycle_terrain_layer.remove_old.{key}")
+        self._preview_debug_log(
+            "cycle_terrain_layer.after_remove_old",
+            key=key,
+            old_ids=old_ids,
+            removed_ids=removed_ids,
+        )
 
         if next_state == -1:
             # 非表示状態に戻る
@@ -3764,18 +4308,38 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.lblLoadStatus.setText("")
             # 流量 OFF 時はバッファ層も非表示（state は保持）
             if key == "flow":
-                for lid in self._flow_buffer_layer_ids:
-                    if proj.mapLayer(lid):
-                        proj.removeMapLayer(lid)
+                removed_buffer_ids = []
+                self._begin_terrain_project_update("cycle_terrain_layer.flow_off_remove_buffer")
+                try:
+                    for lid in self._flow_buffer_layer_ids:
+                        if proj.mapLayer(lid):
+                            proj.removeMapLayer(lid)
+                            removed_buffer_ids.append(lid)
+                finally:
+                    self._end_terrain_project_update("cycle_terrain_layer.flow_off_remove_buffer")
                 self._flow_buffer_layer_ids = []
                 from osgeo import gdal as _gdal
+                unlinked_paths = []
                 for mp in self._flow_buffer_mem_paths:
                     _gdal.Unlink(mp)
+                    unlinked_paths.append(mp)
                 self._flow_buffer_mem_paths = []
+                self._preview_debug_log(
+                    "cycle_terrain_layer.flow_off_clear_buffer",
+                    removed_buffer_ids=removed_buffer_ids,
+                    unlinked_paths=unlinked_paths,
+                )
             self._refresh_preview_canvas()
             # レイヤ削除後にメインキャンバスを明示的にリフレッシュ
             if self.iface is not None:
                 self.iface.mapCanvas().refresh()
+            self._preview_debug_log(
+                "cycle_terrain_layer.finish",
+                key=key,
+                next_state=next_state,
+                reason="off",
+                canvas=self._preview_debug_canvas_state(),
+            )
             return True
 
         # ファイルを読み込んで表示
@@ -3802,9 +4366,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             else:
                 self._apply_vector_style(lyr, base_name)
                 lyr.setOpacity(opacity)
-            proj.addMapLayer(lyr, False)
+            self._begin_terrain_project_update(f"cycle_terrain_layer.add.{key}")
+            try:
+                proj.addMapLayer(lyr, False)
+            finally:
+                self._end_terrain_project_update(f"cycle_terrain_layer.add.{key}")
             self._insert_terrain_layer_ordered(key, lyr)
             self._loaded_terrain_layers[key] = [lyr.id()]
+            self._preview_debug_log(
+                "cycle_terrain_layer.after_add_layer",
+                key=key,
+                next_state=next_state,
+                layer=self._preview_debug_layer_info(lyr),
+                loaded_ids=list(self._loaded_terrain_layers.get(key, [])),
+            )
             self._refresh_preview_canvas()
             # プレビュー表示域にレイヤが含まれない場合はレイヤ範囲へズーム（CRS変換あり）
             if self.preview_canvas is not None:
@@ -3819,6 +4394,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         else:
             self.lblLoadStatus.setText(f"Load error: {label}")
             self._terrain_cycle_state[key] = current  # 状態を戻す
+            self._preview_debug_log(
+                "cycle_terrain_layer.error",
+                key=key,
+                reason="layer_invalid",
+                label=label,
+                kind=kind,
+                path=path,
+            )
             return False
 
         with QSignalBlocker(btn):
@@ -3831,6 +4414,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # 常に最下位へ正しく挿入するため正規化不要。
         if key not in ("flow", "hillshade", "elev_relief"):
             self._normalize_terrain_group_order()
+        self._preview_debug_log(
+            "cycle_terrain_layer.finish",
+            key=key,
+            next_state=next_state,
+            layer_id=lyr.id(),
+            canvas=self._preview_debug_canvas_state(),
+        )
         return True
 
     def _toggle_terrain_layer(self, key, checked):
@@ -3924,6 +4514,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             # クリア
             _was_vs = (self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL)
             self._dem_path = ""
+            self._dem_actual_path = ""
+            self._cs_map_dem_path = ""
             self._terrain_loader = None
             self._vs_dem_codes = []
             self._partial_outside_warned = False
@@ -3945,6 +4537,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.btnBrowseDsm.setText("Browse" if not self._dsm_path else "Clear")
             self._reset_vs_export_state()
             self._update_vs_export_buttons()
+            self._update_cs_map_export_state()
             return
         initial_dir = ""
         dlg = DemBrowserDialog(self.preview_canvas, initial_dir=initial_dir, parent=self)
@@ -3982,6 +4575,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 # ローカルファイル（従来処理）
                 self._dem_path = path
                 self._dem_actual_path = path  # 実パスと一致
+                self._cs_map_dem_path = path
                 self.txtDemPath.setText(os.path.basename(path))
                 self.txtDemPath.setToolTip(path)
                 self.btnBrowseDsm.setEnabled(True)
@@ -3989,6 +4583,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     self._move_preview_to_dem_extent(path)
                 self._load_dem_info()
         self._update_vs_export_buttons()
+        self._update_cs_map_export_state()
 
     @staticmethod
     def _reproject_to_utm(src_path, centre_lon, centre_lat):
@@ -4013,7 +4608,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         except Exception:
             return src_path
 
-    def _load_gsi_dem(self, sentinel=None):
+    def _load_gsi_dem(self, sentinel=None, update_cs_map_source=True):
         """国土地理院タイルをキャンバス範囲で取得し GeoTIFF に保存後 DEMLoader で読み込む。
         sentinel で DEM1A/DEM5A/DEM10B を選択（省略時は _dem_path から判定）。
         """
@@ -4088,6 +4683,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self._dem_loading = False
             self.btnBrowseDem.setEnabled(True)
             self.btnBrowseDem.setText("Clear" if self._dem_path else "Browse")
+            self._update_cs_map_export_state()
 
         if getattr(gsi_loader, "_cancelled", False):
             self.lblDemInfo.setText("Cancelled")
@@ -4126,6 +4722,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         dem_loader.load(tif_path)
         self._terrain_loader = dem_loader
         self._dem_actual_path = tif_path  # 実ファイルパス（params.json 用）
+        if update_cs_map_source:
+            self._cs_map_dem_path = tif_path
         # _dem_path は sentinel のまま維持（GSI ソースを追跡するため）
         self._vs_dem_codes = []  # 非 VS ソース: コードなし
         self._partial_outside_warned = False
@@ -4134,7 +4732,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.lblDemInfo.setText(dem_loader.info_text())
         self._update_resample_indicator()
 
-    def _load_vs_lp_grid(self, auto_dsm=True):
+    def _load_vs_lp_grid(self, auto_dsm=True, update_cs_map_source=True):
         """Virtual Shizuoka LP/Grid タイルをキャンバス範囲で S3 取得し DEM としてロード。
         auto_dsm=True のとき、DEM 成功後に LP/Ground DSM を自動取得する（初回選択時）。
         解析時の再取得など DSM 不要の場合は auto_dsm=False を指定する。"""
@@ -4212,6 +4810,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             dem_loader.load(tif_path)
             self._terrain_loader = dem_loader
             self._dem_actual_path = tif_path
+            if update_cs_map_source:
+                self._cs_map_dem_path = tif_path
             self.txtDemPath.setToolTip(tif_path)
             self.lblDemInfo.setText(
                 f"{dem_loader.info_text()}  [{len(resolved)} tile(s), "
@@ -4241,6 +4841,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self._dem_loading = False
             self.btnBrowseDem.setEnabled(True)
             self.btnBrowseDem.setText("Clear" if self._dem_path else "Browse")
+            self._update_cs_map_export_state()
 
     def _load_vs_lp_ground(self, auto_mode=False):
         """Virtual Shizuoka LP タイルをキャンバス範囲で S3 取得し LAS→DSM 変換して DSM としてロード。
@@ -4597,6 +5198,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         cur = getattr(self, "_dem_actual_path", None)
         if cur:
             referenced.add(os.path.normpath(cur))
+        cur = getattr(self, "_cs_map_dem_path", None)
+        if cur:
+            referenced.add(os.path.normpath(cur))
 
         # dem/ と vs_lp_grid/ 内の未参照ファイルを削除
         for sub in ("dem", "vs_lp_grid"):
@@ -4790,6 +5394,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         if not path:
             self.lblDemInfo.setText("Not set")
             self.btnBrowseDem.setText("Browse")
+            self._update_cs_map_export_state()
             return
         try:
             from .terrain.dem_loader import DEMLoader
@@ -4803,6 +5408,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._partial_outside_warned = False
         self.btnBrowseDem.setText("Clear")
         self._update_resample_indicator()
+        self._update_cs_map_export_state()
 
     def _on_browse_dsm(self):
         if self._dsm_loading:
@@ -5009,6 +5615,46 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.btnOpenWodmi.setToolTip("Export first to enable")
             self.btnVsCancel.setEnabled(False)
             self.lblVsExportStatus.setText("—")
+
+    def _has_cs_map_dem(self):
+        cs_map_path = getattr(self, "_cs_map_dem_path", "")
+        if cs_map_path and os.path.exists(cs_map_path):
+            return True
+        loader = getattr(self, "_terrain_loader", None)
+        loader_path = getattr(loader, "path", "") if loader is not None else ""
+        return bool(loader is not None and loader_path and os.path.exists(loader_path))
+
+    def _update_cs_map_export_state(self):
+        has_dem = self._has_cs_map_dem()
+        busy = bool(getattr(self, "_cs_map_exporting", False))
+        can_export = has_dem and not busy
+        self.grpCsMapExport.setEnabled(has_dem or busy)
+        self.btnCsMapExport.setEnabled(can_export)
+        self.chkCsMapAddTile.setEnabled(can_export)
+        if busy:
+            self.btnCsMapExport.setToolTip("CS MAP export is running")
+            return
+        if has_dem:
+            self.btnCsMapExport.setToolTip(
+                "Export a CS-style terrain visualization from the selected/fetched DEM"
+            )
+            if self.lblCsMapExportStatus.text() == "Load DEM to enable export":
+                self.lblCsMapExportStatus.setText("")
+        else:
+            self.btnCsMapExport.setToolTip("Load DEM to enable CS MAP export")
+            self.lblCsMapExportStatus.setText("Load DEM to enable export")
+
+    def _show_cs_map_about(self, _link=""):
+        QtWidgets.QMessageBox.information(
+            self,
+            "About CS-style terrain visualization",
+            "CS topographic visualization was proposed by the Nagano Prefecture\n"
+            "Forestry Research Center.\n\n"
+            "This feature is an independent FOL implementation inspired by\n"
+            "that concept.\n\n"
+            "It does not use CSMapMaker code, configuration files,\n"
+            "color tables, or image tiles.",
+        )
 
     def _on_vs_export(self):
         """設定済みDTM/DSMを使い、LP/Ortho を S3 から取得して WODMI ZIP に書き出す。"""
@@ -5226,6 +5872,290 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._vs_export_dir = ""
         self._vs_wodmi_opened = True
         self._update_vs_export_buttons()
+
+    def _remove_layers_for_source_path(self, path):
+        """同じソースファイルを参照する既存レイヤーをプロジェクトから外す。"""
+        target = os.path.normcase(os.path.abspath(os.path.normpath(path)))
+        remove_ids = []
+        proj = QgsProject.instance()
+        for lid, layer in list(proj.mapLayers().items()):
+            try:
+                src = layer.source().split("|", 1)[0]
+                if src.lower().startswith("file:"):
+                    src = QUrl(src).toLocalFile() or src
+                src = os.path.normcase(os.path.abspath(os.path.normpath(src)))
+            except Exception:  # nosec B110
+                continue
+            if src == target:
+                remove_ids.append(lid)
+        if remove_ids:
+            proj.removeMapLayers(remove_ids)
+            QtWidgets.QApplication.processEvents()
+
+    def _prepare_dem_for_current_extent(self, status_prefix):
+        """現在のプレビュー範囲でDEMを取得/クリップし、必要なら解析解像度へ丸める。"""
+        _limit_ha = self.cmbAreaLimit.currentData()
+        if _limit_ha and _limit_ha > 0:
+            try:
+                import math as _math
+                _ext = self.preview_canvas.extent()
+                _crs = self.preview_canvas.mapSettings().destinationCrs()
+                _w, _h = _ext.width(), _ext.height()
+                if _crs.isValid() and _crs.isGeographic():
+                    _cy = (_ext.yMinimum() + _ext.yMaximum()) / 2.0
+                    _mx = 111320.0 * _math.cos(_math.radians(abs(_cy)))
+                    _area_ha = (_w * _mx) * (_h * 111320.0) / 1e4
+                else:
+                    _area_ha = _w * _h / 1e4
+                if _area_ha > _limit_ha:
+                    _reply = QtWidgets.QMessageBox.warning(
+                        self, "Area Warning",
+                        f"{status_prefix} area is {_area_ha:.0f} ha, "
+                        f"which exceeds the warning limit of {_limit_ha} ha.\n\nContinue?",
+                        QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel,
+                    )
+                    if _reply != QtWidgets.QMessageBox.StandardButton.Ok:
+                        return None
+            except Exception:  # nosec B110
+                pass
+
+        tile_sentinels = (
+            DemBrowserDialog.GSI_DEM1A_SENTINEL,
+            DemBrowserDialog.GSI_DEM5A_SENTINEL,
+            DemBrowserDialog.GSI_DEM10B_SENTINEL,
+            DemBrowserDialog.TERRARIUM_FINE_SENTINEL,
+            DemBrowserDialog.TERRARIUM_STANDARD_SENTINEL,
+            DemBrowserDialog.TERRARIUM_WIDE_SENTINEL,
+            DemBrowserDialog.VS_LP_GRID_SENTINEL,
+        )
+        dem_path_cur = getattr(self, "_dem_path", "")
+        if dem_path_cur in tile_sentinels:
+            self._terrain_loader = None
+            self.lblAnalysisStatus.setText("Fetching elevation tiles...")
+            QtWidgets.QApplication.processEvents()
+            if dem_path_cur == DemBrowserDialog.VS_LP_GRID_SENTINEL:
+                self._load_vs_lp_grid(auto_dsm=False, update_cs_map_source=False)
+            else:
+                self._load_gsi_dem(dem_path_cur, update_cs_map_source=False)
+
+        loader = getattr(self, "_terrain_loader", None)
+        if loader is None:
+            self._load_dem_info()
+            loader = getattr(self, "_terrain_loader", None)
+        if loader is None:
+            self.lblAnalysisStatus.setText("Specify a DEM file.")
+            return None
+
+        try:
+            ext = self.preview_canvas.extent()
+            canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
+            dem_crs = QgsCoordinateReferenceSystem()
+            dem_crs.createFromWkt(loader.crs_wkt)
+            if dem_crs.isValid() and canvas_crs.isValid() and canvas_crs != dem_crs:
+                xform = QgsCoordinateTransform(canvas_crs, dem_crs, QgsProject.instance())
+                ext = xform.transformBoundingBox(ext)
+            partial_outside = (
+                dem_path_cur not in tile_sentinels
+                and self._canvas_outside_loader(loader)
+            )
+            dem = loader.clip_to_extent(
+                ext.xMinimum(), ext.yMinimum(), ext.xMaximum(), ext.yMaximum()
+            )
+        except ValueError:
+            self.lblAnalysisStatus.setText("No DEM data in the export range. Adjust the view.")
+            return None
+        except Exception as exc:
+            self.lblAnalysisStatus.setText(f"DEM clip failed: {exc}")
+            return None
+
+        if partial_outside and not self._partial_outside_warned:
+            reply = QtWidgets.QMessageBox.question(
+                self, "Export Range",
+                "The export range extends beyond the DEM data.\n"
+                "Proceed with the available data only?",
+                QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QtWidgets.QMessageBox.StandardButton.Ok:
+                return None
+            self._partial_outside_warned = True
+
+        if dem.cell_size < _RESAMPLE_THRESHOLD:
+            self.lblAnalysisStatus.setText(
+                f"Resampling {dem.cell_size:.3f}m -> {_RESAMPLE_TARGET}m ..."
+            )
+            QtWidgets.QApplication.processEvents()
+            dem = _resample_dem(dem, _RESAMPLE_TARGET)
+        return dem
+
+    def _prepare_dem_for_cs_map_export(self):
+        """CS MAP用DEMを取得する。
+
+        通常解析とは範囲の考え方が異なる:
+        - ローカルDEMは設定ファイル全体を対象にする。
+        - VSLP/GSI/Terrariumなど取得型DEMは、現在保持している取得済みDEM全体を対象にする。
+        """
+        tile_sentinels = (
+            DemBrowserDialog.GSI_DEM1A_SENTINEL,
+            DemBrowserDialog.GSI_DEM5A_SENTINEL,
+            DemBrowserDialog.GSI_DEM10B_SENTINEL,
+            DemBrowserDialog.TERRARIUM_FINE_SENTINEL,
+            DemBrowserDialog.TERRARIUM_STANDARD_SENTINEL,
+            DemBrowserDialog.TERRARIUM_WIDE_SENTINEL,
+            DemBrowserDialog.VS_LP_GRID_SENTINEL,
+        )
+        dem_path_cur = getattr(self, "_dem_path", "")
+        cs_map_path = getattr(self, "_cs_map_dem_path", "")
+        loader = None
+
+        if cs_map_path and os.path.exists(cs_map_path):
+            try:
+                from .terrain.dem_loader import DEMLoader
+                loader = DEMLoader()
+                loader.load(cs_map_path)
+            except Exception as exc:
+                self.lblCsMapExportStatus.setText(f"CS MAP DEM read failed: {exc}")
+                return None
+
+        if loader is None:
+            loader = getattr(self, "_terrain_loader", None)
+
+        if loader is None and dem_path_cur and dem_path_cur not in tile_sentinels:
+            self._load_dem_info()
+            loader = getattr(self, "_terrain_loader", None)
+
+        if loader is None:
+            if dem_path_cur in tile_sentinels:
+                self.lblCsMapExportStatus.setText(
+                    "No fetched DEM is available. Load/fetch the DEM source first."
+                )
+            else:
+                self.lblCsMapExportStatus.setText("Specify a DEM file.")
+            return None
+
+        try:
+            if getattr(loader, "data", None) is None:
+                loader.read_data()
+        except Exception as exc:
+            self.lblCsMapExportStatus.setText(f"DEM read failed: {exc}")
+            return None
+
+        if getattr(loader, "data", None) is None:
+            self.lblCsMapExportStatus.setText("DEM has no raster data.")
+            return None
+
+        rows, cols = loader.data.shape
+        pixels = rows * cols
+        if pixels > 100_000_000:
+            reply = QtWidgets.QMessageBox.warning(
+                self,
+                "CS MAP Export",
+                "The selected DEM is very large.\n"
+                f"Size: {cols:,} x {rows:,} pixels\n\n"
+                "CS MAP Export uses the whole selected DEM and may require "
+                "substantial memory and time. Continue?",
+                QtWidgets.QMessageBox.StandardButton.Ok
+                | QtWidgets.QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QtWidgets.QMessageBox.StandardButton.Ok:
+                return None
+
+        if np.all(np.isnan(loader.data)):
+            self.lblCsMapExportStatus.setText("DEM has no valid elevation values.")
+            return None
+
+        if loader.cell_size < _RESAMPLE_THRESHOLD:
+            self.lblCsMapExportStatus.setText(
+                f"Resampling {loader.cell_size:.3f}m -> {_RESAMPLE_TARGET}m ..."
+            )
+            QtWidgets.QApplication.processEvents()
+            loader = _resample_dem(loader, _RESAMPLE_TARGET)
+        return loader
+
+    def _on_cs_map_export_clicked(self):
+        """設定済みDEM全体からCS MAPをGeoTIFF出力し、QGISレイヤーに追加する。"""
+        self._cs_map_exporting = True
+        self._update_cs_map_export_state()
+        self.lblCsMapExportStatus.setText("Preparing DEM...")
+        self.progressCsMapExport.setRange(0, 100)
+        self.progressCsMapExport.setValue(5)
+        self.progressCsMapExport.setVisible(True)
+        QtWidgets.QApplication.processEvents()
+        try:
+            dem = self._prepare_dem_for_cs_map_export()
+            if dem is None:
+                return
+
+            import importlib
+            from .terrain import cs_map as cm
+            from .terrain import result_writer as rw
+            from datetime import datetime
+
+            cm = importlib.reload(cm)
+            rw = importlib.reload(rw)
+
+            self.lblCsMapExportStatus.setText("Creating CS MAP...")
+            self.progressCsMapExport.setValue(45)
+            QtWidgets.QApplication.processEvents()
+            rgba = cm.compute_cs_map(dem.data, dem.cell_size)
+            rgb = rgba[:, :, :3]
+
+            export_dir = os.path.join(self._terrain_output_dir(), "cs_map")
+            name = "cs_map" if self.chkOverwrite.isChecked() else (
+                "cs_map_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+            )
+            out_path = os.path.join(export_dir, f"{name}.tif")
+            if self.chkOverwrite.isChecked():
+                self._remove_layers_for_source_path(out_path)
+            path = rw.save_rgba_raster(
+                rgb, dem.gt, dem.crs_wkt, export_dir, name, overwrite=True
+            )
+            if not os.path.exists(path) or os.path.getsize(path) <= 0:
+                raise RuntimeError(f"CS MAP file was not written: {path}")
+            self.progressCsMapExport.setValue(75)
+            QtWidgets.QApplication.processEvents()
+
+            layer_name = "CS MAP"
+            if not self.chkOverwrite.isChecked():
+                stamp = os.path.basename(path).removeprefix("cs_map_").removesuffix(".tif")
+                layer_name = f"CS MAP {stamp}"
+            lyr = QgsRasterLayer(path, layer_name)
+            if not lyr.isValid():
+                self.lblCsMapExportStatus.setText(
+                    f"CS MAP exported, but layer load failed: {path}"
+                )
+                return
+            self._apply_cs_map_style(lyr)
+            proj = QgsProject.instance()
+            proj.addMapLayer(lyr, False)
+            node = proj.layerTreeRoot().addLayer(lyr)
+            if node is not None:
+                node.setExpanded(False)
+            lyr.triggerRepaint()
+            lyr.emitStyleChanged()
+
+            if self.chkCsMapAddTile.isChecked():
+                self._refresh_layer_combos()
+                idx = self.cmbTileLayer.findData(lyr.id())
+                if idx >= 0:
+                    self.cmbTileLayer.setCurrentIndex(idx)
+                self.btnTileLayerVis.setChecked(True)
+                self._save_layer_settings_to_project()
+                self.apply_layer_display()
+                msg = "CS MAP exported and assigned to Tile Layer."
+            else:
+                msg = "CS MAP exported and added to QGIS layers."
+            self.progressCsMapExport.setValue(100)
+            self.lblCsMapExportStatus.setText(f"{msg} {path}")
+        except Exception as exc:
+            self.lblCsMapExportStatus.setText(f"CS MAP export error: {exc}")
+        finally:
+            _dsm = getattr(self, "_dsm_loader", None)
+            if _dsm is not None:
+                _dsm.data = None
+            self.progressCsMapExport.setVisible(False)
+            self.progressCsMapExport.setRange(0, 0)
+            self._cs_map_exporting = False
+            self._update_cs_map_export_state()
 
     def _on_export_clicked(self):
         """選択中の解析番号の全レイヤー（現在表示中かどうかを問わない）を、
@@ -5457,9 +6387,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.lblAnalysisStatus.setText("Fetching elevation tiles...")
             QtWidgets.QApplication.processEvents()
             if self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL:
-                self._load_vs_lp_grid(auto_dsm=False)
+                self._load_vs_lp_grid(auto_dsm=False, update_cs_map_source=False)
             else:
-                self._load_gsi_dem(self._dem_path)
+                self._load_gsi_dem(self._dem_path, update_cs_map_source=False)
 
         loader = getattr(self, "_terrain_loader", None)
         if loader is None:
@@ -6196,6 +7126,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         s.setValue("filter_state_flow",    self._filter_state.get("flow", "off"))
         s.setValue("filter_state_flow_tc", self._filter_state_tc)
         s.setValue("chk_overwrite",       self.chkOverwrite.isChecked())
+        s.setValue("chk_cs_map_add_tile", self.chkCsMapAddTile.isChecked())
         s.setValue("chk_stability",       self.chkStability.isChecked())
         s.setValue("chk_valley",          self.chkValley.isChecked())
         s.setValue("chk_flow",            self.chkFlow.isChecked())
@@ -6374,6 +7305,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.lblDemInfo.setText("Extent will be fetched at analysis time")
             else:
                 self._dem_path = path
+                self._dem_actual_path = path
+                self._cs_map_dem_path = path
                 self.txtDemPath.setText(os.path.basename(path))
                 self.txtDemPath.setToolTip(path)
                 self._load_dem_info()
@@ -6422,6 +7355,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self._filter_state_tc = _fv
         self._sync_flow_aux_controls()
         self.chkOverwrite.setChecked(    b("chk_overwrite",   True))
+        self.chkCsMapAddTile.setChecked(b("chk_cs_map_add_tile", True))
         self.chkStability.setChecked(    b("chk_stability",   True))
         self.chkValley.setChecked(       b("chk_valley",      True))
         self.chkFlow.setChecked(         b("chk_flow",        False))
@@ -6451,6 +7385,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.spinVelocityCoef.setValue(   f("spin_velocity_coef",     0.3))
 
         s.endGroup()
+        self._update_cs_map_export_state()
 
     def closeEvent(self, event):
         self._save_settings()

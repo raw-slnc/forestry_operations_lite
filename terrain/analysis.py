@@ -718,5 +718,3 @@ def cs_to_flow_coefficients(cs_grid,
     c_grid = (c_bare  + t * (c_forest - c_bare)).astype(np.float32)
     v_grid = (v_bare  + t * (v_forest - v_bare)).astype(np.float32)
     return c_grid, v_grid
-
-
