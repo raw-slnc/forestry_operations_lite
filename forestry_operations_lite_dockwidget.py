@@ -1521,26 +1521,29 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         cs_export_layout = QtWidgets.QVBoxLayout(self.grpCsMapExport)
         cs_export_layout.setContentsMargins(8, 4, 8, 6)
         cs_export_layout.setSpacing(4)
-        cs_row = QtWidgets.QHBoxLayout()
-        cs_row.setSpacing(6)
         self.btnCsMapExport = QtWidgets.QPushButton("Run Export")
         self.btnCsMapExport.setToolTip("Load DEM to enable CS MAP export")
-        self.chkCsMapAddTile = QtWidgets.QCheckBox("Add Tile Layer")
+        cs_export_layout.addWidget(self.btnCsMapExport)
+        cs_opt_row = QtWidgets.QHBoxLayout()
+        cs_opt_row.setSpacing(6)
+        self.chkCsMapAddTile = QtWidgets.QCheckBox("Set As Layer")
         self.chkCsMapAddTile.setChecked(True)
         self.chkCsMapAddTile.setToolTip(
-            "Add the exported CS MAP to QGIS and select it in Layer Settings > Tile Layer"
+            "Replace the current Layer Settings > Tile Layer selection with "
+            "this export and show it immediately. The export is added to "
+            "QGIS either way; this only controls the Tile Layer slot."
         )
-        self.btnCsMapExport.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
+        self.chkCsMapOverwriteSameLoc = QtWidgets.QCheckBox("Overwrite Same Location")
+        self.chkCsMapOverwriteSameLoc.setChecked(True)
+        self.chkCsMapOverwriteSameLoc.setToolTip(
+            "Re-exporting the same area/extent replaces the previous CS MAP "
+            "file for that location. Unchecked, each re-export of that same "
+            "location is kept as a separate file instead. Exports covering "
+            "a different area are never affected either way."
         )
-        self.chkCsMapAddTile.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-        cs_row.addWidget(self.btnCsMapExport, 4)
-        cs_row.addWidget(self.chkCsMapAddTile, 1)
-        cs_export_layout.addLayout(cs_row)
+        cs_opt_row.addWidget(self.chkCsMapAddTile)
+        cs_opt_row.addWidget(self.chkCsMapOverwriteSameLoc)
+        cs_export_layout.addLayout(cs_opt_row)
         self.progressCsMapExport = QtWidgets.QProgressBar()
         self.progressCsMapExport.setRange(0, 0)
         self.progressCsMapExport.setVisible(False)
@@ -5643,9 +5646,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         has_dem = self._has_cs_map_dem()
         busy = bool(getattr(self, "_cs_map_exporting", False))
         can_export = has_dem and not busy
-        self.grpCsMapExport.setEnabled(has_dem or busy)
+        # grpCsMapExport 自体は無効化しない: グループを無効化すると
+        # lblCsMapAbout の「about」リンクまで操作不能になり、DEM未読込時に
+        # 説明を読めなくなる。DEMを要する個別コントロールだけを無効化する。
         self.btnCsMapExport.setEnabled(can_export)
         self.chkCsMapAddTile.setEnabled(can_export)
+        self.chkCsMapOverwriteSameLoc.setEnabled(can_export)
         if busy:
             self.btnCsMapExport.setToolTip("CS MAP export is running")
             return
@@ -5666,9 +5672,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             "CS topographic visualization was proposed by the Nagano Prefecture\n"
             "Forestry Research Center.\n\n"
             "This feature is an independent FOL implementation inspired by\n"
-            "that concept.\n\n"
-            "It does not use CSMapMaker code, configuration files,\n"
-            "color tables, or image tiles.",
+            "that concept.",
         )
 
     def _on_vs_export(self):
@@ -6086,8 +6090,101 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             loader = _resample_dem(loader, _RESAMPLE_TARGET)
         return loader
 
+    @staticmethod
+    def _cs_map_center_and_area(dem):
+        """DEM範囲の中心座標(WGS84, 丸めなし)と面積(ha)を返す。"""
+        rows, cols = dem.data.shape
+        xmin = dem.gt[0]
+        xmax = dem.gt[0] + dem.gt[1] * cols
+        ymax = dem.gt[3]
+        ymin = dem.gt[3] + dem.gt[5] * rows
+        cx, cy = (xmin + xmax) / 2.0, (ymin + ymax) / 2.0
+
+        lon, lat = cx, cy
+        try:
+            src_crs = QgsCoordinateReferenceSystem()
+            src_crs.createFromWkt(dem.crs_wkt)
+            wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+            if src_crs.isValid() and src_crs != wgs84:
+                xf = QgsCoordinateTransform(src_crs, wgs84, QgsProject.instance())
+                pt = xf.transform(QgsPointXY(cx, cy))
+                lon, lat = pt.x(), pt.y()
+        except Exception:  # nosec B110
+            pass
+
+        area_ha = rows * cols * (dem.cell_size ** 2) / 10000.0
+        return lat, lon, area_ha
+
+    def _cs_map_location_key(self, lat, lon, area_ha):
+        """中心座標(WGS84)と面積(ha)を丸めてハッシュ化した識別子(8桁16進)を返す。
+        同じ場所への再エクスポートは同じキーになり、別の場所とは衝突しない。"""
+        lat_r = round(lat / 0.0005) * 0.0005
+        lon_r = round(lon / 0.0005) * 0.0005
+        area_r = self._round_sig(area_ha, 2)
+        key = f"{lat_r:.4f}_{lon_r:.4f}_{area_r:g}"
+        import hashlib
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+
+    @staticmethod
+    def _round_sig(value, sig=2):
+        """有効数字sig桁に丸める（0以下はそのまま0.0を返す）。"""
+        if value <= 0:
+            return 0.0
+        from math import floor, log10
+        d = sig - int(floor(log10(abs(value)))) - 1
+        return round(value, max(d, 0))
+
+    @staticmethod
+    def _plugin_version():
+        import configparser
+        cfg = configparser.ConfigParser()
+        cfg.read(os.path.join(os.path.dirname(__file__), "metadata.txt"))
+        return cfg.get("general", "version", fallback="")
+
+    def _write_cs_map_metadata(self, path, dem, lat, lon, area_ha):
+        """成果物としてのCS MAP GeoTIFFに来歴・データ品質・帰属のメタデータを埋め込む。
+        失敗してもラスタ本体は既に書き出し済みのため、ここでは無視して続行する。"""
+        try:
+            from osgeo import gdal
+            from datetime import datetime
+
+            source_path = (getattr(self, "_cs_map_dem_path", "")
+                            or getattr(self, "_dem_path", "") or "")
+            tags = {
+                "GENERATED_AT": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "PLUGIN": f"Forestry Operations Lite {self._plugin_version()}",
+                "DEM_SOURCE_PATH": source_path,
+                "DEM_CELL_SIZE_M": f"{dem.cell_size:.2f}",
+                "CENTER_LAT": f"{lat:.6f}",
+                "CENTER_LON": f"{lon:.6f}",
+                "AREA_HA": f"{area_ha:.2f}",
+                "DATA_NOTE": (
+                    "Assumes a LiDAR-grade DEM. Photogrammetric (e.g. WebODM) DTM "
+                    "has low ground-surface accuracy, especially under canopy; "
+                    "prefer open-terrain or leaf-off captures."
+                ),
+                "METHOD_ATTRIBUTION": (
+                    "CS-style terrain visualization method proposed by Nagano "
+                    "Prefecture Forestry Research Center."
+                ),
+                "LICENSE_NOTE": (
+                    "Licensing and attribution requirements of this output "
+                    "depend on the input DEM source."
+                ),
+            }
+            ds = gdal.Open(path, gdal.GA_Update)
+            if ds is not None:
+                for key, value in tags.items():
+                    ds.SetMetadataItem(key, value)
+                ds.FlushCache()
+            ds = None
+        except Exception:  # nosec B110
+            pass
+
     def _on_cs_map_export_clicked(self):
-        """設定済みDEM全体からCS MAPをGeoTIFF出力し、QGISレイヤーに追加する。"""
+        """設定済みDEM全体からCS MAPをGeoTIFF出力し、QGISレイヤーに追加する。
+        出力ファイル名は中心座標・面積から求めた識別子で決まるため、同じ場所を
+        再エクスポートしても別の場所のCS MAPを巻き込んで上書きすることはない。"""
         self._cs_map_exporting = True
         self._update_cs_map_export_state()
         self.lblCsMapExportStatus.setText("Preparing DEM...")
@@ -6103,7 +6200,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             import importlib
             from .terrain import cs_map as cm
             from .terrain import result_writer as rw
-            from datetime import datetime
 
             cm = importlib.reload(cm)
             rw = importlib.reload(rw)
@@ -6114,25 +6210,38 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             rgba = cm.compute_cs_map(dem.data, dem.cell_size)
 
             export_dir = os.path.join(self._terrain_output_dir(), "cs_map")
-            name = "cs_map" if self.chkOverwrite.isChecked() else (
-                "cs_map_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-            )
+            os.makedirs(export_dir, exist_ok=True)
+            lat, lon, area_ha = self._cs_map_center_and_area(dem)
+            loc_hash = self._cs_map_location_key(lat, lon, area_ha)
+            base_name = f"cs_map_{loc_hash}"
+            base_path = os.path.join(export_dir, f"{base_name}.tif")
+
+            replacing = False
+            if os.path.exists(base_path):
+                if self.chkCsMapOverwriteSameLoc.isChecked():
+                    name = base_name
+                    replacing = True
+                else:
+                    n = 1
+                    while os.path.exists(os.path.join(export_dir, f"{base_name}+{n}.tif")):
+                        n += 1
+                    name = f"{base_name}+{n}"
+            else:
+                name = base_name
+
             out_path = os.path.join(export_dir, f"{name}.tif")
-            if self.chkOverwrite.isChecked():
+            if replacing:
                 self._remove_layers_for_source_path(out_path)
             path = rw.save_rgba_raster(
                 rgba, dem.gt, dem.crs_wkt, export_dir, name, overwrite=True
             )
             if not os.path.exists(path) or os.path.getsize(path) <= 0:
                 raise RuntimeError(f"CS MAP file was not written: {path}")
+            self._write_cs_map_metadata(path, dem, lat, lon, area_ha)
             self.progressCsMapExport.setValue(75)
             QtWidgets.QApplication.processEvents()
 
-            layer_name = "CS MAP"
-            if not self.chkOverwrite.isChecked():
-                stamp = os.path.basename(path).removeprefix("cs_map_").removesuffix(".tif")
-                layer_name = f"CS MAP {stamp}"
-            lyr = QgsRasterLayer(path, layer_name)
+            lyr = QgsRasterLayer(path, os.path.basename(path))
             if not lyr.isValid():
                 self.lblCsMapExportStatus.setText(
                     f"CS MAP exported, but layer load failed: {path}"
@@ -6155,9 +6264,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.btnTileLayerVis.setChecked(True)
                 self._save_layer_settings_to_project()
                 self.apply_layer_display()
-                msg = "CS MAP exported and assigned to Tile Layer."
+                msg = "CS MAP exported and set as Tile Layer."
             else:
                 msg = "CS MAP exported and added to QGIS layers."
+            if replacing:
+                msg = "Existing CS MAP for this location was replaced. " + msg
             self.progressCsMapExport.setValue(100)
             self.lblCsMapExportStatus.setText(f"{msg} {path}")
         except Exception as exc:
@@ -7141,6 +7252,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         s.setValue("filter_state_flow_tc", self._filter_state_tc)
         s.setValue("chk_overwrite",       self.chkOverwrite.isChecked())
         s.setValue("chk_cs_map_add_tile", self.chkCsMapAddTile.isChecked())
+        s.setValue("chk_cs_map_overwrite_same_loc", self.chkCsMapOverwriteSameLoc.isChecked())
         s.setValue("chk_stability",       self.chkStability.isChecked())
         s.setValue("chk_valley",          self.chkValley.isChecked())
         s.setValue("chk_flow",            self.chkFlow.isChecked())
@@ -7370,6 +7482,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._sync_flow_aux_controls()
         self.chkOverwrite.setChecked(    b("chk_overwrite",   True))
         self.chkCsMapAddTile.setChecked(b("chk_cs_map_add_tile", True))
+        self.chkCsMapOverwriteSameLoc.setChecked(b("chk_cs_map_overwrite_same_loc", True))
         self.chkStability.setChecked(    b("chk_stability",   True))
         self.chkValley.setChecked(       b("chk_valley",      True))
         self.chkFlow.setChecked(         b("chk_flow",        False))

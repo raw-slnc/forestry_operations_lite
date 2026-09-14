@@ -24,11 +24,11 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 
 ## CS MAP Export
 
-Use **Run Export** under **Terrain Data > CS Map Export** to create a CS-style terrain map from the selected DEM. Local DEM files are exported as a whole raster; fetched sources such as VS LP/Grid, GSI DEM, and Terrarium use the currently fetched DEM raster. When **Add Tile Layer** is checked, the exported raster is added to QGIS and selected directly in **Layer Settings > Tile Layer** so it appears in the preview as a base terrain layer.
+Use **Run Export** under **Terrain Data > CS Map Export** to create a CS-style terrain map from the selected DEM. Local DEM files are exported as a whole raster; fetched sources such as VS LP/Grid, GSI DEM, and Terrarium use the currently fetched DEM raster. The output file name is derived from the exported area's center coordinate and size, so exports of different areas never collide or overwrite one another. When **Overwrite Same Location** is checked (default), re-exporting the same area replaces the previous file for that location; unchecked, each re-export of that same area is kept as a separate file instead. The export is always added to QGIS; when **Set As Layer** is checked, it is also set as the current **Layer Settings > Tile Layer** selection so it appears in the preview as a base terrain layer.
 
 > **Note:** The color balance is tuned for Forestry Operations Lite so analysis layers such as flow, wetness, and terrain features remain easy to interpret.
 
-![CS-style terrain visualization with flow estimation overlay](cs_style_map_example.jpg)
+![CS-style terrain visualization with Valley Terrain and Flow Estimation overlaid](cs_style_map_example.jpg)
 
 The CS立体図 method was proposed by Nagano Prefecture Forestry Research Center. The method is described as open, but exported maps also depend on the license and attribution requirements of the input DEM.
 
@@ -233,11 +233,11 @@ https://paypal.me/rawslnc
 
 ## CS MAP Export
 
-**Terrain Data > CS Map Export** の **Run Export** で、選択中のDEMからCS系の地形表現ラスタを作成します。ローカルDEMファイルはラスタ全体、VS LP/Grid・GSI DEM・Terrarium などの取得型ソースは現在取得済みのDEMラスタ全体を対象にします。**Add Tile Layer** をオンにすると、出力したラスタをQGISへ追加し、**Layer Settings > Tile Layer** に直接設定します。
+**Terrain Data > CS Map Export** の **Run Export** で、選択中のDEMからCS系の地形表現ラスタを作成します。ローカルDEMファイルはラスタ全体、VS LP/Grid・GSI DEM・Terrarium などの取得型ソースは現在取得済みのDEMラスタ全体を対象にします。出力ファイル名は書き出し範囲の中心座標と面積から決まるため、別の範囲を書き出しても互いに上書きされることはありません。**Overwrite Same Location**（既定でオン）がオンの場合、同じ範囲を出し直すと該当ファイルを上書きします。オフの場合は同じ範囲の再出力も別ファイルとして残ります。出力は常にQGISへ追加され、**Set As Layer** をオンにすると **Layer Settings > Tile Layer** にも直接設定します。
 
 > **注意:** 本プラグインでは、流量・湿潤・地形特徴などの解析データを判断しやすいよう、CS系地形表現の色味を調整しています。
 
-![CS系地形表現に流量解析を重ねた表示例](cs_style_map_example.jpg)
+![CS系地形表現にValley TerrainとFlow Estimationを重ねた表示例](cs_style_map_example.jpg)
 
 CS立体図は長野県林業総合センターが考案した地形表現図法です。図法自体はオープンと説明されていますが、出力した地図の利用条件は入力DEMのライセンス・出典表示条件にも従います。
 

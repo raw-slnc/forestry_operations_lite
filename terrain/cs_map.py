@@ -1,8 +1,7 @@
 """CS MAP export raster synthesis.
 
-This module implements an original CS-style terrain visualization for FOL.
-It uses the plugin's DEM-derived slope and curvature arrays, and does not
-reuse CSMapMaker code, layer files, or bundled assets.
+This module implements an original CS-style terrain visualization for FOL,
+using the plugin's DEM-derived slope and curvature arrays.
 """
 import numpy as np
 
