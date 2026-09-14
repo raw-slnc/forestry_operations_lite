@@ -6141,6 +6141,31 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         cfg.read(os.path.join(os.path.dirname(__file__), "metadata.txt"))
         return cfg.get("general", "version", fallback="")
 
+    def _cs_map_dem_source_label(self):
+        """DEMソースの人間可読な識別子を返す。
+        取得型ソース（GSI/Terrarium/Virtual Shizuoka）は種別・タイルコードなど、
+        プラグインが把握している確実な情報のみを使う。ローカル指定ファイルは
+        中身の出所・メタデータ形式を保証できないため、個人情報を含まない
+        ファイル名のみ（ディレクトリ・ユーザー名は含めない）とする。"""
+        _S = DemBrowserDialog
+        dem_path_cur = getattr(self, "_dem_path", "")
+        fixed_labels = {
+            _S.GSI_DEM1A_SENTINEL: "GSI DEM1A (1m), source: cyberjapandata.gsi.go.jp",
+            _S.GSI_DEM5A_SENTINEL: "GSI DEM5A (5m), source: cyberjapandata.gsi.go.jp",
+            _S.GSI_DEM10B_SENTINEL: "GSI DEM10B (10m), source: cyberjapandata.gsi.go.jp",
+            _S.TERRARIUM_FINE_SENTINEL: "AWS Terrarium elevation tiles (~2m)",
+            _S.TERRARIUM_STANDARD_SENTINEL: "AWS Terrarium elevation tiles (~5m)",
+            _S.TERRARIUM_WIDE_SENTINEL: "AWS Terrarium elevation tiles (~10m)",
+        }
+        if dem_path_cur in fixed_labels:
+            return fixed_labels[dem_path_cur]
+        if dem_path_cur == _S.VS_LP_GRID_SENTINEL:
+            codes = getattr(self, "_vs_dem_codes", [])
+            tiles = ", ".join(codes) if codes else "unknown tile(s)"
+            return f"Virtual Shizuoka LP/Grid (0.5m); tiles: {tiles}"
+        basename = os.path.basename(dem_path_cur) if dem_path_cur else ""
+        return f"Local file: {basename}" if basename else "Local file (unknown)"
+
     def _write_cs_map_metadata(self, path, dem, lat, lon, area_ha):
         """成果物としてのCS MAP GeoTIFFに来歴・データ品質・帰属のメタデータを埋め込む。
         失敗してもラスタ本体は既に書き出し済みのため、ここでは無視して続行する。"""
@@ -6148,12 +6173,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             from osgeo import gdal
             from datetime import datetime
 
-            source_path = (getattr(self, "_cs_map_dem_path", "")
-                            or getattr(self, "_dem_path", "") or "")
             tags = {
                 "GENERATED_AT": datetime.now().astimezone().isoformat(timespec="seconds"),
                 "PLUGIN": f"Forestry Operations Lite {self._plugin_version()}",
-                "DEM_SOURCE_PATH": source_path,
+                "DEM_SOURCE": self._cs_map_dem_source_label(),
                 "DEM_CELL_SIZE_M": f"{dem.cell_size:.2f}",
                 "CENTER_LAT": f"{lat:.6f}",
                 "CENTER_LON": f"{lon:.6f}",
