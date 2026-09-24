@@ -267,9 +267,16 @@ def _set_las_epsg(las_path: str, epsg: int):
 
 # ── ダウンロード ──────────────────────────────────────────────────────────────
 
-def _download(url: str, dest: str):
+def _download(url: str, dest: str, cancel_cb=None):
+    """cancel_cb を渡すと、チャンク（65536バイト）単位でキャンセルを確認できる。
+    これが無いと大きなZIP取得中はQtのイベントループが回らず、Cancelボタンの
+    クリック自体がダウンロード完了まで処理されない
+    （terrain/remote_zip.py と同じ理由・同じ粒度）。"""
+    from .terrain.remote_zip import Cancelled
     with urllib.request.urlopen(url, timeout=600) as r, open(dest, "wb") as f:  # nosec B310
         while True:
+            if cancel_cb and cancel_cb():
+                raise Cancelled("download cancelled")
             chunk = r.read(65536)
             if not chunk:
                 break
@@ -390,7 +397,7 @@ def _extract_tif(zip_path: str, out_dir: str) -> str:
     raise ValueError(f"No TIF or TXT found in {zip_path}")
 
 
-def download_grid_tif(code: str, year: int, out_dir: str, lp_type: str = "Grid") -> str:
+def download_grid_tif(code: str, year: int, out_dir: str, lp_type: str = "Grid", cancel_cb=None) -> str:
     """LP/{lp_type} ZIP をダウンロード→展開→GeoTIFF パスを返す。
     同タイルコードの TIF が既に out_dir に存在する場合は再利用する。"""
     # 既存 TIF キャッシュチェック
@@ -402,7 +409,7 @@ def download_grid_tif(code: str, year: int, out_dir: str, lp_type: str = "Grid")
     xx = code[4:6]
     url = f"{BUCKET_URL}/{year}/LP/{lp_type}/08/{folder}/{xx}/{code}.zip"
     zip_path = os.path.join(out_dir, f"{code}_{lp_type}.zip")
-    _download(url, zip_path)
+    _download(url, zip_path, cancel_cb=cancel_cb)
     tif_path = _extract_tif(zip_path, out_dir)
     _set_tif_epsg(tif_path, 6676)
     try:
@@ -427,7 +434,7 @@ def merge_tifs(tif_paths: list, out_path: str):
     result = None
 
 
-def download_las(code: str, year: int, out_dir: str, lp_type: str = "Ground") -> str:
+def download_las(code: str, year: int, out_dir: str, lp_type: str = "Ground", cancel_cb=None) -> str:
     """LP/{lp_type} ZIP をダウンロード→LAS ファイルパスを返す。
 
     lp_type:
@@ -446,7 +453,7 @@ def download_las(code: str, year: int, out_dir: str, lp_type: str = "Ground") ->
     xx = code[4:6]
     url = f"{BUCKET_URL}/{year}/LP/{lp_type}/08/{folder}/{xx}/{code}.zip"
     zip_path = os.path.join(out_dir, f"{code}_{lp_type.lower()}.zip")
-    _download(url, zip_path)
+    _download(url, zip_path, cancel_cb=cancel_cb)
     # ZIP 内の LAS ファイルを展開
     with zipfile.ZipFile(zip_path) as zf:
         for name in zf.namelist():

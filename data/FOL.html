@@ -151,6 +151,7 @@ missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin
   <li>VS LP/Grid DTM and other DEM tiles are cached in <code>dem/</code> and <code>vs_lp_grid/</code>, and are removed automatically once no saved analysis run references them as its DEM.</li>
 </ul>
 <div class="note">
+  The DEM browser only offers VS LP/Grid DTM / VS LP -&gt; DSM when the current Design Preview extent overlaps Shizuoka Prefecture. Pan/zoom the preview into Shizuoka first if these options are not listed.<br>
   Virtual Shizuoka data is provided under a dual license: CC BY 4.0 / ODbL.
 </div>
 
@@ -244,6 +245,17 @@ All parameters describe the properties of the "topsoil down to the hard layer".<
   <tr><td>1.5</td><td>Keep a safety margin (permanent roads, stream crossings, higher uncertainty)</td></tr>
   <tr><td>2.0+</td><td>Sites needing special care (houses / key structures downslope, heavy-rain scenario)</td></tr>
 </table>
+
+<h4>How to read this judgment</h4>
+<div class="note">
+The plugin looks at the stability of the mountainside <em>before</em> a forest road is built (the natural slope). "Caution" means that slope is already on the more failure-prone side — it is not a statement about what angle a forest road can or cannot be built on. Construction-guideline slope classes (e.g. Japan's 25°/35° bands) are a guide to earthwork volume and whether structures are needed once a road is built — a different question. Do not compare the two numbers directly. Planning a forest road also involves conditions the plugin does not look at: securing fill material, disposing of surplus soil, handling stumps and roots, drainage, and more.
+</div>
+<p>The "construction guideline" referenced above is Japan's forest-road construction standard (作設指針). If you are working under a different country's or region's standard, substitute your own local guideline for the same comparison.</p>
+<p><strong>Sources</strong><br>
+・Shizuoka Prefecture, Economy and Industry Department, Forest Improvement Division, "Guideline for the Construction of Forestry-Dedicated Roads and Forest Operation Roads" (March 2025)<br>
+　<a href="https://www.pref.shizuoka.jp/sangyoshigoto/ringyo/shinrinseibi/1071714.html" target="_blank" rel="noopener">Shizuoka Prefecture official site: "Construction of Forest Operation Roads"</a><br>
+・Forestry Agency of Japan, "Guideline for the Construction of Forest Operation Roads" (Notice 22-Rinsei-Sei-656, Nov 17, 2010; partially amended by Notice 4-Rinsei-Sei-923, Mar 31, 2023) and its commentary<br>
+　<a href="https://www.rinya.maff.go.jp/j/seibi/sagyoudo/itakukouhyou.html" target="_blank" rel="noopener">Forestry Agency: "Information on the Construction of Forest Operation Roads, etc."</a></p>
 
 <h3>Valley Terrain (TWI)</h3>
 <p>TWI (Topographic Wetness Index) = ln(A / tan(β)) identifies wet zones.<br>
@@ -538,6 +550,7 @@ Forestry Operations Lite.</p>
   <li>VS LP/Grid DTM やその他の DEM タイルは <code>dem/</code> と <code>vs_lp_grid/</code> にキャッシュされ、どの保存済み解析からも DEM として参照されなくなると自動的に削除されます。</li>
 </ul>
 <div class="note">
+  DEM ブラウザに VS LP/Grid DTM・VS LP -&gt; DSM が表示されるのは、今の Design Preview の範囲が静岡県と重なっている場合だけです。表示されない場合は、先にプレビューを静岡県内へズーム・パンしてください。<br>
   Virtual Shizuoka データは、CC BY 4.0 / ODbL のデュアルライセンスで提供されています。
 </div>
 
@@ -631,6 +644,17 @@ FS は傾斜角・内部摩擦角・粘着力・土壌深度・飽和率から�
   <tr><td>1.5</td><td>安全に余裕をみる（恒久林道・渡渉部・不確実性が高い）</td></tr>
   <tr><td>2.0〜</td><td>特に慎重を要する現場（人家・重要構造物が下流／豪雨想定）</td></tr>
 </table>
+
+<h4>この判定の見方</h4>
+<div class="note">
+プラグインが見ているのは、作業道を作る前の山林（自然斜面）の安定度です。「要注意」は、その斜面がもともと崩れやすい側にあるという意味で、作業道を作れる・作れない角度ではありません。作設指針の傾斜区分（25°・35°）は、作業道を作ったときの土工量や構造物の要否からみた目安で、見ている対象が異なります。数値を並べて比べないでください。作業道の計画では、盛土に使う土の確保、余った土の処理、根株の処理、排水など、プラグインでは見ない条件も検討します。
+</div>
+<p>ここでいう「作設指針」は日本の林業専用道・森林作業道の作設基準を指します。他国・他地域の基準で作業する場合は、それぞれの現地基準に読み替えて同様に比較してください。</p>
+<p><strong>出典資料</strong><br>
+・静岡県 経済産業部 森林整備課「林業専用道・森林作業道作設指針」（令和7年3月）<br>
+　<a href="https://www.pref.shizuoka.jp/sangyoshigoto/ringyo/shinrinseibi/1071714.html" target="_blank" rel="noopener">静岡県公式ホームページ「森林作業道の作設」</a><br>
+・林野庁「森林作業道作設指針」（平成22年11月17日付け22林整整第656号林野庁長官通知、令和5年3月31日付け4林整整第923号で一部改正）および「森林作業道作設指針の解説」<br>
+　<a href="https://www.rinya.maff.go.jp/j/seibi/sagyoudo/itakukouhyou.html" target="_blank" rel="noopener">林野庁「森林作業道等の作設に関する情報」</a></p>
 
 <h3>沢地形（TWI）</h3>
 <p>TWI（地形湿潤指数）= ln(A / tan(β)) で湿潤帯を識別します。<br>

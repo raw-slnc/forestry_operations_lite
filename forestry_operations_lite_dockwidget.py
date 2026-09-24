@@ -4,7 +4,7 @@ import shutil
 import numpy as np
 from qgis.PyQt import QtWidgets, uic
 from qgis.PyQt.QtCore import QEvent, QSettings, QSignalBlocker, Qt, QUrl, pyqtSignal
-from qgis.PyQt.QtGui import QDesktopServices
+from qgis.PyQt.QtGui import QDesktopServices, QIcon
 from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
@@ -448,6 +448,25 @@ class DemBrowserDialog(QtWidgets.QDialog):
     # VIRTUAL SHIZUOKA LP/Ground DSM 自動取得センチネル値（全年度・全エリア）
     VS_LP_GROUND_SENTINEL = "__VS_LP_GROUND__"
 
+    # 長野県 DEM 自動取得センチネル値
+    NAGANO_SABO_DEM_SENTINEL  = "__NAGANO_SABO_DEM__"
+    # 長野県 DSM（DEM+DCHM合成）を示すセンチネル値。DEM取得時に自動生成されるため
+    # DemBrowserDialogのdsmモード一覧には出さない（手動選択の対象ではない）。
+    NAGANO_SABO_DSM_SENTINEL = "__NAGANO_SABO_DSM__"
+    NAGANO_RINMU_DEM_SENTINEL = "__NAGANO_RINMU_DEM__"
+
+    # QSettingsに保存しないセンチネル値（VS Shizuoka・長野県 いずれもS3/HTTP Range取得で
+    # キャンバス範囲に紐づくセッション固有のソースのため）。GSI/Terrarium系は逆に、
+    # ラベル復元＋解析時再取得という特別扱いがあるため保存対象（_load_settingsの
+    # _tile_labels参照）。_save_settings/_load_settingsの両方で参照する。
+    SESSION_ONLY_SENTINELS = (
+        VS_LP_GRID_SENTINEL,
+        VS_LP_GROUND_SENTINEL,
+        NAGANO_SABO_DEM_SENTINEL,
+        NAGANO_SABO_DSM_SENTINEL,
+        NAGANO_RINMU_DEM_SENTINEL,
+    )
+
     # Copernicus GLO-30 センチネル値
     COPERNICUS_GLO30_SENTINEL = "__COPERNICUS_GLO30__"
 
@@ -529,6 +548,24 @@ class DemBrowserDialog(QtWidgets.QDialog):
          "📦  VIRTUAL SHIZUOKA 2025 — NW Shizuoka",
          "https://www.geospatial.jp/ckan/dataset/shizuoka-2025-pointcloud/resource/0abed3d9-1b89-4577-bba5-709953bfc611",
          "LAS point cloud / 0.5m DTM grid (CC BY 4.0)\nDownload by tile → use as local DEM"),
+    ]
+
+    # 長野県 DEM データソース（長野県、WGS84 bbox）
+    _NAGANO_BBOX_WGS84 = (137.30, 35.15, 138.90, 37.05)
+    _NAGANO_ITEMS = [
+        ("__NAGANO_SABO_DEM__",
+         "⛰️  長野県 砂防課 R3-4  0.5m DEM  (2021-2025, auto-fetch)",
+         "https://www.geospatial.jp/ckan/dataset/r3-4-50cmdem",
+         "長野県建設部砂防課 航空レーザ測量成果 0.5mメッシュDEM（令和3〜7年度計測）。\n"
+         "GeoTIFF, EPSG:6676, NoData=-9999。\n"
+         "市町村単位のzip配布（1タイル約3km×2.5km）からHTTP Rangeで部分取得。\n"
+         "同年度計測のDCHM（樹冠高）からDSMを自動生成（DEM選択時に自動実行）。"),
+        ("__NAGANO_RINMU_DEM__",
+         "🌲  長野県 林務部 0.5mメッシュDEM  (2013-2014, auto-fetch)",
+         "https://www.geospatial.jp/ckan/dataset/nagano-dem",
+         "長野県林務部 航空レーザ測量成果 0.5mメッシュDEM（2013〜2014年度計測）。\n"
+         "GeoTIFF, EPSG:6676, NoData=-9999。DSM相当データなし。\n"
+         "地域単位(12zip、県全域)のzip配布（1タイル約1km×0.75km）からHTTP Rangeで部分取得。"),
     ]
 
     # ── スキャン ─────────────────────────────────────────────────
@@ -692,6 +729,22 @@ class DemBrowserDialog(QtWidgets.QDialog):
                 _vs_section("── VIRTUAL SHIZUOKA DSM (Shizuoka) ──")
                 _vs_item("🌿  VS LP → DSM  0.5m  (Shizuoka, auto-fetch)", self.VS_LP_GROUND_SENTINEL)
 
+        # ── 長野県 DEM（長野県専用、DEMモードのみ。DSM提供が無いため dsm モードには出さない）──
+        if self._mode == "dem" and self._canvas_overlaps_nagano():
+            sec_nagano = QtWidgets.QListWidgetItem("── 長野県 DEM (Nagano, no DSM) ───────")
+            sec_nagano.setFlags(Qt.ItemFlag.NoItemFlags)
+            sec_nagano.setForeground(QColor("#7a4a1a"))
+            f_nagano = QFont(); f_nagano.setBold(True)
+            sec_nagano.setFont(f_nagano)
+            self._list.addItem(sec_nagano)
+            for sentinel, label, _url, _info in self._NAGANO_ITEMS:
+                item = QtWidgets.QListWidgetItem(label)
+                item.setData(Qt.ItemDataRole.UserRole, sentinel)
+                f = QFont(); f.setBold(True)
+                item.setFont(f)
+                item.setForeground(QColor("#7a4a1a"))
+                self._list.addItem(item)
+
         # ── WebODM Importer 管理データ（プロジェクトフォルダ内）──
         webodm_items = self._webodm_importer_dem_items(filter_on=filter_on)
         if webodm_items:
@@ -745,6 +798,15 @@ class DemBrowserDialog(QtWidgets.QDialog):
             self._btn_open_url.setVisible(False)
             self._selected_url = None
             return
+
+        # 長野県 DEM（選択可・DSM無し・自動取得ロジックは未実装）
+        for sentinel, _label, url, info_text in self._NAGANO_ITEMS:
+            if path == sentinel:
+                self._lbl_info.setText(info_text + f"\n配布元: {url}")
+                self._btn_ok.setEnabled(True)
+                self._btn_open_url.setVisible(False)
+                self._selected_url = None
+                return
 
         # GSI タイルソース
         for sentinel, _label, info_text in self._GSI_ITEMS:
@@ -923,6 +985,23 @@ class DemBrowserDialog(QtWidgets.QDialog):
             xform = QgsCoordinateTransform(canvas_crs, wgs84, QgsProject.instance())
             ext84 = xform.transformBoundingBox(self._canvas.extent())
             lon_min, lat_min, lon_max, lat_max = self._VS_BBOX_WGS84
+            return not (
+                ext84.xMaximum() < lon_min or ext84.xMinimum() > lon_max
+                or ext84.yMaximum() < lat_min or ext84.yMinimum() > lat_max
+            )
+        except Exception:
+            return True
+
+    def _canvas_overlaps_nagano(self):
+        """プレビューキャンバスの範囲が長野県DEMエリアと重なるか確認。"""
+        if self._canvas is None or self._canvas.extent().isEmpty():
+            return True  # 範囲不明の場合は表示する
+        try:
+            wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+            canvas_crs = self._canvas.mapSettings().destinationCrs()
+            xform = QgsCoordinateTransform(canvas_crs, wgs84, QgsProject.instance())
+            ext84 = xform.transformBoundingBox(self._canvas.extent())
+            lon_min, lat_min, lon_max, lat_max = self._NAGANO_BBOX_WGS84
             return not (
                 ext84.xMaximum() < lon_min or ext84.xMinimum() > lon_max
                 or ext84.yMaximum() < lat_min or ext84.yMinimum() > lat_max
@@ -1131,7 +1210,14 @@ class ForestryOperationsLiteWindow(QtWidgets.QMainWindow):
         self.content = content
         self.setCentralWidget(content)
         self.setWindowTitle(content.windowTitle())
-        content_min_width = content.minimumSizeHint().width()
+        # 未設定だとQGIS本体のアイコンがタイトルバー/タスクバーに出てしまうため、
+        # プラグイン自身のicon.pngを明示的に設定する（shinrinbo_code_converter の
+        # ShinrinboDialog と同じ方式）。
+        self.setWindowIcon(QIcon(os.path.join(os.path.dirname(__file__), "icon.png")))
+        content_min_width = max(
+            content.minimumWidth(),
+            content.minimumSizeHint().width(),
+        )
         startup_width = round(max(1200, content_min_width) * self._STARTUP_WIDTH_PADDING)
         startup_height = max(600, round(startup_width / self._STARTUP_ASPECT_RATIO))
         self.setMinimumSize(max(900, content_min_width), 600)
@@ -1630,6 +1716,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._vs_wodmi_opened = False
         self._vs_dem_codes = []   # VS LP/Grid 読込時のタイルコード（Ortho 範囲合わせ用）
         self._vs_dsm_codes = []   # VS LP/Ground 読込時のタイルコード（同上）
+        # Export for WebODM Importer は Virtual Shizuoka 専用（2026-09-24、長野対応は
+        # データの不整合・配布形式の複雑さから廃止しVS限定に戻した）。
+        self._EXPORTABLE_DEM_SENTINELS = (
+            DemBrowserDialog.VS_LP_GRID_SENTINEL,
+        )
 
         # ── VS Export グループ ──────────────────────────────────────────────
         self.grpVsExport = QtWidgets.QGroupBox("Export for WebODM Importer")
@@ -1645,17 +1736,32 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.btnOpenWodmi.setEnabled(False)
         self.lblVsExportStatus = QtWidgets.QLabel("—")
         self.lblVsExportStatus.setStyleSheet("color: #888; font-size: 8pt;")
+        self.lblVsExportStatus.setWordWrap(True)
         self.btnVsCancel = QtWidgets.QPushButton("Cancel")
         self.btnVsCancel.setEnabled(False)
         _vs_lay.addWidget(self.btnVsExport)
         _vs_lay.addWidget(self.btnOpenWodmi)
-        _vs_lay.addWidget(self.lblVsExportStatus, 1)
         _vs_lay.addWidget(self.btnVsCancel)
+        _vs_lay.addStretch(1)
         _vs_outer.addLayout(_vs_lay)
-        _lbl_vs_note = QtWidgets.QLabel("Virtual Shizuoka data only")
-        _lbl_vs_note.setWordWrap(True)
+        # ステータス表示はボタン列とは別行にして、長い進捗テキスト（Ortho取得中の
+        # タイルコード/市町村名/MB数等）でパネル幅を超えて横スクロールが発生する
+        # のを防ぐ（word-wrapで下方向に流す。省略すると長野タイル取得時の
+        # 進捗詳細が読めなくなるため、ここは省略でなく折り返しを選ぶ）。
+        _vs_outer.addWidget(self.lblVsExportStatus)
+        _note_lay = QtWidgets.QHBoxLayout()
+        _note_lay.setSpacing(4)
+        _lbl_vs_note = QtWidgets.QLabel("Available for auto-fetch DEM sources")
+        # word-wrapを切り、隣のリンクに押されて途中で折り返すのを防ぐ（一行のまま）。
+        _lbl_vs_note.setWordWrap(False)
         _lbl_vs_note.setStyleSheet("color:#888;font-size:8pt;")
-        _vs_outer.addWidget(_lbl_vs_note)
+        self.lnkVsExportSources = QtWidgets.QLabel('<a href="#">Supported Sources</a>')
+        self.lnkVsExportSources.setStyleSheet("font-size:8pt;")
+        self.lnkVsExportSources.setOpenExternalLinks(False)
+        _note_lay.addWidget(_lbl_vs_note)
+        _note_lay.addWidget(self.lnkVsExportSources)
+        _note_lay.addStretch(1)
+        _vs_outer.addLayout(_note_lay)
 
         # .ui 由来の旧テキストフィールドを非表示
         for _w in (self.lblTileUrl, self.txtTileUrl, self.btnLoadTerrain):
@@ -1865,7 +1971,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         ):
             dm_row2.addWidget(_b)
             if _fb2 is not None:
-                dm_row2.addWidget(_fb2)   # 流量推測ボタンと透過率の間
+                dm_row2.addWidget(_fb2)
             dm_row2.addWidget(_sp)
             if _fb is not None:
                 dm_row2.addWidget(_fb)
@@ -1914,7 +2020,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             grpDisplayMgmt.minimumSizeHint().width(),
             grpDisplayMgmt.sizeHint().width(),
         )
+        grpDisplayMgmt.setMinimumWidth(right_min_width)
         self.rightPane.setMinimumWidth(right_min_width)
+        # QSplitterは既定でchildrenCollapsible=Trueのため、ハンドルをドラッグ
+        # すると各ペインのminimumWidth()を無視して中身の最小幅より狭く圧縮できて
+        # しまう（Analysis Layer Display行のボタン同士が重なって見える原因）。
+        # falseにして、各ペインの最小幅を下回れないようにする。
+        self.mainSplitter.setChildrenCollapsible(False)
+        content_min_width = (
+            self.leftPane.minimumWidth()
+            + self.mainSplitter.handleWidth()
+            + right_min_width
+        )
+        self.mainSplitter.setMinimumWidth(content_min_width)
+        self.setMinimumWidth(content_min_width)
         self.mainSplitter.setStretchFactor(0, 1)
         self.mainSplitter.setStretchFactor(1, 1)
         self.mainSplitter.setSizes([480, right_min_width])
@@ -2278,6 +2397,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.btnBrowseDem.clicked.connect(self._on_browse_dem)
         self.btnBrowseDsm.clicked.connect(self._on_browse_dsm)
         self.btnVsExport.clicked.connect(self._on_vs_export)
+        self.lnkVsExportSources.linkActivated.connect(self._on_show_export_sources)
         self.btnOpenWodmi.clicked.connect(self._on_open_wodmi)
         self.btnVsCancel.clicked.connect(self._on_vs_cancel)
         self.btnRunAnalysis.clicked.connect(self._run_terrain_analysis)
@@ -2352,7 +2472,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._set_combo_data(self.cmbBackgroundLayer, bg_data)
         self._set_combo_data(self.cmbTileLayer, tile_data)
         self._set_combo_data(self.cmbGpkgLayer, gpkg_data)
-        self._restore_layer_combos_if_unset()
+        # ここでは保存済み設定への復元はしない（今のレイヤーツリーをそのまま反映する
+        # だけにする）。復元まで行うと、選択直後にRefreshを押した際、保存タイミング
+        # 次第で無関係な過去の保存値に戻ることがあり紛らわしい（ユーザー指摘）。
+        # プロジェクトを開いた直後の復元は _on_project_read 側で別途明示的に行う。
         if getattr(self, "_terrain_project_update_depth", 0) > 0:
             self._preview_debug_log(
                 "refresh_layer_combos.defer_apply",
@@ -3362,11 +3485,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             # 低値透過フィルタ適用（対象キーのみ）
             if base_name in {"twi", "flow_peak", "flow_mean", "tc"} and filter_mode in ("low", "mid"):
                 n = len(items)
+                # Wetland Terrain(twi)のみ、mid側は従来通りとしつつlow側の効きを
+                # 調整（ユーザー指示、2026-09-24）。flow系は従来値のまま。
+                mid_hidden_frac = 0.35 if base_name == "twi" else 0.5
                 if filter_mode == "low":
-                    # 中間ストップを上限の85%に固定（low は弱めのフィルタ）
-                    alphas = [0] + [int(255 * 0.85)] * (n - 2) + [255]
-                else:  # mid: 下半=0, 上半=線形
-                    mid = n // 2
+                    if base_name == "twi":
+                        # 平坦なプラトーではなく、低い値ほど強く減衰する滑らかな
+                        # 曲線（指数power>1で低域を線形より押し下げる）にする。
+                        power = 1.6
+                        alphas = [int(255 * ((i / (n - 1)) ** power)) for i in range(n)]
+                    else:
+                        # 中間ストップを上限の85%に固定（low は弱めのフィルタ）
+                        alphas = [0] + [int(255 * 0.85)] * (n - 2) + [255]
+                else:  # mid: 下側 mid_hidden_frac=0, 残りは線形
+                    mid = int(n * mid_hidden_frac)
                     upper = n - mid
                     alphas = ([0] * mid +
                               [int(255 * i / (upper - 1)) for i in range(upper)])
@@ -4531,6 +4663,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         if self._dem_path:
             # クリア
             _was_vs = (self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL)
+            _was_nagano_sabo = (self._dem_path == DemBrowserDialog.NAGANO_SABO_DEM_SENTINEL)
             self._dem_path = ""
             self._dem_actual_path = ""
             self._cs_map_dem_path = ""
@@ -4542,8 +4675,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.lblDemInfo.setText("Not set")
             self.btnBrowseDem.setText("Browse")
             self._update_resample_indicator()
-            if _was_vs:
-                # VS LP/Grid だった場合は DSM も連動クリア
+            if _was_vs or _was_nagano_sabo:
+                # VS LP/Grid・長野DEM(砂防課) だった場合は DSM も連動クリア
+                # （どちらもDEM取得に紐づいてDSMを自動生成しているため）
                 self._dsm_path = ""
                 self._dsm_loader = None
                 self._vs_dsm_codes = []
@@ -4581,6 +4715,27 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.btnBrowseDsm.setEnabled(False)
                 self.lblDsmInfo.setText("Auto: VS LP → DSM (fetching after DEM…)")
                 self._load_vs_lp_grid()  # auto_dsm=True (default)
+            elif path == DemBrowserDialog.NAGANO_SABO_DEM_SENTINEL:
+                # 長野県 砂防課 R3-4 DEM: 部分取得(HTTP Range)でタイルを取得する（nagano_sabo.py参照）。
+                # DSMはDCHM（樹冠高）をDEMに加算して自動生成する（nagano_dchm.py参照）ため
+                # btnBrowseDsmは無効化（VS LP/Gridと同様、手動ブラウズの対象ではない）。
+                self._dem_path = path
+                self.txtDemPath.setText("長野県 砂防課 R3-4 (0.5m)")
+                self.txtDemPath.setToolTip("Nagano DEM (砂防課) — auto-fetch via HTTP Range")
+                self.btnBrowseDem.setText("Clear")
+                self.btnBrowseDsm.setEnabled(False)
+                self.lblDsmInfo.setText("Auto: DEM+DCHM → DSM (fetching after DEM…)")
+                self._load_nagano_sabo_dem()  # auto_dsm=True (default)
+            elif path == DemBrowserDialog.NAGANO_RINMU_DEM_SENTINEL:
+                # 長野県 林務部 DEM: DSM/DCHM相当のデータが無いため btnBrowseDsm を無効化。
+                # 部分取得(HTTP Range)で実際にタイルを取得する（nagano_rinmu.py参照）。
+                self._dem_path = path
+                self.txtDemPath.setText("長野県 林務部 0.5mメッシュ")
+                self.txtDemPath.setToolTip("Nagano DEM (林務部) — auto-fetch via HTTP Range")
+                self.btnBrowseDem.setText("Clear")
+                self.btnBrowseDsm.setEnabled(False)
+                self.lblDsmInfo.setText("Not available (Nagano DEM has no DSM)")
+                self._load_nagano_rinmu_dem()
             elif path in _tile_labels:
                 display, tooltip = _tile_labels[path]
                 self._dem_path = path
@@ -4806,7 +4961,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.lblDemInfo.setText(f"Downloading {i + 1}/{len(resolved)}…")
                 QtWidgets.QApplication.processEvents()
                 try:
-                    tif_paths.append(download_grid_tif(code, year, out_dir))
+                    tif_paths.append(download_grid_tif(
+                        code, year, out_dir, cancel_cb=self._dem_cancel_check,
+                    ))
                 except Exception as e:
                     errors.append(f"{code}: {e}")
 
@@ -4861,6 +5018,399 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.btnBrowseDem.setText("Clear" if self._dem_path else "Browse")
             self._update_cs_map_export_state()
 
+    def _dem_cancel_check(self):
+        """DEM取得系のcancel_cbとして使う（VS LP/Grid・長野DEM/DCHM共通）。
+        processEvents()でUIイベントを処理してからキャンセルフラグを返す。
+        これが無いと、チャンク読み込みループの間Qtのイベントループが回らず、
+        Cancelボタンのクリック自体が処理されないままダウンロード完了まで
+        反応しなくなる。"""
+        QtWidgets.QApplication.processEvents()
+        return self._dem_load_cancel
+
+    def _load_nagano_sabo_dem(self, update_cs_map_source=True, auto_dsm=True, confirm=True):
+        """長野県砂防課 R3-4 0.5mメッシュDEMをキャンバス範囲で取得し DEM としてロード。
+        タイルは市町村単位のzipから HTTP Range で部分取得する（zip全体は落とさない）。
+        auto_dsm=True のとき、DEM取得後に DCHM（樹冠高）を同じタイル範囲で取得し
+        DSM = DEM + DCHM として自動生成する（DCHMが無いタイルはDEM値をそのまま使う）。
+        confirm=True のとき、範囲によって時間がかかる旨の確認ダイアログを出す
+        （解析実行時の再取得(confirm=False)では毎回は出さない）。"""
+        from .nagano_sabo import tiles_for_extent, download_tile_tif
+        from .vs_lp import merge_tifs
+        from .terrain.dem_loader import DEMLoader
+        from qgis.core import (QgsCoordinateReferenceSystem,
+                               QgsCoordinateTransform, QgsProject)
+        import datetime as _dt
+
+        if self.preview_canvas is None or self.preview_canvas.extent().isEmpty():
+            self.lblDemInfo.setText("⚠ No extent on preview canvas.")
+            return
+
+        canvas_ext = self.preview_canvas.extent()
+        canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
+        crs_6676 = QgsCoordinateReferenceSystem("EPSG:6676")
+        xform = QgsCoordinateTransform(canvas_crs, crs_6676, QgsProject.instance())
+        ext6 = xform.transformBoundingBox(canvas_ext)
+
+        codes = tiles_for_extent(
+            ext6.xMinimum(), ext6.yMinimum(),
+            ext6.xMaximum(), ext6.yMaximum(),
+        )
+        if not codes:
+            self.lblDemInfo.setText("⚠ No Nagano DEM tiles for this area.")
+            return
+
+        if confirm:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Nagano DEM Fetch",
+                f"This will fetch {len(codes)} tile(s) (~120MB each) over the network.\n"
+                "Depending on the area size, this may take a while.\n\n"
+                "Continue?",
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.Yes,
+            )
+            if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+                self.lblDemInfo.setText("Cancelled")
+                return
+
+        self._dem_loading = True
+        self._dem_load_cancel = False
+        self.btnBrowseDem.setText("Cancel")
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            out_dir = os.path.join(self._terrain_output_dir(), "nagano_sabo_dem")
+            os.makedirs(out_dir, exist_ok=True)
+
+            tif_paths = []
+            missing = []
+            for i, code in enumerate(codes):
+                if self._dem_load_cancel:
+                    self.lblDemInfo.setText("Cancelled")
+                    return
+
+                def _dem_progress(phase, city, detail, _i=i, _code=code):
+                    if phase == "checking":
+                        self.lblDemInfo.setText(
+                            f"Tile {_i + 1}/{len(codes)} ({_code}): checking {city}…"
+                        )
+                    else:
+                        self.lblDemInfo.setText(
+                            f"Tile {_i + 1}/{len(codes)} ({_code}): downloading "
+                            f"{detail / 1e6:.0f}MB from {city}…"
+                        )
+                    QtWidgets.QApplication.processEvents()
+
+                self.lblDemInfo.setText(f"Tile {i + 1}/{len(codes)} ({code}): locating…")
+                QtWidgets.QApplication.processEvents()
+                path = download_tile_tif(
+                    code, out_dir,
+                    cancel_cb=self._dem_cancel_check,
+                    progress_cb=_dem_progress,
+                )
+                if path:
+                    tif_paths.append(path)
+                else:
+                    missing.append(code)
+
+            if not tif_paths:
+                self.lblDemInfo.setText("⚠ No tiles could be fetched for this area.")
+                return
+
+            self.lblDemInfo.setText("Processing…")
+            QtWidgets.QApplication.processEvents()
+
+            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            if len(tif_paths) == 1:
+                tif_path = tif_paths[0]
+            else:
+                tif_path = os.path.join(out_dir, f"nagano_sabo_{ts}.tif")
+                merge_tifs(tif_paths, tif_path)
+
+            dem_loader = DEMLoader()
+            dem_loader.load(tif_path)
+            self._terrain_loader = dem_loader
+            self._dem_actual_path = tif_path
+            if update_cs_map_source:
+                self._cs_map_dem_path = tif_path
+            self.txtDemPath.setToolTip(tif_path)
+            info = f"{dem_loader.info_text()}  [{len(tif_paths)} tile(s)]"
+            if missing:
+                info += f"  ⚠ {len(missing)} tile(s) not found: {', '.join(missing[:5])}"
+            self.lblDemInfo.setText(info)
+            self._partial_outside_warned = False
+            self._update_resample_indicator()
+
+            # ── 自動 DSM（DCHM を DEM に加算）──────────────────────────
+            if auto_dsm and not self._dem_load_cancel:
+                self._dsm_path = DemBrowserDialog.NAGANO_SABO_DSM_SENTINEL
+                self.txtDsmPath.setText("Nagano DEM+DCHM → DSM")
+                self.txtDsmPath.setToolTip("DSM = DEM + DCHM（樹冠高、建物等含む）")
+                self.btnBrowseDsm.setText("")
+                self._compute_nagano_sabo_dsm(codes, tif_path)
+                if not getattr(self, "_dsm_loader", None):
+                    self._dsm_path = ""
+                    self.txtDsmPath.clear()
+                    self.txtDsmPath.setToolTip("")
+
+            self._update_vs_export_buttons()
+        finally:
+            self._dem_loading = False
+            self.btnBrowseDem.setEnabled(True)
+            self.btnBrowseDem.setText("Clear" if self._dem_path else "Browse")
+            self._update_cs_map_export_state()
+
+    def _compute_nagano_sabo_dsm(self, codes, dem_tif_path):
+        """DCHM（樹冠高）タイルを取得し、DEMに加算してDSMを生成する。
+        DEMと同じタイルコード群を使うため座標系は自動的に一致する。
+        DCHMが無いタイルはDEM値のまま（樹冠高0扱い）とする。"""
+        from .nagano_dchm import download_tile_tif as download_dchm_tile
+        from .vs_lp import merge_tifs
+        from .terrain.dem_loader import DEMLoader
+        from osgeo import gdal
+        import numpy as _np
+        import datetime as _dt
+
+        # ── DSM 作成確認ダイアログ（VS LP/Ground と同じ考え方）─────────────
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "DSM Creation",
+            f"This will fetch {len(codes)} DCHM tile(s) (~120MB each) over the network.\n"
+            "Basic analysis is possible without DSM (DEM only).\n\n"
+            "Do you want to continue DSM creation?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            self.lblDsmInfo.setText("Skipped — no DSM")
+            self._dsm_loader = None
+            return
+
+        self.lblDsmInfo.setText("Fetching DCHM tiles...")
+        QtWidgets.QApplication.processEvents()
+
+        dchm_out_dir = os.path.join(self._terrain_output_dir(), "nagano_dchm")
+        os.makedirs(dchm_out_dir, exist_ok=True)
+        dchm_paths = []
+        for i, code in enumerate(codes):
+            if self._dem_load_cancel:
+                self.lblDsmInfo.setText("Cancelled")
+                return
+
+            def _dchm_progress(phase, sheet, detail, _i=i, _code=code):
+                if phase == "checking":
+                    self.lblDsmInfo.setText(
+                        f"DCHM {_i + 1}/{len(codes)} ({_code}): checking sheet {sheet}…"
+                    )
+                else:
+                    self.lblDsmInfo.setText(
+                        f"DCHM {_i + 1}/{len(codes)} ({_code}): downloading "
+                        f"{detail / 1e6:.0f}MB from sheet {sheet}…"
+                    )
+                QtWidgets.QApplication.processEvents()
+
+            self.lblDsmInfo.setText(f"DCHM {i + 1}/{len(codes)} ({code}): locating…")
+            QtWidgets.QApplication.processEvents()
+            path = download_dchm_tile(
+                code, dchm_out_dir,
+                cancel_cb=self._dem_cancel_check,
+                progress_cb=_dchm_progress,
+            )
+            if path:
+                dchm_paths.append(path)
+
+        if not dchm_paths:
+            self.lblDsmInfo.setText("⚠ No DCHM tiles available for this area (no DSM).")
+            self._dsm_loader = None
+            return
+
+        self.lblDsmInfo.setText("Merging DCHM…")
+        QtWidgets.QApplication.processEvents()
+        ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        if len(dchm_paths) == 1:
+            dchm_merged = dchm_paths[0]
+        else:
+            dchm_merged = os.path.join(dchm_out_dir, f"dchm_{ts}.tif")
+            merge_tifs(dchm_paths, dchm_merged)
+
+        self.lblDsmInfo.setText("Computing DSM = DEM + DCHM…")
+        QtWidgets.QApplication.processEvents()
+        try:
+            dem_ds = gdal.Open(dem_tif_path)
+            dem_gt = dem_ds.GetGeoTransform()
+            dem_wkt = dem_ds.GetProjection()
+            w, h = dem_ds.RasterXSize, dem_ds.RasterYSize
+            dem_band = dem_ds.GetRasterBand(1)
+            dem_nodata = dem_band.GetNoDataValue()
+            dem_arr = dem_band.ReadAsArray().astype(_np.float64)
+            dem_ds = None
+
+            # DCHM を DEM と同じグリッド(範囲・解像度・CRS)にワープしてから加算
+            dchm_ds = gdal.Warp(
+                "", dchm_merged, format="MEM",
+                outputBounds=(dem_gt[0], dem_gt[3] + h * dem_gt[5], dem_gt[0] + w * dem_gt[1], dem_gt[3]),
+                width=w, height=h, dstSRS=dem_wkt,
+            )
+            dchm_band = dchm_ds.GetRasterBand(1)
+            dchm_nodata = dchm_band.GetNoDataValue()
+            dchm_arr = dchm_band.ReadAsArray().astype(_np.float64)
+            dchm_ds = None
+
+            if dchm_nodata is not None:
+                dchm_arr = _np.where(dchm_arr == dchm_nodata, 0.0, dchm_arr)
+            dchm_arr = _np.where(_np.isnan(dchm_arr), 0.0, dchm_arr)
+            dchm_arr = _np.where(dchm_arr < 0, 0.0, dchm_arr)  # 樹冠高の負値はノイズとして0扱い
+
+            dsm_arr = dem_arr + dchm_arr
+            if dem_nodata is not None:
+                dsm_arr = _np.where(dem_arr == dem_nodata, dem_nodata, dsm_arr)
+
+            dsm_out_dir = os.path.join(self._terrain_output_dir(), "nagano_dsm")
+            os.makedirs(dsm_out_dir, exist_ok=True)
+            dsm_path = os.path.join(dsm_out_dir, f"nagano_dsm_{ts}.tif")
+
+            driver = gdal.GetDriverByName("GTiff")
+            out_ds = driver.Create(dsm_path, w, h, 1, gdal.GDT_Float32,
+                                    options=["COMPRESS=LZW", "TILED=YES"])
+            out_ds.SetGeoTransform(dem_gt)
+            out_ds.SetProjection(dem_wkt)
+            out_band = out_ds.GetRasterBand(1)
+            if dem_nodata is not None:
+                out_band.SetNoDataValue(dem_nodata)
+            out_band.WriteArray(dsm_arr.astype(_np.float32))
+            out_band.FlushCache()
+            out_ds = None
+        except Exception as e:
+            self.lblDsmInfo.setText(f"⚠ DSM computation failed: {e}")
+            self._dsm_loader = None
+            return
+
+        dsm_loader = DEMLoader()
+        dsm_loader.load(dsm_path)
+        self._dsm_loader = dsm_loader
+        self.lblDsmInfo.setText(f"{dsm_loader.info_text()}  [DEM + DCHM, {len(dchm_paths)} DCHM tile(s)]")
+        self._update_flow_coef_state()
+
+    def _load_nagano_rinmu_dem(self, update_cs_map_source=True, confirm=True):
+        """長野県林務部 0.5mメッシュDEM(2013-2014)をキャンバス範囲で取得しDEMとしてロード。
+        市町村単位の索引が無いため、12地域zipを順にcentral directory確認しながら
+        タイルを探す（nagano_rinmu.py参照）。DSM/DCHM相当のデータは無い。
+        confirm=True のとき、範囲によって時間がかかる旨の確認ダイアログを出す
+        （解析実行時の再取得(confirm=False)では毎回は出さない）。"""
+        from .nagano_rinmu import tiles_for_extent, download_tile_tif
+        from .vs_lp import merge_tifs
+        from .terrain.dem_loader import DEMLoader
+        from qgis.core import (QgsCoordinateReferenceSystem,
+                               QgsCoordinateTransform, QgsProject)
+        import datetime as _dt
+
+        if self.preview_canvas is None or self.preview_canvas.extent().isEmpty():
+            self.lblDemInfo.setText("⚠ No extent on preview canvas.")
+            return
+
+        canvas_ext = self.preview_canvas.extent()
+        canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
+        crs_6676 = QgsCoordinateReferenceSystem("EPSG:6676")
+        xform = QgsCoordinateTransform(canvas_crs, crs_6676, QgsProject.instance())
+        ext6 = xform.transformBoundingBox(canvas_ext)
+
+        codes = tiles_for_extent(
+            ext6.xMinimum(), ext6.yMinimum(),
+            ext6.xMaximum(), ext6.yMaximum(),
+        )
+        if not codes:
+            self.lblDemInfo.setText("⚠ No Nagano DEM (林務部) tiles for this area.")
+            return
+
+        if confirm:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Nagano DEM (林務部) Fetch",
+                f"This will fetch {len(codes)} tile(s) (~12MB each) over the network.\n"
+                "Each tile may require checking up to 12 regional archives "
+                "(no per-tile index for this source).\n\n"
+                "Continue?",
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.Yes,
+            )
+            if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+                self.lblDemInfo.setText("Cancelled")
+                return
+
+        self._dem_loading = True
+        self._dem_load_cancel = False
+        self.btnBrowseDem.setText("Cancel")
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            out_dir = os.path.join(self._terrain_output_dir(), "nagano_rinmu_dem")
+            os.makedirs(out_dir, exist_ok=True)
+
+            tif_paths = []
+            missing = []
+            for i, code in enumerate(codes):
+                if self._dem_load_cancel:
+                    self.lblDemInfo.setText("Cancelled")
+                    return
+
+                def _rinmu_progress(phase, zip_label, detail, _i=i, _code=code):
+                    if phase == "checking":
+                        self.lblDemInfo.setText(
+                            f"Tile {_i + 1}/{len(codes)} ({_code}): checking {zip_label}…"
+                        )
+                    else:
+                        self.lblDemInfo.setText(
+                            f"Tile {_i + 1}/{len(codes)} ({_code}): downloading "
+                            f"{detail / 1e6:.0f}MB from {zip_label}…"
+                        )
+                    QtWidgets.QApplication.processEvents()
+
+                self.lblDemInfo.setText(f"Tile {i + 1}/{len(codes)} ({code}): locating…")
+                QtWidgets.QApplication.processEvents()
+                path = download_tile_tif(
+                    code, out_dir,
+                    cancel_cb=self._dem_cancel_check,
+                    progress_cb=_rinmu_progress,
+                )
+                if path:
+                    tif_paths.append(path)
+                else:
+                    missing.append(code)
+
+            if not tif_paths:
+                self.lblDemInfo.setText("⚠ No tiles could be fetched for this area.")
+                return
+
+            self.lblDemInfo.setText("Processing…")
+            QtWidgets.QApplication.processEvents()
+
+            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            if len(tif_paths) == 1:
+                tif_path = tif_paths[0]
+            else:
+                tif_path = os.path.join(out_dir, f"nagano_rinmu_{ts}.tif")
+                merge_tifs(tif_paths, tif_path)
+
+            dem_loader = DEMLoader()
+            dem_loader.load(tif_path)
+            self._terrain_loader = dem_loader
+            self._dem_actual_path = tif_path
+            if update_cs_map_source:
+                self._cs_map_dem_path = tif_path
+            self.txtDemPath.setToolTip(tif_path)
+            info = f"{dem_loader.info_text()}  [{len(tif_paths)} tile(s)]"
+            if missing:
+                info += f"  ⚠ {len(missing)} tile(s) not found: {', '.join(missing[:5])}"
+            self.lblDemInfo.setText(info)
+            self._partial_outside_warned = False
+            self._update_resample_indicator()
+            self._update_vs_export_buttons()
+        finally:
+            self._dem_loading = False
+            self.btnBrowseDem.setEnabled(True)
+            self.btnBrowseDem.setText("Clear" if self._dem_path else "Browse")
+            self._update_cs_map_export_state()
+
     def _load_vs_lp_ground(self, auto_mode=False):
         """Virtual Shizuoka LP タイルをキャンバス範囲で S3 取得し LAS→DSM 変換して DSM としてロード。
 
@@ -4873,6 +5423,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         from .vs_lp import (resolve_years, tiles_for_extent,
                             download_las, las_to_dsm, merge_tifs)
         from .terrain.dem_loader import DEMLoader
+        from .terrain.remote_zip import Cancelled as _Cancelled
         from qgis.core import (QgsCoordinateReferenceSystem,
                                QgsCoordinateTransform, QgsProject)
         import datetime as _dt
@@ -4911,6 +5462,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # auto_mode: キャンセルは DEM 側のフラグを使う。ボタン管理は DEM 側が行う。
         def _is_cancelled():
             return self._dem_load_cancel if auto_mode else self._dsm_load_cancel
+
+        def _cancel_cb_with_pump():
+            # LAS本体(~237MB)ダウンロード中のチャンクループ用。processEvents()を
+            # 挟まないとCancelクリックがダウンロード完了まで処理されない。
+            QtWidgets.QApplication.processEvents()
+            return _is_cancelled()
 
         self.lblDsmInfo.setText(f"Resolving {len(codes)} tile(s)...")
         if not auto_mode:
@@ -4951,7 +5508,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 QtWidgets.QApplication.processEvents()
                 try:
                     _lp_type = resolved_lp_type[code]
-                    las_path = download_las(code, year, out_dir, lp_type=_lp_type)
+                    las_path = download_las(
+                        code, year, out_dir, lp_type=_lp_type,
+                        cancel_cb=_cancel_cb_with_pump,
+                    )
                     self._vs_las_paths.append(las_path)
                     from .vs_lp import BUCKET_URL as _BUCKET_URL
                     _folder = code[2:4]; _xx = code[4:6]
@@ -4966,6 +5526,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     dsm_tif = os.path.join(out_dir, f"{code}_dsm.tif")
                     las_to_dsm(las_path, dsm_tif)
                     dsm_tifs.append(dsm_tif)
+                except _Cancelled:
+                    self.lblDsmInfo.setText("Cancelled")
+                    return
                 except Exception as e:
                     self.lblDsmInfo.setText(f"Error ({code}): {e}")
                     return
@@ -5582,9 +6145,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         _dem = getattr(self, "_terrain_loader", None)
         has_dem = bool(_dem and getattr(_dem, "path", None) and os.path.isfile(_dem.path))
-        # Export は VS Shizuoka ソース専用（DSM は任意）
-        is_vs_source = (self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL)
-        can_export = is_vs_source and has_dem
+        # Export は自動取得系DEMソースのみ対応（DSMは任意、Orthoはソース依存）。
+        # 対応ソース一覧は _EXPORTABLE_DEM_SENTINELS / _on_show_export_sources 参照。
+        is_exportable_source = self._dem_path in self._EXPORTABLE_DEM_SENTINELS
+        can_export = is_exportable_source and has_dem
         has_export = bool(self._vs_export_dir and os.path.isfile(self._vs_export_dir))
 
         if self._vs_exporting:
@@ -5675,6 +6239,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             "that concept.",
         )
 
+    def _on_show_export_sources(self, _href=None):
+        """「Supported Sources」リンククリック時、対応DEMソースと内訳をモーダルで示す。"""
+        QtWidgets.QMessageBox.information(
+            self, "Export for WebODM Importer — Supported Sources",
+            "Export supports Virtual Shizuoka LP/Grid only:\n\n"
+            "DTM, DSM (optional), Ortho (area-dependent), LAS reference\n\n"
+            "Other DEM sources are not supported for Export.",
+        )
+
     def _on_vs_export(self):
         """設定済みDTM/DSMを使い、LP/Ortho を S3 から取得して WODMI ZIP に書き出す。"""
         from .vs_lp import (resolve_years, tiles_for_extent,
@@ -5738,9 +6311,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         dsm_path = dsm_loader.path if has_dsm else None
 
         # ── 作業ディレクトリ（Ortho用）───────────────────────────────
-        tmp_dir = os.path.join(self._terrain_output_dir(), ".vs_export_tmp")
-        if os.path.exists(tmp_dir):
-            shutil.rmtree(tmp_dir)
+        # 固定名だと、長時間の.7z取得中（processEvents()経由でUIイベントは
+        # 処理され続けるため、パネルの閉じ直し等で別インスタンスの_on_vs_export
+        # が並行して走ることがあり得る）に、片方のshutil.rmtreeがもう片方の
+        # 作業ファイルを消してしまう事故が起きる（2026-09-24、実機で発生：ZIP側
+        # で取得済みのタイルが後続の.7z取得中に消え、shutil.copy2がFileNotFoundError）。
+        # 呼び出しごとに一意な名前にして、この衝突自体を起こさないようにする。
+        import uuid as _uuid
+        tmp_dir = os.path.join(self._terrain_output_dir(), f".vs_export_tmp_{_uuid.uuid4().hex}")
         os.makedirs(tmp_dir)
 
         # ── エクスポート開始 ──────────────────────────────────────────
@@ -5789,6 +6367,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             QtWidgets.QApplication.processEvents()
             las_paths = [p for p in getattr(self, "_vs_las_paths", []) if os.path.isfile(p)]
             las_urls = getattr(self, "_vs_las_urls", {})
+            # LAS(点群)はVirtual Shizuokaソースのみが持つ。ソース自体に点群データが
+            # 無い場合（長野DEM等）と、VSソースだがDSM未読込でLASが無い場合を区別する。
+            las_capable = (self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL)
             try:
                 with _zf.ZipFile(zip_path, "w", _zf.ZIP_DEFLATED) as zf:
                     zf.write(dtm_path, "odm_dem/dtm.tif")
@@ -5798,32 +6379,51 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                         zf.write(ortho_path, "odm_orthophoto/odm_orthophoto.tif")
                     import json as _json
                     zip_dir = os.path.dirname(zip_path)
+
+                    # las_sources.json は「実LASの参照」だけでなく「FOL Export由来である
+                    # ことのマーカー」も兼ねる（webodm_importer側 asset_detector.is_fol_source
+                    # がこのファイルの有無だけでFOL由来か判定し、Forest Naturalness Index
+                    # 等のUI表示可否に使う）。そのため実LASが無いソース（長野等）でも
+                    # las配列を空にして必ず書き出す。中身（lasが空かどうか）と、
+                    # ファイルの有無（FOL由来かどうか）は別の意味を持つので混同しない。
                     las_sources = {"las": []}
-                    for las_path in las_paths:
-                        fname = os.path.basename(las_path)
-                        rel = os.path.relpath(las_path, zip_dir)
-                        las_sources["las"].append({
-                            "filename": fname,
-                            "relative": rel,
-                        })
+                    if not las_capable:
+                        readme_lines = [
+                            "このDEMソースは点群(LAS)データを使用していません。",
+                            "そのためLASファイルの参照情報はありません。",
+                        ]
+                    elif not las_paths:
+                        readme_lines = [
+                            "LASファイルは取得されませんでした（DSM未読込、または",
+                            "DSM生成時にLASが見つからなかったため）。",
+                            "点群を参照したい場合は先にDSMを読み込んでから再度Exportしてください。",
+                        ]
+                    else:
+                        for las_path in las_paths:
+                            fname = os.path.basename(las_path)
+                            rel = os.path.relpath(las_path, zip_dir)
+                            las_sources["las"].append({
+                                "filename": fname,
+                                "relative": rel,
+                            })
+                        readme_lines = [
+                            "このZIPにLASファイルは含まれていません。",
+                            "LASファイルはlas_sources.jsonの相対パスで参照されます。",
+                            "",
+                            "LASファイルの入手先（ダウンロードURL）:",
+                        ]
+                        for p in las_paths:
+                            fname = os.path.basename(p)
+                            url = las_urls.get(fname, "（URL不明）")
+                            readme_lines.append(f"  {fname}")
+                            readme_lines.append(f"    {url}")
+                        readme_lines += [
+                            "",
+                            "注意: LASファイルを移動した場合はlas_sources.jsonの",
+                            "relativeパスを修正するか、上記URLから再取得してください。",
+                        ]
                     zf.writestr("las_sources.json",
                                 _json.dumps(las_sources, ensure_ascii=False, indent=2))
-                    readme_lines = [
-                        "このZIPにLASファイルは含まれていません。",
-                        "LASファイルはlas_sources.jsonの相対パスで参照されます。",
-                        "",
-                        "LASファイルの入手先（ダウンロードURL）:",
-                    ]
-                    for p in las_paths:
-                        fname = os.path.basename(p)
-                        url = las_urls.get(fname, "（URL不明）")
-                        readme_lines.append(f"  {fname}")
-                        readme_lines.append(f"    {url}")
-                    readme_lines += [
-                        "",
-                        "注意: LASファイルを移動した場合はlas_sources.jsonの",
-                        "relativeパスを修正するか、上記URLから再取得してください。",
-                    ]
                     zf.writestr("README_LAS_LINKS.txt",
                                 "\n".join(readme_lines))
             except Exception as e:
@@ -5946,6 +6546,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             DemBrowserDialog.TERRARIUM_STANDARD_SENTINEL,
             DemBrowserDialog.TERRARIUM_WIDE_SENTINEL,
             DemBrowserDialog.VS_LP_GRID_SENTINEL,
+            DemBrowserDialog.NAGANO_SABO_DEM_SENTINEL,
+            DemBrowserDialog.NAGANO_RINMU_DEM_SENTINEL,
         )
         dem_path_cur = getattr(self, "_dem_path", "")
         if dem_path_cur in tile_sentinels:
@@ -5954,6 +6556,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             QtWidgets.QApplication.processEvents()
             if dem_path_cur == DemBrowserDialog.VS_LP_GRID_SENTINEL:
                 self._load_vs_lp_grid(auto_dsm=False, update_cs_map_source=False)
+            elif dem_path_cur == DemBrowserDialog.NAGANO_SABO_DEM_SENTINEL:
+                self._load_nagano_sabo_dem(update_cs_map_source=False, auto_dsm=False, confirm=False)
+            elif dem_path_cur == DemBrowserDialog.NAGANO_RINMU_DEM_SENTINEL:
+                self._load_nagano_rinmu_dem(update_cs_map_source=False, confirm=False)
             else:
                 self._load_gsi_dem(dem_path_cur, update_cs_map_source=False)
 
@@ -6021,6 +6627,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             DemBrowserDialog.TERRARIUM_STANDARD_SENTINEL,
             DemBrowserDialog.TERRARIUM_WIDE_SENTINEL,
             DemBrowserDialog.VS_LP_GRID_SENTINEL,
+            DemBrowserDialog.NAGANO_SABO_DEM_SENTINEL,
+            DemBrowserDialog.NAGANO_RINMU_DEM_SENTINEL,
         )
         dem_path_cur = getattr(self, "_dem_path", "")
         cs_map_path = getattr(self, "_cs_map_dem_path", "")
@@ -7238,11 +7846,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         s.beginGroup(self._SK)
 
         # ── 地表データ ──
-        # VS Shizuoka ソースはセッション固有（S3取得）のため保存しない
-        _vs_sentinels = (DemBrowserDialog.VS_LP_GRID_SENTINEL,
-                         DemBrowserDialog.VS_LP_GROUND_SENTINEL)
-        s.setValue("dem_path", "" if self._dem_path in _vs_sentinels else self._dem_path)
-        s.setValue("dsm_path", "" if self._dsm_path in _vs_sentinels else self._dsm_path)
+        # VS Shizuoka・長野県(砂防課/林務部)ソースはいずれもセッション固有
+        # （S3/HTTP Range取得、キャンバス範囲に紐づく）のため保存しない。
+        # 保存してしまうと、_tile_labels（GSI/Terrarium用）のような復元用の
+        # 特別扱いが無いためsentinel文字列がそのまま実ファイルパス扱いされ、
+        # 次回起動時にエラーになる（2026-09-23、長野DEM/DSMで発生確認）。
+        _session_only = DemBrowserDialog.SESSION_ONLY_SENTINELS
+        s.setValue("dem_path", "" if self._dem_path in _session_only else self._dem_path)
+        s.setValue("dsm_path", "" if self._dsm_path in _session_only else self._dsm_path)
         s.setValue("flow_buffer_state", self._flow_buffer_state)
         s.setValue("flow_buffer_state_tc", self._flow_buffer_state_tc)
 
@@ -7434,7 +8045,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     combo.setCurrentIndex(idx)
 
         # ── 地表データ ──
+        # SESSION_ONLY_SENTINELS はそもそも_save_settingsで保存されないが、
+        # このガード導入前(2026-09-23より前)に保存された残骸が残っている場合に
+        # 実ファイルパス扱いしてエラーにしないよう、念のため無視する。
         path = s.value("dem_path", "")
+        if path in DemBrowserDialog.SESSION_ONLY_SENTINELS:
+            path = ""
+            s.setValue("dem_path", "")
         if path:
             _tile_labels = {
                 DemBrowserDialog.GSI_DEM1A_SENTINEL:       ("GSI DEM1A (1m)",    "Fetch DEM1A 1m tiles for canvas extent"),
@@ -7460,6 +8077,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.txtDemPath.setToolTip(path)
                 self._load_dem_info()
         dsm_path = s.value("dsm_path", "")
+        if dsm_path in DemBrowserDialog.SESSION_ONLY_SENTINELS:
+            dsm_path = ""
+            s.setValue("dsm_path", "")
         if dsm_path:
             self._dsm_path = dsm_path
             self.txtDsmPath.setText(os.path.basename(dsm_path))
