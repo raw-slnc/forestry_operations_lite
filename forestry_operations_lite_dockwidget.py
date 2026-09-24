@@ -557,15 +557,15 @@ class DemBrowserDialog(QtWidgets.QDialog):
          "⛰️  長野県 砂防課 R3-4  0.5m DEM  (2021-2025, auto-fetch)",
          "https://www.geospatial.jp/ckan/dataset/r3-4-50cmdem",
          "長野県建設部砂防課 航空レーザ測量成果 0.5mメッシュDEM（令和3〜7年度計測）。\n"
-         "GeoTIFF, EPSG:6676, NoData=-9999。\n"
-         "市町村単位のzip配布（1タイル約3km×2.5km）からHTTP Rangeで部分取得。\n"
-         "同年度計測のDCHM（樹冠高）からDSMを自動生成（DEM選択時に自動実行）。"),
+         "GeoTIFF, EPSG:6676, NoData=-9999.\n"
+         "Distributed as per-municipality zip files (~3km×2.5km per tile), fetched partially via HTTP Range.\n"
+         "DSM is auto-generated from the same-year DCHM (canopy height) when this DEM is selected."),
         ("__NAGANO_RINMU_DEM__",
          "🌲  長野県 林務部 0.5mメッシュDEM  (2013-2014, auto-fetch)",
          "https://www.geospatial.jp/ckan/dataset/nagano-dem",
          "長野県林務部 航空レーザ測量成果 0.5mメッシュDEM（2013〜2014年度計測）。\n"
-         "GeoTIFF, EPSG:6676, NoData=-9999。DSM相当データなし。\n"
-         "地域単位(12zip、県全域)のzip配布（1タイル約1km×0.75km）からHTTP Rangeで部分取得。"),
+         "GeoTIFF, EPSG:6676, NoData=-9999. No DSM-equivalent data available.\n"
+         "Distributed as regional zip files (12 zips, prefecture-wide, ~1km×0.75km per tile), fetched partially via HTTP Range."),
     ]
 
     # ── スキャン ─────────────────────────────────────────────────
@@ -802,7 +802,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
         # 長野県 DEM（選択可・DSM無し・自動取得ロジックは未実装）
         for sentinel, _label, url, info_text in self._NAGANO_ITEMS:
             if path == sentinel:
-                self._lbl_info.setText(info_text + f"\n配布元: {url}")
+                self._lbl_info.setText(info_text + f"\nSource: {url}")
                 self._btn_ok.setEnabled(True)
                 self._btn_open_url.setVisible(False)
                 self._selected_url = None
@@ -6178,8 +6178,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             # VS DEM セット: Export が使える（DSM は任意）
             self.btnVsExport.setEnabled(True)
             self.btnVsExport.setToolTip(
-                "Virtual Shizuoka LP/Grid (DTM) を WODMI ZIP にエクスポートします。\n"
-                "DSM (LAS) が読み込まれている場合は合わせてエクスポートします。"
+                "Exports Virtual Shizuoka LP/Grid (DTM) to a WODMI ZIP.\n"
+                "DSM (LAS) is included as well if loaded."
             )
             self.btnOpenWodmi.setEnabled(False)
             self.btnOpenWodmi.setToolTip("Export first to enable")
@@ -6190,8 +6190,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             # VS ソース未設定 / terrain 未設定: 全 off
             self.btnVsExport.setEnabled(False)
             self.btnVsExport.setToolTip(
-                "DEM に VS LP/Grid を選択すると使用できます\n"
-                "（Virtual Shizuoka 専用エクスポート）"
+                "Available once VS LP/Grid is selected as DEM\n"
+                "(Virtual Shizuoka-only export)"
             )
             self.btnOpenWodmi.setEnabled(False)
             self.btnOpenWodmi.setToolTip("Export first to enable")
