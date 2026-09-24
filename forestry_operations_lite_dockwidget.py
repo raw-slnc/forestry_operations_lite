@@ -731,7 +731,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
         # ── 長野県 DEM（長野県専用、DEMモードのみ。DSM提供が無いため dsm モードには出さない）──
         if self._mode == "dem" and self._canvas_overlaps_nagano():
-            sec_nagano = QtWidgets.QListWidgetItem("── 長野県 DEM (Nagano, no DSM) ───────")
+            sec_nagano = QtWidgets.QListWidgetItem("── Nagano Prefecture open-data DEM (Nagano, no DSM) ──")
             sec_nagano.setFlags(Qt.ItemFlag.NoItemFlags)
             sec_nagano.setForeground(QColor("#7a4a1a"))
             f_nagano = QFont(); f_nagano.setBold(True)
@@ -7466,7 +7466,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 if not _retrying:
                     self._overwrite_retried = True
                     self.lblAnalysisStatus.setVisible(True)
-                    self.lblAnalysisStatus.setText(_base_msg + "\n再度実行します…")
+                    self.lblAnalysisStatus.setText(_base_msg + "\nRetrying…")
                     _gc.collect()
                     _QCA.processEvents()
                     from qgis.PyQt.QtCore import QTimer as _QTimer
