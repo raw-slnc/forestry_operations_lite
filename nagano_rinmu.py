@@ -165,7 +165,7 @@ def download_tile_tif(code: str, out_dir: str, cancel_cb=None, progress_cb=None)
 
         def _relay(phase, info, _label=label):
             if progress_cb:
-                detail = info[1] if phase == "downloading" else info
+                detail = (info[1], info[2]) if phase == "downloading" else info
                 progress_cb(phase, _label, detail)
 
         data = fetch_entry_bytes(url, f"{code}_2013.tif", progress_cb=_relay, cancel_cb=cancel_cb)

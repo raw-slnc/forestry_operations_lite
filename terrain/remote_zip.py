@@ -17,6 +17,7 @@ read()のたびに元URLへアクセスすると毎回リダイレクト解決�
 """
 
 import io
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -42,6 +43,7 @@ class RemoteZipFile:
     ダウンロード完了までUIが反応しなくなる。"""
 
     def __init__(self, url, cancel_cb=None):
+        self._chunk_cb = None  # fetch_entry_bytes 等がエントリ本体の読み込み直前に設定する
         # HEAD は一部の配信元（CKAN経由のS3プレサインURL等）で403を返すため使わない。
         # 2026-09-23、geospatial.jp配信で実際にHEAD=403 / GET+Range=206を確認済み。
         # 1バイトのRange GETでサイズを取得する（Content-Range: "bytes 0-0/12345"）。
@@ -118,6 +120,8 @@ class RemoteZipFile:
                     if not chunk:
                         break
                     chunks.append(chunk)
+                    if self._chunk_cb:
+                        self._chunk_cb(len(chunk))
         except Cancelled:
             raise
         data = b"".join(chunks)
@@ -125,13 +129,34 @@ class RemoteZipFile:
         return data
 
 
+def _attach_progress(f, zip_url, total, progress_cb):
+    """z.read()直前に呼び、以後のチャンク読み込みをスロットル付きで
+    progress_cb("downloading", (zip_url, downloaded, total)) として通知する。
+    totalはcompress_size（実際にネットワーク転送されるバイト数。展開後サイズではない）。"""
+    downloaded = 0
+    last_report = 0.0
+
+    def _chunk_cb(n):
+        nonlocal downloaded, last_report
+        downloaded += n
+        now = time.monotonic()
+        if now - last_report >= 0.15 or downloaded >= total:
+            last_report = now
+            progress_cb("downloading", (zip_url, downloaded, total))
+
+    progress_cb("downloading", (zip_url, 0, total))
+    f._chunk_cb = _chunk_cb
+
+
 def fetch_entry_bytes(zip_url: str, name_suffix: str, progress_cb=None, cancel_cb=None):
     """zip_url内で末尾が name_suffix と一致する最初のエントリを読み込んで返す。
     見つからない・取得失敗・キャンセルの場合は None。
 
     progress_cb(phase, info) を渡すと段階を通知する:
-        phase="checking"    info=zip_url          central directory 確認中（対象が実在するか）
-        phase="downloading" info=(zip_url, size)  対象エントリの実データ取得中（sizeは展開後バイト数）
+        phase="checking"    info=zip_url                    central directory 確認中（対象が実在するか）
+        phase="downloading" info=(zip_url, downloaded, total)  対象エントリの実データ取得中。
+                             downloaded/totalは実転送バイト数（compress_size）で、
+                             チャンク単位（0.15秒間隔にスロットル）で更新される。
     central directory の確認（実在するかのチェック）と、実データのダウンロードは
     コストが大きく異なる（前者は数KB、後者はタイル1枚分＝数十〜百MB超）ため、
     呼び出し側でメッセージを出し分けられるようにしている。
@@ -147,7 +172,7 @@ def fetch_entry_bytes(zip_url: str, name_suffix: str, progress_cb=None, cancel_c
             if not match:
                 return None
             if progress_cb:
-                progress_cb("downloading", (zip_url, z.getinfo(match[0]).file_size))
+                _attach_progress(f, zip_url, z.getinfo(match[0]).compress_size, progress_cb)
             return z.read(match[0])
     except Exception:
         return None
@@ -170,7 +195,7 @@ def fetch_entries_bytes(zip_url: str, name_suffixes, progress_cb=None, cancel_cb
                 if not match:
                     continue
                 if progress_cb:
-                    progress_cb("downloading", (zip_url, z.getinfo(match[0]).file_size))
+                    _attach_progress(f, zip_url, z.getinfo(match[0]).compress_size, progress_cb)
                 result[suffix] = z.read(match[0])
     except Exception:
         return {}

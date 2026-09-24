@@ -24,6 +24,7 @@
 
 import os
 import sys
+import time
 import urllib.request
 import urllib.error
 import zipfile
@@ -267,13 +268,21 @@ def _set_las_epsg(las_path: str, epsg: int):
 
 # ── ダウンロード ──────────────────────────────────────────────────────────────
 
-def _download(url: str, dest: str, cancel_cb=None):
+def _download(url: str, dest: str, cancel_cb=None, progress_cb=None):
     """cancel_cb を渡すと、チャンク（65536バイト）単位でキャンセルを確認できる。
     これが無いと大きなZIP取得中はQtのイベントループが回らず、Cancelボタンの
     クリック自体がダウンロード完了まで処理されない
-    （terrain/remote_zip.py と同じ理由・同じ粒度）。"""
+    （terrain/remote_zip.py と同じ理由・同じ粒度）。
+
+    progress_cb(downloaded, total) を渡すと、チャンク単位（0.15秒間隔にスロットル）で
+    ダウンロード済み/合計バイト数を通知する。totalはContent-Lengthから取得できない
+    場合-1（進捗率は出せないが呼び出し側でdownloadedだけ表示することは可能）。"""
     from .terrain.remote_zip import Cancelled
     with urllib.request.urlopen(url, timeout=600) as r, open(dest, "wb") as f:  # nosec B310
+        total = r.headers.get("Content-Length")
+        total = int(total) if total is not None else -1
+        downloaded = 0
+        last_report = 0.0
         while True:
             if cancel_cb and cancel_cb():
                 raise Cancelled("download cancelled")
@@ -281,6 +290,12 @@ def _download(url: str, dest: str, cancel_cb=None):
             if not chunk:
                 break
             f.write(chunk)
+            downloaded += len(chunk)
+            if progress_cb:
+                now = time.monotonic()
+                if now - last_report >= 0.15 or downloaded == total:
+                    last_report = now
+                    progress_cb(downloaded, total)
 
 
 def _xyz_to_tif(txt_path: str, out_dir: str, cell_size: float = 0.5) -> str:
@@ -397,9 +412,10 @@ def _extract_tif(zip_path: str, out_dir: str) -> str:
     raise ValueError(f"No TIF or TXT found in {zip_path}")
 
 
-def download_grid_tif(code: str, year: int, out_dir: str, lp_type: str = "Grid", cancel_cb=None) -> str:
+def download_grid_tif(code: str, year: int, out_dir: str, lp_type: str = "Grid", cancel_cb=None, progress_cb=None) -> str:
     """LP/{lp_type} ZIP をダウンロード→展開→GeoTIFF パスを返す。
-    同タイルコードの TIF が既に out_dir に存在する場合は再利用する。"""
+    同タイルコードの TIF が既に out_dir に存在する場合は再利用する。
+    progress_cb(downloaded, total) は _download 参照。"""
     # 既存 TIF キャッシュチェック
     tif_cache = os.path.join(out_dir, f"{code}.tif")
     if os.path.isfile(tif_cache):
@@ -409,7 +425,7 @@ def download_grid_tif(code: str, year: int, out_dir: str, lp_type: str = "Grid",
     xx = code[4:6]
     url = f"{BUCKET_URL}/{year}/LP/{lp_type}/08/{folder}/{xx}/{code}.zip"
     zip_path = os.path.join(out_dir, f"{code}_{lp_type}.zip")
-    _download(url, zip_path, cancel_cb=cancel_cb)
+    _download(url, zip_path, cancel_cb=cancel_cb, progress_cb=progress_cb)
     tif_path = _extract_tif(zip_path, out_dir)
     _set_tif_epsg(tif_path, 6676)
     try:
@@ -434,7 +450,7 @@ def merge_tifs(tif_paths: list, out_path: str):
     result = None
 
 
-def download_las(code: str, year: int, out_dir: str, lp_type: str = "Ground", cancel_cb=None) -> str:
+def download_las(code: str, year: int, out_dir: str, lp_type: str = "Ground", cancel_cb=None, progress_cb=None) -> str:
     """LP/{lp_type} ZIP をダウンロード→LAS ファイルパスを返す。
 
     lp_type:
@@ -443,6 +459,7 @@ def download_las(code: str, year: int, out_dir: str, lp_type: str = "Ground", ca
                      2019/2020/2022 は全リターン結合データ（DSM計算可）
 
     同タイルコードの LAS が既に out_dir に存在する場合は再利用する。
+    progress_cb(downloaded, total) は _download 参照。
     """
     # 既存 LAS キャッシュチェック（{code} で始まる .las ファイル）
     for fname in os.listdir(out_dir):
@@ -453,7 +470,7 @@ def download_las(code: str, year: int, out_dir: str, lp_type: str = "Ground", ca
     xx = code[4:6]
     url = f"{BUCKET_URL}/{year}/LP/{lp_type}/08/{folder}/{xx}/{code}.zip"
     zip_path = os.path.join(out_dir, f"{code}_{lp_type.lower()}.zip")
-    _download(url, zip_path, cancel_cb=cancel_cb)
+    _download(url, zip_path, cancel_cb=cancel_cb, progress_cb=progress_cb)
     # ZIP 内の LAS ファイルを展開
     with zipfile.ZipFile(zip_path) as zf:
         for name in zf.namelist():

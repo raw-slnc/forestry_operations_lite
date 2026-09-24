@@ -167,8 +167,8 @@ def download_tile_tif(code: str, out_dir: str, cancel_cb=None, progress_cb=None)
     見つからない場合は None を返す。
 
     progress_cb(phase, city, detail) で段階を通知する:
-        phase="checking"    detail=zip_url        候補市町村のzipを確認中
-        phase="downloading" detail=size(バイト)   実データ取得中（見つかった候補）
+        phase="checking"    detail=zip_url                候補市町村のzipを確認中
+        phase="downloading" detail=(downloaded, total)バイト  実データ取得中（見つかった候補）
     「確認中」（数KB程度）と「取得中」（タイル1枚分、数十〜百MB超）は
     体感速度への影響が大きく異なるため、呼び出し側で表示を出し分けられる。"""
     os.makedirs(out_dir, exist_ok=True)
@@ -195,7 +195,7 @@ def download_tile_tif(code: str, out_dir: str, cancel_cb=None, progress_cb=None)
 
             def _relay(phase, info, _city=city):
                 if progress_cb:
-                    detail = info[1] if phase == "downloading" else info
+                    detail = (info[1], info[2]) if phase == "downloading" else info
                     progress_cb(phase, _city, detail)
 
             data = fetch_entry_bytes(url, f"{code}.tif", progress_cb=_relay, cancel_cb=cancel_cb)

@@ -2287,8 +2287,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         )
         self.lblResample.setVisible(False)
         self.lblResample.setToolTip(
-            f"解像度が {_RESAMPLE_THRESHOLD}m 未満のため、"
-            f"解析前に {_RESAMPLE_TARGET}m へ自動リサンプルします。"
+            f"Resolution is finer than {_RESAMPLE_THRESHOLD}m, "
+            f"so it will be auto-resampled to {_RESAMPLE_TARGET}m before analysis."
         )
         # 右カラム（Stop ボタン）
         self.btnStopAnalysis = QtWidgets.QPushButton("Stop")
@@ -4720,8 +4720,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 # DSMはDCHM（樹冠高）をDEMに加算して自動生成する（nagano_dchm.py参照）ため
                 # btnBrowseDsmは無効化（VS LP/Gridと同様、手動ブラウズの対象ではない）。
                 self._dem_path = path
-                self.txtDemPath.setText("長野県 砂防課 R3-4 (0.5m)")
-                self.txtDemPath.setToolTip("Nagano DEM (砂防課) — auto-fetch via HTTP Range")
+                self.txtDemPath.setText("Nagano Sabo R3-4 (0.5m)")
+                self.txtDemPath.setToolTip("Nagano DEM (Sabo Division) — auto-fetch via HTTP Range")
                 self.btnBrowseDem.setText("Clear")
                 self.btnBrowseDsm.setEnabled(False)
                 self.lblDsmInfo.setText("Auto: DEM+DCHM → DSM (fetching after DEM…)")
@@ -4730,8 +4730,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 # 長野県 林務部 DEM: DSM/DCHM相当のデータが無いため btnBrowseDsm を無効化。
                 # 部分取得(HTTP Range)で実際にタイルを取得する（nagano_rinmu.py参照）。
                 self._dem_path = path
-                self.txtDemPath.setText("長野県 林務部 0.5mメッシュ")
-                self.txtDemPath.setToolTip("Nagano DEM (林務部) — auto-fetch via HTTP Range")
+                self.txtDemPath.setText("Nagano Forestry Dept (0.5m)")
+                self.txtDemPath.setToolTip("Nagano DEM (Forestry Dept) — auto-fetch via HTTP Range")
                 self.btnBrowseDem.setText("Clear")
                 self.btnBrowseDsm.setEnabled(False)
                 self.lblDsmInfo.setText("Not available (Nagano DEM has no DSM)")
@@ -4960,9 +4960,23 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     return
                 self.lblDemInfo.setText(f"Downloading {i + 1}/{len(resolved)}…")
                 QtWidgets.QApplication.processEvents()
+
+                def _grid_progress(downloaded, total, _i=i):
+                    if total > 0:
+                        self.lblDemInfo.setText(
+                            f"Downloading {_i + 1}/{len(resolved)}: "
+                            f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB…"
+                        )
+                    else:
+                        self.lblDemInfo.setText(
+                            f"Downloading {_i + 1}/{len(resolved)}: {downloaded / 1e6:.0f}MB…"
+                        )
+                    QtWidgets.QApplication.processEvents()
+
                 try:
                     tif_paths.append(download_grid_tif(
                         code, year, out_dir, cancel_cb=self._dem_cancel_check,
+                        progress_cb=_grid_progress,
                     ))
                 except Exception as e:
                     errors.append(f"{code}: {e}")
@@ -5095,9 +5109,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                             f"Tile {_i + 1}/{len(codes)} ({_code}): checking {city}…"
                         )
                     else:
+                        downloaded, total = detail
                         self.lblDemInfo.setText(
                             f"Tile {_i + 1}/{len(codes)} ({_code}): downloading "
-                            f"{detail / 1e6:.0f}MB from {city}…"
+                            f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB from {city}…"
                         )
                     QtWidgets.QApplication.processEvents()
 
@@ -5145,7 +5160,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             if auto_dsm and not self._dem_load_cancel:
                 self._dsm_path = DemBrowserDialog.NAGANO_SABO_DSM_SENTINEL
                 self.txtDsmPath.setText("Nagano DEM+DCHM → DSM")
-                self.txtDsmPath.setToolTip("DSM = DEM + DCHM（樹冠高、建物等含む）")
+                self.txtDsmPath.setToolTip("DSM = DEM + DCHM (canopy height, includes buildings etc.)")
                 self.btnBrowseDsm.setText("")
                 self._compute_nagano_sabo_dsm(codes, tif_path)
                 if not getattr(self, "_dsm_loader", None):
@@ -5203,9 +5218,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                         f"DCHM {_i + 1}/{len(codes)} ({_code}): checking sheet {sheet}…"
                     )
                 else:
+                    downloaded, total = detail
                     self.lblDsmInfo.setText(
                         f"DCHM {_i + 1}/{len(codes)} ({_code}): downloading "
-                        f"{detail / 1e6:.0f}MB from sheet {sheet}…"
+                        f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB from sheet {sheet}…"
                     )
                 QtWidgets.QApplication.processEvents()
 
@@ -5319,13 +5335,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             ext6.xMaximum(), ext6.yMaximum(),
         )
         if not codes:
-            self.lblDemInfo.setText("⚠ No Nagano DEM (林務部) tiles for this area.")
+            self.lblDemInfo.setText("⚠ No Nagano DEM (Forestry Dept) tiles for this area.")
             return
 
         if confirm:
             reply = QtWidgets.QMessageBox.question(
                 self,
-                "Nagano DEM (林務部) Fetch",
+                "Nagano DEM (Forestry Dept) Fetch",
                 f"This will fetch {len(codes)} tile(s) (~12MB each) over the network.\n"
                 "Each tile may require checking up to 12 regional archives "
                 "(no per-tile index for this source).\n\n"
@@ -5359,9 +5375,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                             f"Tile {_i + 1}/{len(codes)} ({_code}): checking {zip_label}…"
                         )
                     else:
+                        downloaded, total = detail
                         self.lblDemInfo.setText(
                             f"Tile {_i + 1}/{len(codes)} ({_code}): downloading "
-                            f"{detail / 1e6:.0f}MB from {zip_label}…"
+                            f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB from {zip_label}…"
                         )
                     QtWidgets.QApplication.processEvents()
 
@@ -5503,14 +5520,29 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     self.lblDsmInfo.setText("Cancelled")
                     return
                 self.lblDsmInfo.setText(
-                    f"DSM {i + 1}/{len(resolved)} — downloading LAS (~237 MB)…"
+                    f"DSM {i + 1}/{len(resolved)} — downloading LAS…"
                 )
                 QtWidgets.QApplication.processEvents()
+
+                def _las_progress(downloaded, total, _i=i):
+                    if total > 0:
+                        self.lblDsmInfo.setText(
+                            f"DSM {_i + 1}/{len(resolved)} — downloading LAS: "
+                            f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB…"
+                        )
+                    else:
+                        self.lblDsmInfo.setText(
+                            f"DSM {_i + 1}/{len(resolved)} — downloading LAS: "
+                            f"{downloaded / 1e6:.0f}MB…"
+                        )
+                    QtWidgets.QApplication.processEvents()
+
                 try:
                     _lp_type = resolved_lp_type[code]
                     las_path = download_las(
                         code, year, out_dir, lp_type=_lp_type,
                         cancel_cb=_cancel_cb_with_pump,
+                        progress_cb=_las_progress,
                     )
                     self._vs_las_paths.append(las_path)
                     from .vs_lp import BUCKET_URL as _BUCKET_URL
@@ -6261,7 +6293,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         dtm_loader = getattr(self, "_terrain_loader", None)
         if dtm_loader is None or not dtm_loader.path or not os.path.isfile(dtm_loader.path):
             QtWidgets.QMessageBox.warning(self, "VS Export",
-                                          "DEMデータが設定されていません。先にDEMを読み込んでください。")
+                                          "DEM data is not set. Load a DEM first.")
             return
 
         dsm_loader = getattr(self, "_dsm_loader", None)
@@ -6297,7 +6329,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         has_ortho = bool(resolved_ortho)
 
         msg = (f"• DTM: {os.path.basename(dtm_loader.path)}\n"
-               f"• DSM: {'設定済み (' + os.path.basename(dsm_loader.path) + ')' if has_dsm else '未設定（スキップ）'}\n"
+               f"• DSM: {'Set (' + os.path.basename(dsm_loader.path) + ')' if has_dsm else 'Not set (skipped)'}\n"
                f"• Ortho: LP/Ortho  — {'included' if has_ortho else 'not available for this area'}\n\n"
                "Proceed?")
         if QtWidgets.QMessageBox.question(
@@ -6339,8 +6371,23 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                         return
                     self.lblVsExportStatus.setText(f"Ortho {i + 1}/{len(resolved_ortho)}…")
                     QtWidgets.QApplication.processEvents()
+
+                    def _ortho_progress(downloaded, total, _i=i):
+                        if total > 0:
+                            self.lblVsExportStatus.setText(
+                                f"Ortho {_i + 1}/{len(resolved_ortho)}: "
+                                f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB…"
+                            )
+                        else:
+                            self.lblVsExportStatus.setText(
+                                f"Ortho {_i + 1}/{len(resolved_ortho)}: {downloaded / 1e6:.0f}MB…"
+                            )
+                        QtWidgets.QApplication.processEvents()
+
                     try:
-                        ortho_tifs.append(download_grid_tif(code, year, tmp_dir, "Ortho"))
+                        ortho_tifs.append(download_grid_tif(
+                            code, year, tmp_dir, "Ortho", progress_cb=_ortho_progress,
+                        ))
                     except Exception:  # nosec B110
                         pass
                 if ortho_tifs:
@@ -7130,8 +7177,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         )
         if _vs_dsm_outside:
             reply = QtWidgets.QMessageBox.question(
-                self, "解析範囲の確認",
-                "解析範囲にDSM/DTM設定外が含まれます。\n再取得しますか？",
+                self, "Analysis Range Confirmation",
+                "The analysis range extends beyond the current DSM/DTM coverage.\nRe-fetch?",
                 QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.No,
             )
             if reply != QtWidgets.QMessageBox.StandardButton.Ok:
