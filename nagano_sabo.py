@@ -156,6 +156,82 @@ def _candidate_cities_by_proximity(code: str):
     return [city for city, _ in sorted(boxes.items(), key=lambda kv: _dist(kv[1]))]
 
 
+# ── 市町村境界タイルの合成 ────────────────────────────────────────────
+
+def _raster_valid_fraction(path):
+    try:
+        from osgeo import gdal
+        import numpy as np
+        ds = gdal.Open(path)
+        if ds is None:
+            return 0.0
+        band = ds.GetRasterBand(1)
+        arr = band.ReadAsArray()
+        nodata = band.GetNoDataValue()
+        ds = None
+        valid = np.isfinite(arr)
+        if nodata is not None:
+            valid &= arr != nodata
+        return float(valid.mean())
+    except Exception:
+        return 1.0
+
+
+def _merge_tile_parts(part_paths, out_path):
+    if len(part_paths) == 1:
+        os.replace(part_paths[0], out_path)
+        return
+
+    from osgeo import gdal
+    import numpy as np
+
+    base = gdal.Open(part_paths[0])
+    if base is None:
+        raise RuntimeError(f"Could not open tile part: {part_paths[0]}")
+    gt = base.GetGeoTransform()
+    proj = base.GetProjection()
+    cols = base.RasterXSize
+    rows = base.RasterYSize
+    band = base.GetRasterBand(1)
+    nodata = band.GetNoDataValue()
+    if nodata is None:
+        nodata = -9999.0
+    merged = band.ReadAsArray().astype(np.float32)
+    base = None
+
+    def _valid(arr):
+        return np.isfinite(arr) & (arr != nodata)
+
+    merged_valid = _valid(merged)
+    for path in part_paths[1:]:
+        ds = gdal.Open(path)
+        if ds is None:
+            continue
+        if ds.RasterXSize != cols or ds.RasterYSize != rows:
+            ds = None
+            continue
+        arr = ds.GetRasterBand(1).ReadAsArray().astype(np.float32)
+        ds = None
+        fill = (~merged_valid) & _valid(arr)
+        merged[fill] = arr[fill]
+        merged_valid |= fill
+
+    merged[~merged_valid] = nodata
+    tmp_path = out_path + ".tmp"
+    drv = gdal.GetDriverByName("GTiff")
+    ds = drv.Create(tmp_path, cols, rows, 1, gdal.GDT_Float32,
+                    options=["COMPRESS=LZW", "TILED=YES"])
+    ds.SetGeoTransform(gt)
+    ds.SetProjection(proj)
+    out_band = ds.GetRasterBand(1)
+    out_band.SetNoDataValue(nodata)
+    out_band.WriteArray(merged)
+    out_band.FlushCache()
+    ds.FlushCache()
+    ds = None
+    os.replace(tmp_path, out_path)
+
+
 # ── タイル取得（キャッシュ付き） ──────────────────────────────────────
 
 def download_tile_tif(code: str, out_dir: str, cancel_cb=None, progress_cb=None):
@@ -173,16 +249,22 @@ def download_tile_tif(code: str, out_dir: str, cancel_cb=None, progress_cb=None)
     体感速度への影響が大きく異なるため、呼び出し側で表示を出し分けられる。"""
     os.makedirs(out_dir, exist_ok=True)
     tif_cache = os.path.join(out_dir, f"{code}.tif")
-    if os.path.isfile(tif_cache):
-        return tif_cache
+    sources_cache = os.path.join(out_dir, f"{code}.sources.json")
 
     index = _load_index()
-    cities = list(index["tile_to_cities"].get(code, []))
-    for city in _candidate_cities_by_proximity(code):
-        if city not in cities:
-            cities.append(city)
+    indexed_cities = list(index["tile_to_cities"].get(code, []))
+    if os.path.isfile(tif_cache):
+        if len(indexed_cities) <= 1 or os.path.isfile(sources_cache) or _raster_valid_fraction(tif_cache) >= 0.98:
+            return tif_cache
+
+    if indexed_cities:
+        cities = indexed_cities
+    else:
+        cities = _candidate_cities_by_proximity(code)
 
     tried_urls = set()
+    part_paths = []
+    used_sources = []
     for city in cities:
         if cancel_cb and cancel_cb():
             return None
@@ -200,7 +282,34 @@ def download_tile_tif(code: str, out_dir: str, cancel_cb=None, progress_cb=None)
 
             data = fetch_entry_bytes(url, f"{code}.tif", progress_cb=_relay, cancel_cb=cancel_cb)
             if data is not None:
-                with open(tif_cache, "wb") as fh:
+                if not indexed_cities:
+                    with open(tif_cache, "wb") as fh:
+                        fh.write(data)
+                    return tif_cache
+                part_path = os.path.join(out_dir, f".{code}.part{len(part_paths)}.tif")
+                with open(part_path, "wb") as fh:
                     fh.write(data)
-                return tif_cache
+                part_paths.append(part_path)
+                used_sources.append({"city": city, "url": url})
+        if not indexed_cities and part_paths:
+            break
+
+    if part_paths:
+        try:
+            _merge_tile_parts(part_paths, tif_cache)
+            with open(sources_cache, "w", encoding="utf-8") as fh:
+                json.dump({
+                    "code": code,
+                    "indexed_cities": indexed_cities,
+                    "sources": used_sources,
+                    "valid_fraction": _raster_valid_fraction(tif_cache),
+                }, fh, ensure_ascii=False, indent=2)
+        finally:
+            for part_path in part_paths:
+                try:
+                    if os.path.exists(part_path):
+                        os.remove(part_path)
+                except Exception:  # nosec B110
+                    pass
+        return tif_cache
     return None
