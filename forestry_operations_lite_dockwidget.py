@@ -3143,8 +3143,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     def apply_layer_display(self):
         # Layer Settings で選んだレイヤーの不透明度:
-        #   初回のみレイヤー自身の不透明度でスピンを初期化し、元値を退避
-        #   （プラグイン終了時 / 選択解除時に復元する）。以降はスピン操作を反映。
+        #   割り当て時にレイヤー自身の元の不透明度を退避するのみ
+        #   （プラグイン終了時 / 選択解除時に復元する）。スピンの値は常に
+        #   プラグイン側の設定を使う（レイヤー自身の不透明度をスピンへ
+        #   読み込むことはしない——読み込むと保存済みのプラグイン設定が
+        #   レイヤーの現在値で上書きされてしまうため）。
         proj = QgsProject.instance()
         bg   = self._get_selected_layer(self.cmbBackgroundLayer)
         tile = self._get_selected_layer(self.cmbTileLayer)
@@ -3168,8 +3171,6 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 continue
             if _l.id() not in self._orig_base_opacity:
                 self._orig_base_opacity[_l.id()] = _l.opacity()
-                with QSignalBlocker(_spin):
-                    _spin.setValue(int(round(_l.opacity() * 100.0)))
             _l.setOpacity(_spin.value() / 100.0)
             _l.triggerRepaint()
 
