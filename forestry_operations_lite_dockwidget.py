@@ -8,6 +8,8 @@ from qgis.PyQt.QtGui import QDesktopServices, QIcon
 from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
+    QgsLayerTreeGroup,
+    QgsMapLayer,
     QgsPointXY,
     QgsProject,
     QgsRasterLayer,
@@ -31,6 +33,13 @@ _RESAMPLE_TARGET    = 0.5   # リサンプル後の解像度（m）
 # CS Map Export 専用のリサンプル閾値。CS 立体図は微地形の描出が目的なので、
 # 解析（0.2m）より低い 0.1m まではネイティブ解像度を保持する。
 _CS_MAP_RESAMPLE_THRESHOLD = 0.1
+
+# CS Map はバックグラウンド（ベースマップの追加情報）用途のため、専用グループに
+# まとめ、GPKG/SHPベクタレイヤー（またはそれを含む最上位グループ）の直後（＝真下）
+# に配置する。raster_loader プラグインの配置ロジックを踏襲。
+_CS_MAP_GROUP_NAME = "FOL_CSMap"
+_CS_MAP_GROUP_MARKER_KEY = "fol_csmap_managed_group"
+_CS_MAP_VECTOR_ANCHOR_EXTS = (".gpkg", ".shp")
 
 
 def _resample_dem(src, target_cell_size=_RESAMPLE_TARGET):
@@ -7020,6 +7029,57 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         except Exception:  # nosec B110
             pass
 
+    @staticmethod
+    def _cs_map_find_own_group(root):
+        """プラグインが作成した"FOL_CSMap"グループを探す。
+        名前の一致だけでなくカスタムプロパティも確認し、ユーザーが手動で
+        作った同名グループと取り違えないようにする。ユーザーが既存グループを
+        他のグループ内へネストさせても見失って複製作成しないよう、ツリー全体
+        （どの深さにネストされていても）を再帰的に探索する。"""
+        stack = list(root.children())
+        while stack:
+            node = stack.pop()
+            if isinstance(node, QgsLayerTreeGroup):
+                if node.customProperty(_CS_MAP_GROUP_MARKER_KEY):
+                    return node
+                stack.extend(node.children())
+        return None
+
+    @staticmethod
+    def _cs_map_find_bottom_vector_node(root):
+        """レイヤーツリーを上から下へ辿り、GPKG/SHPのベクタレイヤーのうち
+        もっとも下（最後）に見つかったノードを返す。無ければNone。
+        CS MapはベースマップCS用途を想定し、"FOL_CSMap"グループはこの
+        レイヤーの直下に作る。"""
+        found = None
+        for node in root.findLayers():
+            layer = node.layer()
+            if layer is None or layer.type() != QgsMapLayer.LayerType.VectorLayer:
+                continue
+            source = layer.source().split("|", 1)[0].lower()
+            if source.endswith(_CS_MAP_VECTOR_ANCHOR_EXTS):
+                found = node
+        return found
+
+    def _cs_map_get_or_create_group(self):
+        root = QgsProject.instance().layerTreeRoot()
+        group = self._cs_map_find_own_group(root)
+        if group is None:
+            anchor = self._cs_map_find_bottom_vector_node(root)
+            if anchor is not None:
+                # グループの中には入れず、常にプロジェクト直下（root）の
+                # 兄弟として、そのレイヤー（またはそれを含む最上位グループ）
+                # の直後に挿入する
+                top_level = anchor
+                while top_level.parent() is not root:
+                    top_level = top_level.parent()
+                index = root.children().index(top_level) + 1
+                group = root.insertGroup(index, _CS_MAP_GROUP_NAME)
+            else:
+                group = root.addGroup(_CS_MAP_GROUP_NAME)
+            group.setCustomProperty(_CS_MAP_GROUP_MARKER_KEY, True)
+        return group
+
     def _on_cs_map_export_clicked(self):
         """設定済みDEM全体からCS MAPをGeoTIFF出力し、QGISレイヤーに追加する。
         出力ファイル名は中心座標・面積から求めた識別子で決まるため、同じ場所を
@@ -7089,7 +7149,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self._apply_cs_map_style(lyr)
             proj = QgsProject.instance()
             proj.addMapLayer(lyr, False)
-            node = proj.layerTreeRoot().addLayer(lyr)
+            group = self._cs_map_get_or_create_group()
+            node = group.addLayer(lyr)
             if node is not None:
                 node.setExpanded(False)
             lyr.triggerRepaint()
