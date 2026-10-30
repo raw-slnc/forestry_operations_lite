@@ -23,9 +23,133 @@ FORM_CLASS, _ = uic.loadUiType(
 )
 
 
-class _StopAnalysis(Exception):
-    """解析キャンセル用の内部例外。"""
-    pass
+# 解析の各段階の重み（100万セルでの実測秒、Linux 開発機、2026-10-31。
+# ポリゴン化にマスクを渡す版で測り直し）。ポリゴン化（stability / valley /
+# integrate の大半）は対象域の形で大きく変わるので目安。残り時間は実行中の
+# 経過から推定し直す。
+_ANALYSIS_STAGE_WEIGHTS = {
+    "prep":         0.25,  # 斜度・SHC・陰影・標高の計算と保存
+    "routing":      0.7,   # D8 流向・集水
+    "stability":    2.3,   # FS ＋ 不安定域のポリゴン化
+    "valley":       0.5,   # TWI ＋ 沢地形のポリゴン化（D8）
+    "valley_multi": 9.0,   # 上に MFD/D∞ の分配率・集水を足したもの
+    "flow":         5.7,   # Tc ＋ 時間‐面積法 ＋ 保存
+    "integrate":    2.3,   # 統合リスク指標 ＋ High Risk Areas のポリゴン化
+}
+
+
+def _format_remaining(seconds):
+    """残り秒数を "about 1 min 20 s left" の形にする（粗めに丸める）。"""
+    s = max(0.0, float(seconds))
+    if s < 10:
+        return "a few seconds left"
+    if s < 60:
+        return f"about {int(round(s / 5.0) * 5)} s left"
+    if s < 3600:
+        m, r = divmod(int(round(s / 10.0) * 10), 60)
+        return f"about {m} min {r} s left" if r else f"about {m} min left"
+    h, r = divmod(int(round(s / 60.0)), 60)
+    return f"about {h} h {r} min left"
+
+
+class _ButtonProgress:
+    """実行ボタンを、同じ場所・同じ高さの QProgressBar と入れ替える。
+
+    バーは標準の QProgressBar なので、色や % の文字の出し方は QGIS の
+    スタイルに従う。段階名・残り時間はその下のラベルに出す。
+    finish() でボタンに戻す。setValue(0..100) は QProgressBar と同じ呼び方。
+    """
+
+    def __init__(self, button, bar):
+        self._btn = button
+        self._bar = bar
+        bar.setRange(0, 100)
+        bar.setValue(0)
+        bar.setFixedHeight(button.height())
+        button.setVisible(False)
+        bar.setVisible(True)
+
+    def setValue(self, pct):
+        self._bar.setValue(int(pct))
+
+    def finish(self):
+        self._bar.setVisible(False)
+        self._btn.setVisible(True)
+
+
+class _AnalysisProgress:
+    """地形解析の進捗表示（段階名・重み付きの%・残り時間）。
+
+    bar: setValue(0..100) を持つもの（実行ボタンを使う _ButtonProgress）。
+    stages: [(key, title, weight)]。stage(key) で段階に入り、update(frac) で
+    段階内の 0..1 を伝える（解析ではワーカーの stage / progress signal に
+    つなぐ）。どちらも最後に pump() を呼ぶ（計算をメインスレッドで回す
+    場合に processEvents＋中止の確認を差し込むためのもの。不要なら何もしない
+    関数を渡す）。
+    estimate_s: 前回の実績から見積もった全体の秒数（無ければ None）。
+    """
+
+    _PAINT_INTERVAL = 0.2  # 秒。表示の書き換えはこれより頻繁にしない
+
+    def __init__(self, bar, label, stages, pump, estimate_s=None):
+        import time as _time
+        self._now = _time.monotonic
+        self._bar = bar
+        self._label = label
+        self._pump = pump
+        self._estimate_s = estimate_s
+        total = float(sum(w for _, _, w in stages)) or 1.0
+        self._order = [k for k, _, _ in stages]
+        self._titles = {k: t for k, t, _ in stages}
+        self._start = {}
+        self._span = {}
+        acc = 0.0
+        for k, _, w in stages:
+            self._start[k] = acc / total
+            self._span[k] = w / total
+            acc += w
+        self._cur = None
+        self._frac = 0.0
+        self._t0 = self._now()
+        self._last_paint = -1.0
+
+    def elapsed(self):
+        return self._now() - self._t0
+
+    def stage(self, key):
+        self._cur = key
+        self._set(self._start[key], force=True)
+
+    def update(self, frac):
+        if self._cur is None:
+            return
+        f = min(max(float(frac), 0.0), 1.0)
+        self._set(self._start[self._cur] + self._span[self._cur] * f)
+
+    def _set(self, overall, force=False):
+        self._frac = max(self._frac, min(overall, 1.0))
+        now = self._now()
+        if force or now - self._last_paint >= self._PAINT_INTERVAL:
+            self._last_paint = now
+            self._paint()
+        self._pump()
+
+    def _remaining_text(self):
+        elapsed = self.elapsed()
+        # 出だしは推定がぶれるので、前回の実績があればそちらを使う
+        if self._frac >= 0.05 and elapsed >= 3.0:
+            return _format_remaining(elapsed * (1.0 - self._frac) / self._frac)
+        if self._estimate_s:
+            return _format_remaining(self._estimate_s - elapsed)
+        return "estimating time…"
+
+    def _paint(self):
+        self._bar.setValue(int(self._frac * 100))
+        i = self._order.index(self._cur) + 1
+        self._label.setText(
+            f"Step {i}/{len(self._order)}: {self._titles[self._cur]} "
+            f"— {self._remaining_text()}"
+        )
 
 
 _RESAMPLE_THRESHOLD = 0.2   # これより細かい解像度（m）は自動リサンプル対象
@@ -1262,6 +1386,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.preview_canvas = None
         self._host_window = None  # ForestryOperationsLiteWindow（表示用のトップレベルホスト）
         self._added_to_main_window = False
+        self._analysis_worker = None  # 実行中の TerrainAnalysisWorker
+        self._analysis_ctx = None     # その実行の後処理に要る値（dict）
+        self._dem_worker = None       # 実行中の DemJobWorker（DEM 取得）
+        self._dem_job_ctx = None      # その取得の後処理に要る値（dict）
+        self._side_jobs = {}          # 書き出しのワーカー {name: ctx}（CS Map / VS）
 
         self._syncing = False
         self._initializing = True     # 起動完了まで preview→main 同期をブロック
@@ -1279,13 +1408,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._refresh_layer_combos()
         QgsProject.instance().layersAdded.connect(self._refresh_layer_combos)
         QgsProject.instance().layersRemoved.connect(self._refresh_layer_combos)
-        # プロジェクトを開いた後にもレイヤー選択を復元する
-        QgsProject.instance().readProject.connect(self._on_project_read)
-        # プロジェクト保存時に出力先ラベル更新 + レイヤー設定をプロジェクトへ書込
-        QgsProject.instance().projectSaved.connect(self._update_out_dir_label)
-        QgsProject.instance().projectSaved.connect(self._save_layer_settings_to_project)
-        # プロジェクトクリア時に地形グループ参照をリセット
-        QgsProject.instance().cleared.connect(self._on_project_cleared)
+        # プロジェクトの開く・保存・クリア（closeEvent で外し、開き直すときに
+        # initialize_window_mode でつなぎ直す）
+        self._project_signals_connected = False
+        self._connect_project_signals()
         self._load_settings()
         self._restore_layer_combos_from_project()  # プロジェクト組み込み設定を優先適用
         # 起動時点で既存の解析結果を選択可能にする（呼ばないと解析番号コンボが
@@ -1482,6 +1608,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         self.lblLoadStatus = QtWidgets.QLabel("")
         self.lblLoadStatus.setStyleSheet("color:#555;font-size:8pt;")
+        # 1行目の空きいっぱいを使い、長い文は端を切る（文の長さで行＝右パネルの
+        # 最小幅を広げない）。全文はツールチップで見られるようにする。
+        self.lblLoadStatus.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                         QtWidgets.QSizePolicy.Policy.Preferred)
 
         # 解析番号セレクタ（解析データの表示管理 Row1）
         self.cmbAnalysisNumber = QtWidgets.QComboBox()
@@ -1715,12 +1845,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._cs_map_dem_path = ""
         self._dsm_path = ""
         self._partial_outside_warned = False   # reset when DEM changes
-        self._dem_loading = False
-        self._dem_load_cancel = False
-        self._dsm_loading = False
-        self._dsm_load_cancel = False
+        self._dem_loading = False   # DEM をワーカーで取得中（Browse が Cancel）
+        self._dsm_loading = False   # DSM をワーカーで取得中（DSM の Browse が Cancel）
         self._vs_export_dir = ""
-        self._vs_export_cancel = False
         self._vs_exporting = False
         self._vs_wodmi_opened = False
         self._vs_dem_codes = []   # VS LP/Grid 読込時のタイルコード（Ortho 範囲合わせ用）
@@ -1955,6 +2082,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         # ── 解析データの表示管理（プレビュー上部・2行）────────────────
         grpDisplayMgmt = QtWidgets.QGroupBox("Analysis Layer Display")
+        self._grpDisplayMgmt = grpDisplayMgmt  # 解析中は操作を止める
         dm_vlay = QtWidgets.QVBoxLayout(grpDisplayMgmt)
         dm_vlay.setContentsMargins(6, 2, 6, 4)
         dm_vlay.setSpacing(2)
@@ -1963,9 +2091,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         dm_row1.setSpacing(4)
         dm_row1.addWidget(self.cmbAnalysisNumber)
         dm_row1.addWidget(self.btnRefreshAnalysis)
+        # 選んだ解析をプロジェクトへ書き出すボタンは、選択欄・更新ボタンのすぐ右
+        dm_row1.addWidget(self.btnExport)
         dm_row1.addSpacing(20)
-        dm_row1.addWidget(self.lblLoadStatus)
-        dm_row1.addStretch(1)
+        dm_row1.addWidget(self.lblLoadStatus, 1)
         dm_vlay.addLayout(dm_row1)
         # Row2: 種別トグルボタン + 透過率
         dm_row2 = QtWidgets.QHBoxLayout()
@@ -2080,6 +2209,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         # --- 解析種別 ---
         grpTypes = QtWidgets.QGroupBox("Analysis Types")
+        self._grpAnalysisTypes = grpTypes  # 解析中は操作を止める
         types_lay = QtWidgets.QHBoxLayout(grpTypes)
         types_lay.setContentsMargins(6, 6, 6, 6)
         self.chkStability = QtWidgets.QCheckBox("Slope Stability")
@@ -2273,6 +2403,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         _al_lay.setSpacing(4)
         # 左カラム
         _al_left = QtWidgets.QWidget()
+        self._areaLimitControls = _al_left  # 解析中は操作を止める（Stop は別）
         _al_left_lay = QtWidgets.QHBoxLayout(_al_left)
         _al_left_lay.setContentsMargins(0, 0, 0, 0)
         _al_left_lay.setSpacing(4)
@@ -2330,24 +2461,27 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.chkOverwrite = QtWidgets.QCheckBox("Overwrite existing files")
         self.chkOverwrite.setChecked(True)
         out_lay.addWidget(self.chkOverwrite)
+        # 高さは他のボタン（Export 等）と同じ標準の高さにする
         self.btnRunAnalysis = QtWidgets.QPushButton("Run Analysis")
-        self.btnRunAnalysis.setMinimumHeight(32)
         out_lay.addWidget(self.btnRunAnalysis)
+        # 解析中だけ btnRunAnalysis と入れ替えて出す（_ButtonProgress）
+        self.progressAnalysis = QtWidgets.QProgressBar()
+        self.progressAnalysis.setRange(0, 100)
+        self.progressAnalysis.setVisible(False)
+        out_lay.addWidget(self.progressAnalysis)
         self.lblAnalysisStatus = QtWidgets.QLabel("Ready")
         self.lblAnalysisStatus.setWordWrap(True)
         out_lay.addWidget(self.lblAnalysisStatus)
-        self.progressAnalysis = QtWidgets.QProgressBar()
-        self.progressAnalysis.setRange(0, 0)
-        self.progressAnalysis.setVisible(False)
-        out_lay.addWidget(self.progressAnalysis)
         lay.addWidget(grpOut)
 
-        # --- エクスポート（未接続のプレースホルダー） ---
-        grpExport = QtWidgets.QGroupBox("Export")
-        export_lay = QtWidgets.QVBoxLayout(grpExport)
-        self.btnExport = QtWidgets.QPushButton("Export")
-        export_lay.addWidget(self.btnExport)
-        lay.addWidget(grpExport)
+        # --- エクスポート（選んだ解析のレイヤーをプロジェクトへ書き出す）---
+        # ボタンは右パネル上部（Analysis Layer Display）の1行目、選択欄・更新ボタンの右に置く
+        # （_build_extended_ui で配置）。ここでは作るだけ。
+        self.btnExport = QtWidgets.QPushButton("Export to Project")
+        self.btnExport.setToolTip(
+            "Add all layers of the selected analysis run to the project as a\n"
+            "separate group, with the current display settings. The group stays\n"
+            "after switching runs or closing the plugin.")
         lay.addStretch(1)
 
         # チェックボックス連動でパラメータタブを更新
@@ -2763,7 +2897,37 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._pending_apply_layer_display = False
         self._sync_main_to_preview(force=True)
 
+    def _connect_project_signals(self, include_main_canvas=False):
+        """プロジェクトの signal（と本体地図の移動）をつなぐ。つないだら True。
+
+        closeEvent でこれらを外すので、パネルを閉じて開き直したときは
+        つなぎ直さないとプロジェクトの切り替え等に反応しなくなる（解析中の
+        プロジェクト切り替えで中止されない、など）。二重につながないよう、
+        つないだかどうかを _project_signals_connected で覚えておく。
+        本体地図の extentsChanged は起動時は _setup_canvas_sync がつなぐので、
+        開き直したときだけ include_main_canvas=True で一緒につなぐ。
+        """
+        if self._project_signals_connected:
+            return False
+        proj = QgsProject.instance()
+        # プロジェクトを開いた後にもレイヤー選択を復元する
+        proj.readProject.connect(self._on_project_read)
+        # プロジェクト保存時に出力先ラベル更新 + レイヤー設定をプロジェクトへ書込
+        proj.projectSaved.connect(self._update_out_dir_label)
+        proj.projectSaved.connect(self._save_layer_settings_to_project)
+        # プロジェクトクリア時に地形グループ参照をリセット（解析中なら中止）
+        proj.cleared.connect(self._on_project_cleared)
+        if include_main_canvas and self.iface is not None:
+            self.iface.mapCanvas().extentsChanged.connect(self._on_main_canvas_changed)
+        self._project_signals_connected = True
+        return True
+
     def initialize_window_mode(self):
+        # パネルを閉じた後に開き直したとき: closeEvent で外した signal を
+        # つなぎ直し、閉じている間に開かれたかもしれないプロジェクトに合わせる
+        # （プロジェクトを開いたときと同じ処理）。起動直後はつないであるので何もしない。
+        if self._connect_project_signals(include_main_canvas=True):
+            self._on_project_read()
         standalone = True
         QSettings().setValue("forestry_operations_lite/standalone_window", True)
         with QSignalBlocker(self.chkStandaloneWindow):
@@ -4330,7 +4494,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             QtWidgets.QApplication.processEvents()
             if not self._confirm_high_risk_dissolve(run_key):
                 return "integrated_high_risk"
-            self.lblLoadStatus.setText("Preparing High Risk Areas...")
+            self._set_load_status("Preparing High Risk Areas...")
             QtWidgets.QApplication.processEvents()
             from .terrain import result_writer as rw
             dissolved = rw.dissolve_gpkg(
@@ -4338,7 +4502,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             if dissolved and os.path.exists(dissolved):
                 return "integrated_high_risk_dissolved"
         except Exception as exc:
-            self.lblLoadStatus.setText(
+            self._set_load_status(
                 f"High Risk dissolve failed; showing original: {exc}")
         return "integrated_high_risk"
 
@@ -4357,7 +4521,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         )
 
         if not analysis_number:
-            self.lblLoadStatus.setText("Select an analysis run")
+            self._set_load_status("Select an analysis run")
             with QSignalBlocker(btn):
                 btn.setChecked(False)
             self._preview_debug_log(
@@ -4398,7 +4562,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 next_state = -1
         else:
             if not available:
-                self.lblLoadStatus.setText("No file")
+                self._set_load_status("No file")
                 with QSignalBlocker(btn):
                     btn.setChecked(False)
                 self._preview_debug_log(
@@ -4425,7 +4589,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             available=available,
         )
         if next_state >= n or (next_state != -1 and not available):
-            self.lblLoadStatus.setText("No file")
+            self._set_load_status("No file")
             with QSignalBlocker(btn):
                 btn.setChecked(current != -1)
             self._preview_debug_log(
@@ -4465,7 +4629,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 btn.setChecked(False)
                 btn.setText(base_label)
                 btn.setStyleSheet(self._BTN_STYLE_NORMAL)
-            self.lblLoadStatus.setText("")
+            self._set_load_status("")
             # 流量 OFF 時はバッファ層も非表示（state は保持）
             if key == "flow":
                 removed_buffer_ids = []
@@ -4546,13 +4710,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self._zoom_preview_to_layer_if_needed(lyr)
             self._zoom_preview_to_analysis_extent_if_available()
             status = f"Showing {label} ({next_state + 1}/{n})." if n > 1 else f"Showing {label}."
-            self.lblLoadStatus.setText(status)
+            self._set_load_status(status)
             # 流量レイヤー切替後にバッファ状態を引き継ぐ
             if key == "flow":
                 self._sync_flow_aux_controls()
                 self._apply_flow_buffer()
         else:
-            self.lblLoadStatus.setText(f"Load error: {label}")
+            self._set_load_status(f"Load error: {label}")
             self._terrain_cycle_state[key] = current  # 状態を戻す
             self._preview_debug_log(
                 "cycle_terrain_layer.error",
@@ -4588,7 +4752,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         if checked:
             analysis_number = self.cmbAnalysisNumber.currentData()
             if not analysis_number:
-                self.lblLoadStatus.setText("Select an analysis run")
+                self._set_load_status("Select an analysis run")
                 btn_map = {
                     "stability":  self.chkLoadStability,
                     "valley":     self.chkLoadValley,
@@ -4651,9 +4815,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     status = f"Showing {names} ({n_added}/{n_total})."
                 else:
                     status = f"Showing {names}."
-                self.lblLoadStatus.setText(status)
+                self._set_load_status(status)
             else:
-                self.lblLoadStatus.setText("No file")
+                self._set_load_status("No file")
         else:
             ids = self._loaded_terrain_layers.pop(key, [])
             proj = QgsProject.instance()
@@ -4661,7 +4825,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 if proj.mapLayer(lid):
                     proj.removeMapLayer(lid)
             self._refresh_preview_canvas()
-            self.lblLoadStatus.setText("")
+            self._set_load_status("")
             self._zoom_preview_to_analysis_extent_if_available()
 
     def _clear_dem_selection(self, clear_dsm=False, dem_info="Not set"):
@@ -4692,9 +4856,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     def _on_browse_dem(self):
         if self._dem_loading:
-            self._dem_load_cancel = True
-            self.btnBrowseDem.setEnabled(False)
-            self.lblDemInfo.setText("Cancelling…")
+            # 取得中は Cancel ボタン: ワーカーを止める
+            self._cancel_dem_job()
             return
         if self._dem_path:
             # クリア
@@ -4730,11 +4893,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.btnBrowseDem.setText("Clear")
                 self.btnBrowseDsm.setEnabled(False)
                 self.lblDsmInfo.setText("Auto: VS LP → DSM (fetching after DEM…)")
-                if not self._load_vs_lp_grid():  # auto_dsm=True (default)
-                    self._clear_dem_selection(
-                        clear_dsm=True,
-                        dem_info=self.lblDemInfo.text(),
-                    )
+                # ワーカーで取得（auto_dsm=True: DEM の後に DSM も）。すぐ戻る。
+                self._load_vs_lp_grid(on_done=self._on_browse_dem_fetch_done)
             elif path == DemBrowserDialog.NAGANO_SABO_DEM_SENTINEL:
                 # 長野県 砂防課 R3-4 DEM: 部分取得(HTTP Range)でタイルを取得する（nagano_sabo.py参照）。
                 # DSMはDCHM（樹冠高）をDEMに加算して自動生成する（nagano_dchm.py参照）ため
@@ -4745,11 +4905,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.btnBrowseDem.setText("Clear")
                 self.btnBrowseDsm.setEnabled(False)
                 self.lblDsmInfo.setText("Auto: DEM+DCHM → DSM (fetching after DEM…)")
-                if not self._load_nagano_sabo_dem():  # auto_dsm=True (default)
-                    self._clear_dem_selection(
-                        clear_dsm=True,
-                        dem_info=self.lblDemInfo.text(),
-                    )
+                # ワーカーで取得（auto_dsm=True: DEM の後に DCHM → DSM も）。すぐ戻る。
+                self._load_nagano_sabo_dem(on_done=self._on_browse_dem_fetch_done)
             elif path == DemBrowserDialog.NAGANO_RINMU_DEM_SENTINEL:
                 # 長野県 林務部 DEM: DSM/DCHM相当のデータが無いため btnBrowseDsm を無効化。
                 # 部分取得(HTTP Range)で実際にタイルを取得する（nagano_rinmu.py参照）。
@@ -4759,11 +4916,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.btnBrowseDem.setText("Clear")
                 self.btnBrowseDsm.setEnabled(False)
                 self.lblDsmInfo.setText("Not available (Nagano DEM has no DSM)")
-                if not self._load_nagano_rinmu_dem():
-                    self._clear_dem_selection(
-                        clear_dsm=True,
-                        dem_info=self.lblDemInfo.text(),
-                    )
+                # ワーカーで取得。すぐ戻る。
+                self._load_nagano_rinmu_dem(on_done=self._on_browse_dem_fetch_done)
             elif path in _tile_labels:
                 display, tooltip = _tile_labels[path]
                 self._dem_path = path
@@ -4783,6 +4937,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 if not dlg.filter_active():
                     self._move_preview_to_dem_extent(path)
                 self._load_dem_info()
+        self._update_vs_export_buttons()
+        self._update_cs_map_export_state()
+
+    def _on_browse_dem_fetch_done(self, ok):
+        """DEM の欄から選んだ自動取得系ソース（VS・長野）の取得が終わったとき。
+        取れなかったら選択を取り消す（理由は lblDemInfo に残す）。"""
+        if not ok:
+            self._clear_dem_selection(
+                clear_dsm=True,
+                dem_info=self.lblDemInfo.text(),
+            )
         self._update_vs_export_buttons()
         self._update_cs_map_export_state()
 
@@ -4809,15 +4974,18 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         except Exception:
             return src_path
 
-    def _load_gsi_dem(self, sentinel=None, update_cs_map_source=True):
+    def _load_gsi_dem(self, sentinel=None, update_cs_map_source=True, on_done=None,
+                      mirror_label=None):
         """国土地理院タイルをキャンバス範囲で取得し GeoTIFF に保存後 DEMLoader で読み込む。
         sentinel で DEM1A/DEM5A/DEM10B を選択（省略時は _dem_path から判定）。
+
+        取得はワーカースレッドで行うので、この関数はすぐ戻る。終わったら
+        on_done(ok) を呼ぶ（ok=取得できて _terrain_loader を差し替えたか）。
+        取得を始めずに戻る場合（プレビューに範囲が無い）も on_done(False) を呼ぶ。
+        mirror_label: 状況の文言を lblDemInfo に加えて出すラベル（解析タブ等）。
         """
-        from .terrain.dem_loader import GSITileDEMLoader, DEMLoader, save_as_geotiff
         from qgis.core import (QgsCoordinateReferenceSystem,
                                QgsCoordinateTransform, QgsProject)
-        import numpy as _np
-        import datetime as _dt
 
         if sentinel is None:
             sentinel = getattr(self, "_dem_path", DemBrowserDialog.GSI_DEM5A_SENTINEL)
@@ -4849,6 +5017,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         if self.preview_canvas is None or self.preview_canvas.extent().isEmpty():
             self.lblDemInfo.setText("⚠ No extent on preview canvas. Display a map and try again.")
+            if on_done is not None:
+                on_done(False)
             return
 
         canvas_ext = self.preview_canvas.extent()
@@ -4864,63 +5034,35 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         )
         _fetch_msg = "Fetching Terrarium elevation tiles..." if _is_terrarium else "Fetching GSI elevation tiles..."
         self.lblDemInfo.setText(_fetch_msg)
-        self._dem_loading = True
-        self._dem_load_cancel = False
-        self.btnBrowseDem.setText("Cancel")
-        QtWidgets.QApplication.processEvents()
 
-        gsi_loader = GSITileDEMLoader()
-        try:
-            gsi_loader.fetch_for_extent(
-                ext84.xMinimum(), ext84.yMinimum(),
-                ext84.xMaximum(), ext84.yMaximum(),
-                sources=sources,
-                cancel_cb=lambda: self._dem_load_cancel,
-            )
-        except MemoryError as e:
-            self.lblDemInfo.setText(f"⚠ {e}")
-            return
-        finally:
-            self._dem_loading = False
-            self.btnBrowseDem.setEnabled(True)
-            self.btnBrowseDem.setText("Clear" if self._dem_path else "Browse")
-            self._update_cs_map_export_state()
-
-        if getattr(gsi_loader, "_cancelled", False):
-            self.lblDemInfo.setText("Cancelled")
-            return
-
-        if gsi_loader.data is None or _np.all(_np.isnan(gsi_loader.data)):
-            errs = getattr(gsi_loader, "last_errors", [])
-            detail = errs[0] if errs else "out of range or connection error"
-            self.lblDemInfo.setText(f"⚠ Tile fetch failed: {detail}")
-            return
-
-        # GeoTIFF として保存
+        # 取得・GeoTIFF 化・UTM への投影はワーカーで行い、終わったら
+        # _finish_gsi_dem（メインスレッド）で画面へ反映して on_done を呼ぶ。
+        from .dem_worker import fetch_tile_dem
         out_dir = os.path.join(self._terrain_output_dir(), "dem")
-        os.makedirs(out_dir, exist_ok=True)
-        ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-        tif_path = os.path.join(out_dir, f"{fname_prefix}_{ts}.tif")
+        _ext84 = (ext84.xMinimum(), ext84.yMinimum(), ext84.xMaximum(), ext84.yMaximum())
+        _reproject = self._reproject_to_utm
 
-        self.lblDemInfo.setText("Converting to GeoTIFF...")
-        QtWidgets.QApplication.processEvents()
+        def _job(ctx):
+            return fetch_tile_dem(ctx, sources, _ext84, out_dir, fname_prefix,
+                                  _fetch_msg, _reproject)
 
-        try:
-            save_as_geotiff(gsi_loader, tif_path)
-        except Exception as e:
-            self.lblDemInfo.setText(f"⚠ GeoTIFF save error: {e}")
-            return
+        def _finish(result, cancelled, error):
+            ok = self._finish_gsi_dem(result, cancelled, error, update_cs_map_source)
+            if on_done is not None:
+                on_done(ok)
 
-        # EPSG:4326 → UTM 自動変換（メートル単位で解析するため）
-        centre_lon = (ext84.xMinimum() + ext84.xMaximum()) / 2
-        centre_lat = (ext84.yMinimum() + ext84.yMaximum()) / 2
-        self.lblDemInfo.setText("Reprojecting to UTM...")
-        QtWidgets.QApplication.processEvents()
-        tif_path = self._reproject_to_utm(tif_path, centre_lon, centre_lat)
+        self._start_dem_job(_job, _finish, mirror_label=mirror_label)
 
-        # 標準 DEMLoader で読み直す
-        dem_loader = DEMLoader()
-        dem_loader.load(tif_path)
+    def _finish_gsi_dem(self, result, cancelled, error, update_cs_map_source):
+        """タイル取得の結果を画面へ反映する（メインスレッド）。成功なら True。"""
+        if cancelled:
+            self.lblDemInfo.setText("Cancelled")
+            return False
+        if error:
+            self.lblDemInfo.setText(error)
+            return False
+        dem_loader = result["loader"]
+        tif_path = result["tif_path"]
         self._terrain_loader = dem_loader
         self._dem_actual_path = tif_path  # 実ファイルパス（params.json 用）
         if update_cs_map_source:
@@ -4932,20 +5074,32 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.txtDemPath.setToolTip(tif_path)
         self.lblDemInfo.setText(dem_loader.info_text())
         self._update_resample_indicator()
+        return True
 
-    def _load_vs_lp_grid(self, auto_dsm=True, update_cs_map_source=True, confirm=True):
+    def _load_vs_lp_grid(self, auto_dsm=True, update_cs_map_source=True, confirm=True,
+                         on_done=None, mirror_label=None):
         """Virtual Shizuoka LP/Grid タイルをキャンバス範囲で S3 取得し DEM としてロード。
         auto_dsm=True のとき、DEM 成功後に LP/Ground DSM を自動取得する（初回選択時）。
-        解析時の再取得など DSM 不要の場合は auto_dsm=False を指定する。"""
-        from .vs_lp import resolve_years, tiles_for_extent, download_grid_tif, merge_tifs
-        from .terrain.dem_loader import DEMLoader
+        解析時の再取得など DSM 不要の場合は auto_dsm=False を指定する。
+
+        取得はワーカースレッドで行うので、この関数はすぐ戻る。終わったら
+        （auto_dsm のときは DSM まで終わったら）on_done(ok) を呼ぶ。
+        ok は DEM を取得できて _terrain_loader を差し替えたか（DSM の成否は含まない）。
+        取得を始めずに戻る場合（範囲が無い・タイルが無い・確認で No）も on_done(False)。
+        mirror_label: 状況の文言を lblDemInfo に加えて出すラベル（解析タブ等）。
+        """
+        from .vs_lp import tiles_for_extent
         from qgis.core import (QgsCoordinateReferenceSystem,
                                QgsCoordinateTransform, QgsProject)
-        import datetime as _dt
+
+        def _done(ok):
+            if on_done is not None:
+                on_done(ok)
 
         if self.preview_canvas is None or self.preview_canvas.extent().isEmpty():
             self.lblDemInfo.setText("⚠ No extent on preview canvas.")
-            return False
+            _done(False)
+            return
 
         canvas_ext = self.preview_canvas.extent()
         canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
@@ -4959,7 +5113,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         )
         if not codes:
             self.lblDemInfo.setText("⚠ No VS LP tiles for this area.")
-            return False
+            _done(False)
+            return
 
         if confirm:
             reply = QtWidgets.QMessageBox.question(
@@ -4973,148 +5128,330 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             )
             if reply != QtWidgets.QMessageBox.StandardButton.Yes:
                 self.lblDemInfo.setText("Cancelled")
-                return False
+                _done(False)
+                return
 
         self.lblDemInfo.setText(f"Resolving {len(codes)} tile(s)...")
-        self._dem_loading = True
-        self._dem_load_cancel = False
-        self.btnBrowseDem.setText("Cancel")
-        QtWidgets.QApplication.processEvents()
+        from .dem_worker import fetch_vs_grid
+        out_dir = os.path.join(self._terrain_output_dir(), "vs_lp_grid")
 
-        try:
-            def _prog(done, total):
-                self.lblDemInfo.setText(f"Checking S3… {done}/{total}")
-                QtWidgets.QApplication.processEvents()
+        def _job(ctx):
+            return fetch_vs_grid(ctx, codes, out_dir)
 
-            resolved = resolve_years(codes, progress_cb=_prog)
-            if not resolved:
-                self.lblDemInfo.setText("⚠ No VS LP Grid tiles available for this area.")
-                return False
-
-            out_dir = os.path.join(self._terrain_output_dir(), "vs_lp_grid")
-            os.makedirs(out_dir, exist_ok=True)
-
-            tif_paths = []
-            errors = []
-            for i, (code, year) in enumerate(resolved.items()):
-                if self._dem_load_cancel:
-                    self.lblDemInfo.setText("Cancelled")
-                    return False
-                self.lblDemInfo.setText(f"Downloading {i + 1}/{len(resolved)}…")
-                QtWidgets.QApplication.processEvents()
-
-                def _grid_progress(downloaded, total, _i=i):
-                    if total > 0:
-                        self.lblDemInfo.setText(
-                            f"Downloading {_i + 1}/{len(resolved)}: "
-                            f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB…"
-                        )
-                    else:
-                        self.lblDemInfo.setText(
-                            f"Downloading {_i + 1}/{len(resolved)}: {downloaded / 1e6:.0f}MB…"
-                        )
-                    QtWidgets.QApplication.processEvents()
-
-                try:
-                    tif_paths.append(download_grid_tif(
-                        code, year, out_dir, cancel_cb=self._dem_cancel_check,
-                        progress_cb=_grid_progress,
-                    ))
-                except Exception as e:
-                    errors.append(f"{code}: {e}")
-
-            if not tif_paths:
-                self.lblDemInfo.setText("⚠ All tile downloads failed.\n" + "\n".join(errors[:3]))
-                return False
-
-            self.lblDemInfo.setText("Processing…")
-            QtWidgets.QApplication.processEvents()
-
-            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-            if len(tif_paths) == 1:
-                tif_path = tif_paths[0]
-            else:
-                tif_path = os.path.join(out_dir, f"vs_grid_{ts}.tif")
-                merge_tifs(tif_paths, tif_path)
-
-            dem_loader = DEMLoader()
-            dem_loader.load(tif_path)
-            self._terrain_loader = dem_loader
-            self._dem_actual_path = tif_path
-            if update_cs_map_source:
-                self._cs_map_dem_path = tif_path
-            self.txtDemPath.setToolTip(tif_path)
-            self.lblDemInfo.setText(
-                f"{dem_loader.info_text()}  [{len(resolved)} tile(s), "
-                f"year(s): {', '.join(str(y) for y in sorted(set(resolved.values())))}]"
-            )
-            self._vs_dem_codes = list(resolved.keys())
-            self._partial_outside_warned = False
-            self._update_resample_indicator()
-
+        def _finish(result, cancelled, error):
+            ok = self._finish_vs_lp_grid(result, cancelled, error, update_cs_map_source)
             # ── 自動 DSM（VS LP/Ground）──────────────────────────────
-            if auto_dsm and not self._dem_load_cancel:
+            if ok and auto_dsm:
                 self._dsm_path = DemBrowserDialog.VS_LP_GROUND_SENTINEL
                 self.txtDsmPath.setText("VS LP → DSM (0.5m)")
                 self.txtDsmPath.setToolTip(
                     "Virtual Shizuoka LP → DSM — LP/Original (2021中西部・2025) or LP/Ground all-return (others)"
                 )
                 self.btnBrowseDsm.setText("")
-                self._load_vs_lp_ground(auto_mode=True)
-                # 取得失敗・キャンセル時は DSM パスをクリア
-                if not getattr(self, "_dsm_loader", None):
-                    self._dsm_path = ""
-                    self.txtDsmPath.clear()
-                    self.txtDsmPath.setToolTip("")
 
-            self._update_vs_export_buttons()
-            return True
-        finally:
+                def _after_dsm(_dsm_ok):
+                    # 取得失敗・キャンセル時は DSM パスをクリア
+                    if not getattr(self, "_dsm_loader", None):
+                        self._dsm_path = ""
+                        self.txtDsmPath.clear()
+                        self.txtDsmPath.setToolTip("")
+                    self._update_vs_export_buttons()
+                    _done(True)
+
+                self._load_vs_lp_ground(auto_mode=True, on_done=_after_dsm,
+                                        mirror_label=mirror_label)
+                return
+            if ok:
+                self._update_vs_export_buttons()
+            _done(ok)
+
+        self._start_dem_job(_job, _finish, mirror_label=mirror_label)
+
+    def _finish_vs_lp_grid(self, result, cancelled, error, update_cs_map_source):
+        """VS LP/Grid の取得結果を画面へ反映する（メインスレッド）。成功なら True。"""
+        if cancelled:
+            self.lblDemInfo.setText("Cancelled")
+            return False
+        if error:
+            self.lblDemInfo.setText(error)
+            return False
+        dem_loader = result["loader"]
+        tif_path = result["tif_path"]
+        resolved = result["resolved"]
+        self._terrain_loader = dem_loader
+        self._dem_actual_path = tif_path
+        if update_cs_map_source:
+            self._cs_map_dem_path = tif_path
+        self.txtDemPath.setToolTip(tif_path)
+        self.lblDemInfo.setText(
+            f"{dem_loader.info_text()}  [{len(resolved)} tile(s), "
+            f"year(s): {', '.join(str(y) for y in sorted(set(resolved.values())))}]"
+        )
+        self._vs_dem_codes = list(resolved.keys())
+        self._partial_outside_warned = False
+        self._update_resample_indicator()
+        return True
+
+    # ── DEM 取得のワーカー（dem_worker.DemJobWorker）──────────────────────
+    # 取得中は DEM（または DSM）の Browse ボタンが Cancel になる（今までどおり）。
+    # 結果とぶつかる操作（もう一方の Browse・CS Map / VS の書き出し・
+    # Run Analysis）は止める。
+
+    def _start_dem_job(self, job, on_finish, mirror_label=None, button="dem", label=None):
+        """job をワーカーで始める。終わったら on_finish(result, cancelled, error)
+        をメインスレッドで呼ぶ。中止・エラー時は job が作ったファイルを消す。
+
+        button: Cancel にするボタン（"dem"=btnBrowseDem / "dsm"=btnBrowseDsm）
+        label : 状況の文言を出すラベル（省略時は button 側の Info ラベル）
+        """
+        from .dem_worker import DemJobWorker
+        if label is None:
+            label = self.lblDsmInfo if button == "dsm" else self.lblDemInfo
+        worker = DemJobWorker(job, parent=self)
+        self._dem_worker = worker
+        self._dem_job_ctx = {
+            "on_finish": on_finish,
+            "mirror": mirror_label,
+            "button": button,
+            "label": label,
+            "project_changed": False,
+        }
+        if button == "dsm":
+            self._dsm_loading = True
+        else:
+            self._dem_loading = True
+        self._set_dem_busy(True, button)
+        worker.message.connect(self._on_dem_job_message)
+        worker.done.connect(self._on_dem_job_done)
+        worker.start()
+
+    def _set_dem_busy(self, busy, button="dem"):
+        """取得中の画面の状態。button 側の Browse を Cancel にし、もう一方は止める。"""
+        cancel_btn = self.btnBrowseDsm if button == "dsm" else self.btnBrowseDem
+        other_btn = self.btnBrowseDem if button == "dsm" else self.btnBrowseDsm
+        if busy:
+            self._other_browse_enabled_before = other_btn.isEnabled()
+            other_btn.setEnabled(False)
+            cancel_btn.setText("Cancel")
+            cancel_btn.setEnabled(True)
+        else:
+            other_btn.setEnabled(getattr(self, "_other_browse_enabled_before", True))
+            cancel_btn.setEnabled(True)
+            if button == "dsm":
+                cancel_btn.setText("Clear" if self._dsm_path else "Browse")
+            else:
+                cancel_btn.setText("Clear" if self._dem_path else "Browse")
+        if self._analysis_worker is None:
+            self.btnRunAnalysis.setEnabled(not busy)
+        self._update_cs_map_export_state()
+        self._update_vs_export_buttons()
+
+    def _on_dem_job_message(self, text):
+        ctx = self._dem_job_ctx
+        if ctx is None:
+            return
+        ctx["label"].setText(text)
+        if ctx["mirror"] is not None:
+            ctx["mirror"].setText(text)
+
+    def _on_dem_job_done(self, result, cancelled, error):
+        worker = self._dem_worker
+        ctx = self._dem_job_ctx
+        self._dem_worker = None
+        self._dem_job_ctx = None
+        files = []
+        if worker is not None:
+            files = worker.new_files()
+            worker.deleteLater()
+        if ctx is None:
+            return
+        if ctx["project_changed"]:
+            # 取得中にプロジェクトが切り替わった: 中止として扱い、結果は使わない
+            result, cancelled, error = None, True, ""
+        if cancelled or error:
+            for f in files:
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+        if ctx["button"] == "dsm":
+            self._dsm_loading = False
+        else:
             self._dem_loading = False
-            self.btnBrowseDem.setEnabled(True)
-            self.btnBrowseDem.setText("Clear" if self._dem_path else "Browse")
-            self._update_cs_map_export_state()
+        self._set_dem_busy(False, ctx["button"])
+        ctx["on_finish"](result, cancelled, error)
+        self._update_vs_export_buttons()
+        self._update_cs_map_export_state()
 
-    def _dem_cancel_check(self):
-        """DEM取得系のcancel_cbとして使う（VS LP/Grid・長野DEM/DCHM共通）。
-        processEvents()でUIイベントを処理してからキャンセルフラグを返す。
-        これが無いと、チャンク読み込みループの間Qtのイベントループが回らず、
-        Cancelボタンのクリック自体が処理されないままダウンロード完了まで
-        反応しなくなる。"""
-        QtWidgets.QApplication.processEvents()
-        return self._dem_load_cancel
+    def _cancel_dem_job(self):
+        worker = self._dem_worker
+        ctx = self._dem_job_ctx
+        if worker is not None and worker.isRunning() and ctx is not None:
+            worker.cancel()
+            (self.btnBrowseDsm if ctx["button"] == "dsm" else self.btnBrowseDem).setEnabled(False)
+            ctx["label"].setText("Cancelling…")
+            return True
+        return False
 
-    def _load_nagano_sabo_dem(self, update_cs_map_source=True, auto_dsm=True, confirm=True):
-        """長野県砂防課 R3-4 0.5mメッシュDEMをキャンバス範囲で取得し DEM としてロード。
-        タイルは市町村単位のzipから HTTP Range で部分取得する（zip全体は落とさない）。
-        auto_dsm=True のとき、DEM取得後に DCHM（樹冠高）を同じタイル範囲で取得し
-        DSM = DEM + DCHM として自動生成する。
-        confirm=True のとき、範囲によって時間がかかる旨の確認ダイアログを出す
-        （解析実行時の再取得(confirm=False)では毎回は出さない）。"""
-        from .nagano_sabo import tiles_for_extent, download_tile_tif
-        from .vs_lp import merge_tifs
-        from .terrain.dem_loader import DEMLoader
+    def _shutdown_dem_job(self):
+        """パネルを閉じる・プラグインを外すとき: DEM 取得を中止して終わるのを待つ。"""
+        worker = self._dem_worker
+        ctx = self._dem_job_ctx
+        if worker is None:
+            return
+        try:
+            worker.done.disconnect(self._on_dem_job_done)
+        except (TypeError, RuntimeError):
+            pass
+        worker.cancel()
+        if worker.isRunning():
+            worker.wait(30000)
+        for f in worker.new_files():
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        self._dem_worker = None
+        self._dem_job_ctx = None
+        self._dem_loading = False
+        self._dsm_loading = False
+        # 取得中に止めた部品を戻す（開き直したときに押せないまま残らないように）
+        button = ctx["button"] if ctx is not None else "dem"
+        if ctx is not None:
+            ctx["label"].setText("Cancelled")
+        self._set_dem_busy(False, button)
+
+    # ── 書き出し（CS Map / VS）のワーカー ───────────────────────────────
+    # DEM 取得（_dem_worker）とは別に、name ごとに1つずつ動かす。
+
+    def _start_side_job(self, name, job, on_message, on_finish, on_abort=None):
+        """job をワーカーで始める。終わったら on_finish(result, cancelled, error)。
+        中止・エラー時は job が作ったファイルを消す。on_abort はパネルを閉じる
+        ときに画面の状態を戻すために呼ぶ（on_finish は呼ばない）。"""
+        from .dem_worker import DemJobWorker
+        worker = DemJobWorker(job, parent=self)
+        self._side_jobs[name] = {
+            "worker": worker,
+            "on_finish": on_finish,
+            "on_abort": on_abort,
+            "project_changed": False,
+        }
+        worker.message.connect(on_message)
+        worker.done.connect(
+            lambda r, c, e, _n=name: self._on_side_job_done(_n, r, c, e))
+        worker.start()
+
+    def _on_side_job_done(self, name, result, cancelled, error):
+        ctx = self._side_jobs.pop(name, None)
+        if ctx is None:
+            return  # パネルを閉じるときに片付け済み
+        worker = ctx["worker"]
+        files = worker.new_files()
+        worker.deleteLater()
+        if ctx["project_changed"]:
+            # 書き出し中にプロジェクトが切り替わった: 中止として扱う
+            result, cancelled, error = None, True, ""
+        if cancelled or error:
+            for f in files:
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+        ctx["on_finish"](result, cancelled, error)
+
+    def _cancel_side_job(self, name):
+        ctx = self._side_jobs.get(name)
+        if ctx is not None and ctx["worker"].isRunning():
+            ctx["worker"].cancel()
+            return True
+        return False
+
+    def _shutdown_side_jobs(self):
+        """パネルを閉じる・プラグインを外すとき: 書き出しを中止して終わるのを待つ。"""
+        for name in list(self._side_jobs):
+            ctx = self._side_jobs.pop(name)
+            worker = ctx["worker"]
+            worker.cancel()
+            if worker.isRunning():
+                worker.wait(30000)
+            for f in worker.new_files():
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+            if ctx["on_abort"] is not None:
+                ctx["on_abort"]()
+
+    def _nagano_codes_for_canvas(self, tiles_for_extent):
+        """プレビュー範囲（EPSG:6676 に変換）に掛かる長野のタイルコード。範囲が無ければ None。"""
         from qgis.core import (QgsCoordinateReferenceSystem,
                                QgsCoordinateTransform, QgsProject)
-        import datetime as _dt
-
         if self.preview_canvas is None or self.preview_canvas.extent().isEmpty():
-            self.lblDemInfo.setText("⚠ No extent on preview canvas.")
-            return False
-
+            return None
         canvas_ext = self.preview_canvas.extent()
         canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
         crs_6676 = QgsCoordinateReferenceSystem("EPSG:6676")
         xform = QgsCoordinateTransform(canvas_crs, crs_6676, QgsProject.instance())
         ext6 = xform.transformBoundingBox(canvas_ext)
-
-        codes = tiles_for_extent(
+        return tiles_for_extent(
             ext6.xMinimum(), ext6.yMinimum(),
             ext6.xMaximum(), ext6.yMaximum(),
         )
+
+    def _finish_nagano_dem(self, result, cancelled, error, update_cs_map_source):
+        """長野 DEM（砂防課・林務部）の取得結果を画面へ反映する。成功なら True。"""
+        if cancelled:
+            self.lblDemInfo.setText("Cancelled")
+            return False
+        if error:
+            self.lblDemInfo.setText(error)
+            return False
+        dem_loader = result["loader"]
+        tif_path = result["tif_path"]
+        missing = result["missing"]
+        self._terrain_loader = dem_loader
+        self._dem_actual_path = tif_path
+        if update_cs_map_source:
+            self._cs_map_dem_path = tif_path
+        self.txtDemPath.setToolTip(tif_path)
+        info = f"{dem_loader.info_text()}  [{result['n_tiles']} tile(s)]"
+        if missing:
+            info += f"  ⚠ {len(missing)} tile(s) not found: {', '.join(missing[:5])}"
+        self.lblDemInfo.setText(info)
+        self._partial_outside_warned = False
+        self._update_resample_indicator()
+        return True
+
+    def _load_nagano_sabo_dem(self, update_cs_map_source=True, auto_dsm=True, confirm=True,
+                              on_done=None, mirror_label=None):
+        """長野県砂防課 R3-4 0.5mメッシュDEMをキャンバス範囲で取得し DEM としてロード。
+        タイルは市町村単位のzipから HTTP Range で部分取得する（zip全体は落とさない）。
+        auto_dsm=True のとき、DEM取得後に DCHM（樹冠高）を同じタイル範囲で取得し
+        DSM = DEM + DCHM として自動生成する。
+        confirm=True のとき、範囲によって時間がかかる旨の確認ダイアログを出す
+        （解析実行時の再取得(confirm=False)では毎回は出さない）。
+
+        取得はワーカースレッドで行うので、この関数はすぐ戻る。終わったら
+        （auto_dsm のときは DSM まで終わったら）on_done(ok) を呼ぶ。
+        ok は DEM を取得できて _terrain_loader を差し替えたか。DCHM の段階で
+        Cancel された場合は、今までどおり DEM の選択ごと取り消して ok=False。
+        取得を始めずに戻る場合（範囲・タイルが無い・確認で No）も on_done(False)。
+        """
+        from .nagano_sabo import tiles_for_extent, download_tile_tif
+
+        def _done(ok):
+            if on_done is not None:
+                on_done(ok)
+
+        codes = self._nagano_codes_for_canvas(tiles_for_extent)
+        if codes is None:
+            self.lblDemInfo.setText("⚠ No extent on preview canvas.")
+            _done(False)
+            return
         if not codes:
             self.lblDemInfo.setText("⚠ No Nagano DEM tiles for this area.")
-            return False
+            _done(False)
+            return
 
         if confirm:
             reply = QtWidgets.QMessageBox.question(
@@ -5128,111 +5465,53 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             )
             if reply != QtWidgets.QMessageBox.StandardButton.Yes:
                 self.lblDemInfo.setText("Cancelled")
-                return False
+                _done(False)
+                return
 
-        self._dem_loading = True
-        self._dem_load_cancel = False
-        self.btnBrowseDem.setText("Cancel")
-        QtWidgets.QApplication.processEvents()
+        from .dem_worker import fetch_nagano_tiles
+        out_dir = os.path.join(self._terrain_output_dir(), "nagano_sabo_dem")
 
-        try:
-            out_dir = os.path.join(self._terrain_output_dir(), "nagano_sabo_dem")
-            os.makedirs(out_dir, exist_ok=True)
+        def _job(ctx):
+            return fetch_nagano_tiles(ctx, codes, out_dir, download_tile_tif, "nagano_sabo")
 
-            tif_paths = []
-            missing = []
-            for i, code in enumerate(codes):
-                if self._dem_load_cancel:
-                    self.lblDemInfo.setText("Cancelled")
-                    return False
-
-                def _dem_progress(phase, city, detail, _i=i, _code=code):
-                    if phase == "checking":
-                        self.lblDemInfo.setText(
-                            f"Tile {_i + 1}/{len(codes)} ({_code}): checking {city}…"
-                        )
-                    else:
-                        downloaded, total = detail
-                        self.lblDemInfo.setText(
-                            f"Tile {_i + 1}/{len(codes)} ({_code}): downloading "
-                            f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB from {city}…"
-                        )
-                    QtWidgets.QApplication.processEvents()
-
-                self.lblDemInfo.setText(f"Tile {i + 1}/{len(codes)} ({code}): locating…")
-                QtWidgets.QApplication.processEvents()
-                path = download_tile_tif(
-                    code, out_dir,
-                    cancel_cb=self._dem_cancel_check,
-                    progress_cb=_dem_progress,
-                )
-                if path:
-                    tif_paths.append(path)
-                else:
-                    missing.append(code)
-
-            if not tif_paths:
-                self.lblDemInfo.setText("⚠ No tiles could be fetched for this area.")
-                return False
-
-            self.lblDemInfo.setText("Processing…")
-            QtWidgets.QApplication.processEvents()
-
-            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-            if len(tif_paths) == 1:
-                tif_path = tif_paths[0]
-            else:
-                tif_path = os.path.join(out_dir, f"nagano_sabo_{ts}.tif")
-                merge_tifs(tif_paths, tif_path)
-
-            dem_loader = DEMLoader()
-            dem_loader.load(tif_path)
-            self._terrain_loader = dem_loader
-            self._dem_actual_path = tif_path
-            if update_cs_map_source:
-                self._cs_map_dem_path = tif_path
-            self.txtDemPath.setToolTip(tif_path)
-            info = f"{dem_loader.info_text()}  [{len(tif_paths)} tile(s)]"
-            if missing:
-                info += f"  ⚠ {len(missing)} tile(s) not found: {', '.join(missing[:5])}"
-            self.lblDemInfo.setText(info)
-            self._partial_outside_warned = False
-            self._update_resample_indicator()
-
+        def _finish(result, cancelled, error):
+            ok = self._finish_nagano_dem(result, cancelled, error, update_cs_map_source)
             # ── 自動 DSM（DCHM を DEM に加算）──────────────────────────
-            if auto_dsm and not self._dem_load_cancel:
+            if ok and auto_dsm:
                 self._dsm_path = DemBrowserDialog.NAGANO_SABO_DSM_SENTINEL
                 self.txtDsmPath.setText("Nagano DEM+DCHM → DSM")
                 self.txtDsmPath.setToolTip("DSM = DEM + DCHM (canopy height, includes buildings etc.)")
                 self.btnBrowseDsm.setText("")
-                dsm_result = self._compute_nagano_sabo_dsm(codes, tif_path)
-                if dsm_result == "cancel":
-                    self._clear_dem_selection(clear_dsm=True, dem_info="Cancelled")
-                    return False
-                if not getattr(self, "_dsm_loader", None):
-                    self._dsm_path = ""
-                    self.txtDsmPath.clear()
-                    self.txtDsmPath.setToolTip("")
 
-            self._update_vs_export_buttons()
-            return True
-        finally:
-            self._dem_loading = False
-            self.btnBrowseDem.setEnabled(True)
-            self.btnBrowseDem.setText("Clear" if self._dem_path else "Browse")
-            self._update_cs_map_export_state()
+                def _after_dsm(status):
+                    if status == "cancel":
+                        self._clear_dem_selection(clear_dsm=True, dem_info="Cancelled")
+                        self._update_vs_export_buttons()
+                        _done(False)
+                        return
+                    if not getattr(self, "_dsm_loader", None):
+                        self._dsm_path = ""
+                        self.txtDsmPath.clear()
+                        self.txtDsmPath.setToolTip("")
+                    self._update_vs_export_buttons()
+                    _done(True)
 
-    def _compute_nagano_sabo_dsm(self, codes, dem_tif_path):
+                self._compute_nagano_sabo_dsm(codes, result["tif_path"], on_done=_after_dsm,
+                                              mirror_label=mirror_label)
+                return
+            if ok:
+                self._update_vs_export_buttons()
+            _done(ok)
+
+        self._start_dem_job(_job, _finish, mirror_label=mirror_label)
+
+    def _compute_nagano_sabo_dsm(self, codes, dem_tif_path, on_done, mirror_label=None):
         """DCHM（樹冠高）タイルを取得し、DEMに加算してDSMを生成する。
-        DEMと同じタイルコード群を使い、DCHMがDEM範囲を覆う場合のみDSMを作る。"""
-        from .nagano_dchm import download_tile_tif as download_dchm_tile
-        from .nagano_sabo import tile_bbox as nagano_tile_bbox
-        from .vs_lp import merge_tifs
-        from .terrain.dem_loader import DEMLoader
-        from osgeo import gdal
-        import numpy as _np
-        import datetime as _dt
+        DEMと同じタイルコード群を使い、DCHMがDEM範囲を覆う場合のみDSMを作る。
 
+        取得・計算はワーカーで行い、終わったら on_done(status) を呼ぶ。
+        status: "ok" / "skip"（DSM なしで続ける）/ "cancel"（取り消し）
+        """
         # ── DSM 作成確認ダイアログ（VS LP/Ground と同じ考え方）─────────────
         reply = QtWidgets.QMessageBox.question(
             self,
@@ -5246,265 +5525,134 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         if reply != QtWidgets.QMessageBox.StandardButton.Yes:
             self.lblDsmInfo.setText("Skipped — no DSM")
             self._dsm_loader = None
-            return "skip"
-
+            on_done("skip")
+            return
         self.lblDsmInfo.setText("Fetching DCHM tiles...")
-        QtWidgets.QApplication.processEvents()
+        self._run_nagano_dchm_job(codes, dem_tif_path, on_done, mirror_label)
 
+    def _run_nagano_dchm_job(self, codes, dem_tif_path, on_done, mirror_label):
+        """DCHM の取得・DSM 計算のワーカーを始める（Retry のときはここから再実行）。"""
+        from .dem_worker import fetch_nagano_dchm_dsm
         dchm_out_dir = os.path.join(self._terrain_output_dir(), "nagano_dchm")
-        os.makedirs(dchm_out_dir, exist_ok=True)
+        dsm_out_dir = os.path.join(self._terrain_output_dir(), "nagano_dsm")
 
-        def _bounds_from_ds(ds):
-            gt = ds.GetGeoTransform()
-            xmin = gt[0]
-            ymax = gt[3]
-            xmax = xmin + ds.RasterXSize * gt[1]
-            ymin = ymax + ds.RasterYSize * gt[5]
-            return xmin, ymin, xmax, ymax
+        def _job(ctx):
+            return fetch_nagano_dchm_dsm(ctx, codes, dchm_out_dir, dsm_out_dir, dem_tif_path)
 
-        def _covers(outer, inner, tol=0.5):
-            return (
-                outer[0] <= inner[0] + tol
-                and outer[1] <= inner[1] + tol
-                and outer[2] >= inner[2] - tol
-                and outer[3] >= inner[3] - tol
-            )
-
-        def _validate_dchm_tile(code, path):
-            ds = gdal.Open(path)
-            if ds is None or ds.RasterXSize <= 0 or ds.RasterYSize <= 0:
-                return False, "cannot be opened"
-            band = ds.GetRasterBand(1)
-            if band is None:
-                ds = None
-                return False, "has no raster band"
-            # Read the corners lightly; this catches many truncated/corrupt GeoTIFF caches.
-            if band.ReadRaster(0, 0, 1, 1) is None:
-                ds = None
-                return False, "cannot read raster data"
-            if band.ReadRaster(ds.RasterXSize - 1, ds.RasterYSize - 1, 1, 1) is None:
-                ds = None
-                return False, "cannot read raster data"
-            actual = _bounds_from_ds(ds)
-            ds = None
-            expected = nagano_tile_bbox(code)
-            if not _covers(actual, expected):
-                return False, "does not cover the expected tile extent"
-            return True, ""
-
-        def _show_dchm_problem_dialog(details):
-            msg = QtWidgets.QMessageBox(self)
-            icon_enum = getattr(QtWidgets.QMessageBox, "Icon", QtWidgets.QMessageBox)
-            msg.setIcon(icon_enum.Warning)
-            msg.setWindowTitle("DCHM Download Problem")
-            msg.setText("Some DCHM tiles could not be downloaded or appear to be incomplete.")
-            msg.setInformativeText(
-                "DSM cannot be created reliably for the selected DEM extent.\n"
-                "Please try downloading again, or check the source server directly "
-                "to confirm that the required tiles are available."
-            )
-            if details:
-                msg.setDetailedText(details)
-            button_role = getattr(QtWidgets.QMessageBox, "ButtonRole", QtWidgets.QMessageBox)
-            retry_btn = msg.addButton("Retry", button_role.AcceptRole)
-            continue_btn = msg.addButton("Continue without DSM", button_role.DestructiveRole)
-            cancel_btn = msg.addButton("Cancel", button_role.RejectRole)
-            msg.setDefaultButton(retry_btn)
-            msg.exec()
-            clicked = msg.clickedButton()
-            if clicked is retry_btn:
-                return "retry"
-            if clicked is continue_btn:
-                return "continue"
-            if clicked is cancel_btn:
-                return "cancel"
-            return "cancel"
-
-        codes = list(dict.fromkeys(codes))
-        while True:
-            dchm_paths = []
-            missing = []
-            invalid = []
-            invalid_paths = []
-
-            for i, code in enumerate(codes):
-                if self._dem_load_cancel:
-                    self.lblDsmInfo.setText("Cancelled")
-                    return "cancel"
-
-                def _dchm_progress(phase, sheet, detail, _i=i, _code=code):
-                    if phase == "checking":
-                        self.lblDsmInfo.setText(
-                            f"DCHM {_i + 1}/{len(codes)} ({_code}): checking sheet {sheet}…"
-                        )
-                    else:
-                        downloaded, total = detail
-                        self.lblDsmInfo.setText(
-                            f"DCHM {_i + 1}/{len(codes)} ({_code}): downloading "
-                            f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB from sheet {sheet}…"
-                        )
-                    QtWidgets.QApplication.processEvents()
-
-                self.lblDsmInfo.setText(f"DCHM {i + 1}/{len(codes)} ({code}): locating…")
-                QtWidgets.QApplication.processEvents()
-                path = download_dchm_tile(
-                    code, dchm_out_dir,
-                    cancel_cb=self._dem_cancel_check,
-                    progress_cb=_dchm_progress,
-                )
-                if not path:
-                    missing.append(code)
-                    continue
-                ok, reason = _validate_dchm_tile(code, path)
-                if ok:
-                    dchm_paths.append(path)
-                else:
-                    invalid.append(f"{code}: {reason}")
-                    invalid_paths.append(path)
-
-            if len(dchm_paths) == len(codes):
-                break
-
-            detail_lines = []
-            if missing:
-                detail_lines.append(
-                    "Missing DCHM tiles: " + ", ".join(missing[:20])
-                    + (" ..." if len(missing) > 20 else "")
-                )
-            if invalid:
-                detail_lines.append(
-                    "Incomplete or invalid DCHM tiles: " + "; ".join(invalid[:20])
-                    + (" ..." if len(invalid) > 20 else "")
-                )
-            action = _show_dchm_problem_dialog("\n".join(detail_lines))
-            if action == "retry":
-                for path in invalid_paths:
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-                self.lblDsmInfo.setText("Retrying DCHM download...")
-                QtWidgets.QApplication.processEvents()
-                continue
-            if action == "continue":
-                self.lblDsmInfo.setText("Skipped — no DSM")
+        def _finish(result, cancelled, error):
+            if cancelled:
+                self.lblDsmInfo.setText("Cancelled")
+                on_done("cancel")
+                return
+            if error:
+                self.lblDsmInfo.setText(error)
                 self._dsm_loader = None
-                return "skip"
-            self.lblDsmInfo.setText("Cancelled")
-            self._dsm_loader = None
+                on_done("skip")
+                return
+            status = result["status"]
+            if status == "incomplete":
+                detail_lines = []
+                missing = result["missing"]
+                invalid = result["invalid"]
+                if missing:
+                    detail_lines.append(
+                        "Missing DCHM tiles: " + ", ".join(missing[:20])
+                        + (" ..." if len(missing) > 20 else "")
+                    )
+                if invalid:
+                    detail_lines.append(
+                        "Incomplete or invalid DCHM tiles: " + "; ".join(invalid[:20])
+                        + (" ..." if len(invalid) > 20 else "")
+                    )
+                action = self._show_dchm_problem_dialog("\n".join(detail_lines))
+                if action == "retry":
+                    for path in result["invalid_paths"]:
+                        try:
+                            os.remove(path)
+                        except OSError:
+                            pass
+                    self.lblDsmInfo.setText("Retrying DCHM download...")
+                    self._run_nagano_dchm_job(codes, dem_tif_path, on_done, mirror_label)
+                    return
+                if action == "continue":
+                    self.lblDsmInfo.setText("Skipped — no DSM")
+                    self._dsm_loader = None
+                    on_done("skip")
+                    return
+                self.lblDsmInfo.setText("Cancelled")
+                self._dsm_loader = None
+                on_done("cancel")
+                return
+            if status == "failed":
+                self.lblDsmInfo.setText(result["error"])
+                self._dsm_loader = None
+                on_done("skip")
+                return
+            dsm_loader = result["loader"]
+            self._dsm_loader = dsm_loader
+            self.lblDsmInfo.setText(
+                f"{dsm_loader.info_text()}  [DEM + DCHM, {result['n_dchm']} DCHM tile(s)]")
+            self._update_flow_coef_state()
+            on_done("ok")
+
+        self._start_dem_job(_job, _finish, mirror_label=mirror_label,
+                            button="dem", label=self.lblDsmInfo)
+
+    def _show_dchm_problem_dialog(self, details):
+        msg = QtWidgets.QMessageBox(self)
+        icon_enum = getattr(QtWidgets.QMessageBox, "Icon", QtWidgets.QMessageBox)
+        msg.setIcon(icon_enum.Warning)
+        msg.setWindowTitle("DCHM Download Problem")
+        msg.setText("Some DCHM tiles could not be downloaded or appear to be incomplete.")
+        msg.setInformativeText(
+            "DSM cannot be created reliably for the selected DEM extent.\n"
+            "Please try downloading again, or check the source server directly "
+            "to confirm that the required tiles are available."
+        )
+        if details:
+            msg.setDetailedText(details)
+        button_role = getattr(QtWidgets.QMessageBox, "ButtonRole", QtWidgets.QMessageBox)
+        retry_btn = msg.addButton("Retry", button_role.AcceptRole)
+        continue_btn = msg.addButton("Continue without DSM", button_role.DestructiveRole)
+        cancel_btn = msg.addButton("Cancel", button_role.RejectRole)
+        msg.setDefaultButton(retry_btn)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked is retry_btn:
+            return "retry"
+        if clicked is continue_btn:
+            return "continue"
+        if clicked is cancel_btn:
             return "cancel"
+        return "cancel"
 
-        self.lblDsmInfo.setText("Merging DCHM…")
-        QtWidgets.QApplication.processEvents()
-        ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-        if len(dchm_paths) == 1:
-            dchm_merged = dchm_paths[0]
-        else:
-            dchm_merged = os.path.join(dchm_out_dir, f"dchm_{ts}.tif")
-            merge_tifs(dchm_paths, dchm_merged)
-
-        self.lblDsmInfo.setText("Computing DSM = DEM + DCHM…")
-        QtWidgets.QApplication.processEvents()
-        try:
-            dem_ds = gdal.Open(dem_tif_path)
-            if dem_ds is None:
-                raise RuntimeError("DEM cannot be opened")
-            dem_gt = dem_ds.GetGeoTransform()
-            dem_wkt = dem_ds.GetProjection()
-            w, h = dem_ds.RasterXSize, dem_ds.RasterYSize
-            dem_bounds = _bounds_from_ds(dem_ds)
-            dem_band = dem_ds.GetRasterBand(1)
-            dem_nodata = dem_band.GetNoDataValue()
-            dem_arr = dem_band.ReadAsArray().astype(_np.float64)
-            dem_ds = None
-
-            merged_ds = gdal.Open(dchm_merged)
-            if merged_ds is None:
-                raise RuntimeError("Merged DCHM cannot be opened")
-            dchm_bounds = _bounds_from_ds(merged_ds)
-            merged_ds = None
-            if not _covers(dchm_bounds, dem_bounds):
-                raise RuntimeError("Merged DCHM does not cover the DEM extent")
-
-            # DCHM を DEM と同じグリッド(範囲・解像度・CRS)にワープしてから加算
-            dchm_ds = gdal.Warp(
-                "", dchm_merged, format="MEM",
-                outputBounds=(dem_gt[0], dem_gt[3] + h * dem_gt[5], dem_gt[0] + w * dem_gt[1], dem_gt[3]),
-                width=w, height=h, dstSRS=dem_wkt,
-            )
-            if dchm_ds is None:
-                raise RuntimeError("DCHM warp failed")
-            dchm_band = dchm_ds.GetRasterBand(1)
-            dchm_nodata = dchm_band.GetNoDataValue()
-            dchm_arr = dchm_band.ReadAsArray().astype(_np.float64)
-            dchm_ds = None
-
-            if dchm_nodata is not None:
-                dchm_arr = _np.where(dchm_arr == dchm_nodata, 0.0, dchm_arr)
-            dchm_arr = _np.where(_np.isnan(dchm_arr), 0.0, dchm_arr)
-            dchm_arr = _np.where(dchm_arr < 0, 0.0, dchm_arr)  # 樹冠高の負値はノイズとして0扱い
-
-            dsm_arr = dem_arr + dchm_arr
-            if dem_nodata is not None:
-                dsm_arr = _np.where(dem_arr == dem_nodata, dem_nodata, dsm_arr)
-
-            dsm_out_dir = os.path.join(self._terrain_output_dir(), "nagano_dsm")
-            os.makedirs(dsm_out_dir, exist_ok=True)
-            dsm_path = os.path.join(dsm_out_dir, f"nagano_dsm_{ts}.tif")
-
-            driver = gdal.GetDriverByName("GTiff")
-            out_ds = driver.Create(dsm_path, w, h, 1, gdal.GDT_Float32,
-                                    options=["COMPRESS=LZW", "TILED=YES"])
-            out_ds.SetGeoTransform(dem_gt)
-            out_ds.SetProjection(dem_wkt)
-            out_band = out_ds.GetRasterBand(1)
-            if dem_nodata is not None:
-                out_band.SetNoDataValue(dem_nodata)
-            out_band.WriteArray(dsm_arr.astype(_np.float32))
-            out_band.FlushCache()
-            out_ds = None
-        except Exception as e:
-            self.lblDsmInfo.setText(f"⚠ DSM computation failed: {e}")
-            self._dsm_loader = None
-            return "skip"
-
-        dsm_loader = DEMLoader()
-        dsm_loader.load(dsm_path)
-        self._dsm_loader = dsm_loader
-        self.lblDsmInfo.setText(f"{dsm_loader.info_text()}  [DEM + DCHM, {len(dchm_paths)} DCHM tile(s)]")
-        self._update_flow_coef_state()
-        return "ok"
-
-    def _load_nagano_rinmu_dem(self, update_cs_map_source=True, confirm=True):
+    def _load_nagano_rinmu_dem(self, update_cs_map_source=True, confirm=True,
+                               on_done=None, mirror_label=None):
         """長野県林務部 0.5mメッシュDEM(2013-2014)をキャンバス範囲で取得しDEMとしてロード。
         市町村単位の索引が無いため、12地域zipを順にcentral directory確認しながら
         タイルを探す（nagano_rinmu.py参照）。DSM/DCHM相当のデータは無い。
         confirm=True のとき、範囲によって時間がかかる旨の確認ダイアログを出す
-        （解析実行時の再取得(confirm=False)では毎回は出さない）。"""
+        （解析実行時の再取得(confirm=False)では毎回は出さない）。
+
+        取得はワーカースレッドで行うので、この関数はすぐ戻る。終わったら
+        on_done(ok) を呼ぶ（ok=取得できて _terrain_loader を差し替えたか）。
+        取得を始めずに戻る場合（範囲・タイルが無い・確認で No）も on_done(False)。
+        """
         from .nagano_rinmu import tiles_for_extent, download_tile_tif
-        from .vs_lp import merge_tifs
-        from .terrain.dem_loader import DEMLoader
-        from qgis.core import (QgsCoordinateReferenceSystem,
-                               QgsCoordinateTransform, QgsProject)
-        import datetime as _dt
 
-        if self.preview_canvas is None or self.preview_canvas.extent().isEmpty():
+        def _done(ok):
+            if on_done is not None:
+                on_done(ok)
+
+        codes = self._nagano_codes_for_canvas(tiles_for_extent)
+        if codes is None:
             self.lblDemInfo.setText("⚠ No extent on preview canvas.")
-            return False
-
-        canvas_ext = self.preview_canvas.extent()
-        canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
-        crs_6676 = QgsCoordinateReferenceSystem("EPSG:6676")
-        xform = QgsCoordinateTransform(canvas_crs, crs_6676, QgsProject.instance())
-        ext6 = xform.transformBoundingBox(canvas_ext)
-
-        codes = tiles_for_extent(
-            ext6.xMinimum(), ext6.yMinimum(),
-            ext6.xMaximum(), ext6.yMaximum(),
-        )
+            _done(False)
+            return
         if not codes:
             self.lblDemInfo.setText("⚠ No Nagano DEM (Forestry Dept) tiles for this area.")
-            return False
+            _done(False)
+            return
 
         if confirm:
             reply = QtWidgets.QMessageBox.question(
@@ -5519,85 +5667,24 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             )
             if reply != QtWidgets.QMessageBox.StandardButton.Yes:
                 self.lblDemInfo.setText("Cancelled")
-                return False
+                _done(False)
+                return
 
-        self._dem_loading = True
-        self._dem_load_cancel = False
-        self.btnBrowseDem.setText("Cancel")
-        QtWidgets.QApplication.processEvents()
+        from .dem_worker import fetch_nagano_tiles
+        out_dir = os.path.join(self._terrain_output_dir(), "nagano_rinmu_dem")
 
-        try:
-            out_dir = os.path.join(self._terrain_output_dir(), "nagano_rinmu_dem")
-            os.makedirs(out_dir, exist_ok=True)
+        def _job(ctx):
+            return fetch_nagano_tiles(ctx, codes, out_dir, download_tile_tif, "nagano_rinmu")
 
-            tif_paths = []
-            missing = []
-            for i, code in enumerate(codes):
-                if self._dem_load_cancel:
-                    self.lblDemInfo.setText("Cancelled")
-                    return False
+        def _finish(result, cancelled, error):
+            ok = self._finish_nagano_dem(result, cancelled, error, update_cs_map_source)
+            if ok:
+                self._update_vs_export_buttons()
+            _done(ok)
 
-                def _rinmu_progress(phase, zip_label, detail, _i=i, _code=code):
-                    if phase == "checking":
-                        self.lblDemInfo.setText(
-                            f"Tile {_i + 1}/{len(codes)} ({_code}): checking {zip_label}…"
-                        )
-                    else:
-                        downloaded, total = detail
-                        self.lblDemInfo.setText(
-                            f"Tile {_i + 1}/{len(codes)} ({_code}): downloading "
-                            f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB from {zip_label}…"
-                        )
-                    QtWidgets.QApplication.processEvents()
+        self._start_dem_job(_job, _finish, mirror_label=mirror_label)
 
-                self.lblDemInfo.setText(f"Tile {i + 1}/{len(codes)} ({code}): locating…")
-                QtWidgets.QApplication.processEvents()
-                path = download_tile_tif(
-                    code, out_dir,
-                    cancel_cb=self._dem_cancel_check,
-                    progress_cb=_rinmu_progress,
-                )
-                if path:
-                    tif_paths.append(path)
-                else:
-                    missing.append(code)
-
-            if not tif_paths:
-                self.lblDemInfo.setText("⚠ No tiles could be fetched for this area.")
-                return False
-
-            self.lblDemInfo.setText("Processing…")
-            QtWidgets.QApplication.processEvents()
-
-            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-            if len(tif_paths) == 1:
-                tif_path = tif_paths[0]
-            else:
-                tif_path = os.path.join(out_dir, f"nagano_rinmu_{ts}.tif")
-                merge_tifs(tif_paths, tif_path)
-
-            dem_loader = DEMLoader()
-            dem_loader.load(tif_path)
-            self._terrain_loader = dem_loader
-            self._dem_actual_path = tif_path
-            if update_cs_map_source:
-                self._cs_map_dem_path = tif_path
-            self.txtDemPath.setToolTip(tif_path)
-            info = f"{dem_loader.info_text()}  [{len(tif_paths)} tile(s)]"
-            if missing:
-                info += f"  ⚠ {len(missing)} tile(s) not found: {', '.join(missing[:5])}"
-            self.lblDemInfo.setText(info)
-            self._partial_outside_warned = False
-            self._update_resample_indicator()
-            self._update_vs_export_buttons()
-            return True
-        finally:
-            self._dem_loading = False
-            self.btnBrowseDem.setEnabled(True)
-            self.btnBrowseDem.setText("Clear" if self._dem_path else "Browse")
-            self._update_cs_map_export_state()
-
-    def _load_vs_lp_ground(self, auto_mode=False):
+    def _load_vs_lp_ground(self, auto_mode=False, on_done=None, mirror_label=None):
         """Virtual Shizuoka LP タイルをキャンバス範囲で S3 取得し LAS→DSM 変換して DSM としてロード。
 
         取得優先順位:
@@ -5605,17 +5692,24 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             2. 存在しない場合は LP/Ground を使用 → 2019/2020/2021富士山東部/2022 は全リターン
         いずれも全リターンデータのため DSM 計算に有効。
 
-        auto_mode=True のとき DEM ロードの内部から呼ばれ、キャンセルは _dem_load_cancel を使う。"""
-        from .vs_lp import (resolve_years, tiles_for_extent,
-                            download_las, las_to_dsm, merge_tifs)
-        from .terrain.dem_loader import DEMLoader
-        from .terrain.remote_zip import Cancelled as _Cancelled
+        auto_mode=True のとき DEM ロードの続きとして呼ばれ、DEM の Browse ボタンが
+        Cancel になる（単独で呼ぶときは DSM の Browse ボタン）。
+
+        取得・LAS→DSM 変換はワーカースレッドで行うので、この関数はすぐ戻る。
+        終わったら on_done(ok) を呼ぶ（ok=DSM を取得できて _dsm_loader を差し替えたか）。
+        取得を始めずに戻る場合（範囲・タイルが無い・確認で No）も on_done(False)。
+        """
+        from .vs_lp import tiles_for_extent
         from qgis.core import (QgsCoordinateReferenceSystem,
                                QgsCoordinateTransform, QgsProject)
-        import datetime as _dt
+
+        def _done(ok):
+            if on_done is not None:
+                on_done(ok)
 
         if self.preview_canvas is None or self.preview_canvas.extent().isEmpty():
             self.lblDsmInfo.setText("⚠ No canvas extent.")
+            _done(False)
             return
 
         canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
@@ -5628,6 +5722,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         )
         if not codes:
             self.lblDsmInfo.setText("⚠ No VS LP tiles for this area.")
+            _done(False)
             return
 
         # ── DSM 作成確認ダイアログ ───────────────────────────────────────────
@@ -5643,143 +5738,52 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         if reply != QtWidgets.QMessageBox.StandardButton.Yes:
             self.lblDsmInfo.setText("Skipped — no LAS")
             self._update_vs_export_buttons()
+            _done(False)
             return
 
-        # auto_mode: キャンセルは DEM 側のフラグを使う。ボタン管理は DEM 側が行う。
-        def _is_cancelled():
-            return self._dem_load_cancel if auto_mode else self._dsm_load_cancel
-
-        def _cancel_cb_with_pump():
-            # LAS本体(~237MB)ダウンロード中のチャンクループ用。processEvents()を
-            # 挟まないとCancelクリックがダウンロード完了まで処理されない。
-            QtWidgets.QApplication.processEvents()
-            return _is_cancelled()
-
         self.lblDsmInfo.setText(f"Resolving {len(codes)} tile(s)...")
+        from .dem_worker import fetch_vs_dsm
+        out_dir = os.path.join(self._terrain_output_dir(), "vs_lp_ground")
+
+        def _job(ctx):
+            return fetch_vs_dsm(ctx, codes, out_dir)
+
+        def _finish(result, cancelled, error):
+            ok = self._finish_vs_lp_ground(result, cancelled, error, auto_mode)
+            _done(ok)
+
+        self._start_dem_job(_job, _finish, mirror_label=mirror_label,
+                            button="dem" if auto_mode else "dsm",
+                            label=self.lblDsmInfo)
+
+    def _finish_vs_lp_ground(self, result, cancelled, error, auto_mode):
+        """VS LP → DSM の取得結果を画面へ反映する（メインスレッド）。成功なら True。
+
+        LAS の一覧（VS の書き出しで使う）は、成功したときだけ差し替える
+        （中止・エラーでは前の DSM と一覧のまま）。
+        """
+        if cancelled:
+            self.lblDsmInfo.setText("Cancelled")
+            return False
+        if error:
+            self.lblDsmInfo.setText(error)
+            return False
+        dsm_loader = result["loader"]
+        tif_path = result["tif_path"]
+        resolved = result["resolved"]
+        self._vs_las_paths = result["las_paths"]
+        self._vs_las_urls = result["las_urls"]
+        self._dsm_loader = dsm_loader
+        self.txtDsmPath.setToolTip(tif_path)
+        self.lblDsmInfo.setText(
+            f"{dsm_loader.info_text()}  [{len(resolved)} tile(s), "
+            f"year(s): {', '.join(str(y) for y in sorted(set(resolved.values())))}]"
+        )
+        self._vs_dsm_codes = list(resolved.keys())
+        self._update_flow_coef_state()
         if not auto_mode:
-            self._dsm_loading = True
-            self._dsm_load_cancel = False
-            self.btnBrowseDsm.setText("Cancel")
-        QtWidgets.QApplication.processEvents()
-
-        try:
-            def _prog(done, total):
-                self.lblDsmInfo.setText(f"Checking S3… {done}/{total}")
-                QtWidgets.QApplication.processEvents()
-
-            resolved_orig = resolve_years(codes, progress_cb=_prog, lp_type="Original")
-            remaining = codes - set(resolved_orig.keys())
-            resolved_ground = resolve_years(remaining, lp_type="Ground") if remaining else {}
-            resolved = {**resolved_orig, **resolved_ground}
-            resolved_lp_type = {c: "Original" for c in resolved_orig}
-            resolved_lp_type.update({c: "Ground" for c in resolved_ground})
-            if not resolved:
-                self.lblDsmInfo.setText("⚠ No VS LP tiles available for this area.")
-                return
-
-            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-            out_dir = os.path.join(self._terrain_output_dir(), "vs_lp_ground")
-            os.makedirs(out_dir, exist_ok=True)
-
-            dsm_tifs = []
-            self._vs_las_paths = []
-            self._vs_las_urls = {}  # {basename: S3 ZIP URL}
-            for i, (code, year) in enumerate(resolved.items()):
-                if _is_cancelled():
-                    self.lblDsmInfo.setText("Cancelled")
-                    return
-                self.lblDsmInfo.setText(
-                    f"DSM {i + 1}/{len(resolved)} — downloading LAS…"
-                )
-                QtWidgets.QApplication.processEvents()
-
-                def _las_progress(downloaded, total, _i=i):
-                    if total > 0:
-                        self.lblDsmInfo.setText(
-                            f"DSM {_i + 1}/{len(resolved)} — downloading LAS: "
-                            f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB…"
-                        )
-                    else:
-                        self.lblDsmInfo.setText(
-                            f"DSM {_i + 1}/{len(resolved)} — downloading LAS: "
-                            f"{downloaded / 1e6:.0f}MB…"
-                        )
-                    QtWidgets.QApplication.processEvents()
-
-                try:
-                    _lp_type = resolved_lp_type[code]
-                    las_path = download_las(
-                        code, year, out_dir, lp_type=_lp_type,
-                        cancel_cb=_cancel_cb_with_pump,
-                        progress_cb=_las_progress,
-                    )
-                    self._vs_las_paths.append(las_path)
-                    from .vs_lp import BUCKET_URL as _BUCKET_URL
-                    _folder = code[2:4]; _xx = code[4:6]
-                    self._vs_las_urls[os.path.basename(las_path)] = (
-                        f"{_BUCKET_URL}/{year}/LP/{_lp_type}/08/{_folder}/{_xx}/{code}.zip"
-                    )
-                    if _is_cancelled():
-                        self.lblDsmInfo.setText("Cancelled")
-                        return
-                    self.lblDsmInfo.setText(f"DSM {i + 1}/{len(resolved)} — converting LAS…")
-                    QtWidgets.QApplication.processEvents()
-                    dsm_tif = os.path.join(out_dir, f"{code}_dsm.tif")
-                    las_to_dsm(las_path, dsm_tif)
-                    dsm_tifs.append(dsm_tif)
-                except _Cancelled:
-                    self.lblDsmInfo.setText("Cancelled")
-                    return
-                except Exception as e:
-                    self.lblDsmInfo.setText(f"Error ({code}): {e}")
-                    return
-
-            if not dsm_tifs:
-                self.lblDsmInfo.setText("⚠ All DSM downloads failed.")
-                return
-
-            if len(dsm_tifs) == 1:
-                tif_path = dsm_tifs[0]
-            else:
-                tif_path = os.path.join(out_dir, f"vs_dsm_{ts}.tif")
-                merge_tifs(dsm_tifs, tif_path)
-
-            dsm_loader = DEMLoader()
-            dsm_loader.load(tif_path)
-            self._dsm_loader = dsm_loader
-            self.txtDsmPath.setToolTip(tif_path)
-            self.lblDsmInfo.setText(
-                f"{dsm_loader.info_text()}  [{len(resolved)} tile(s), "
-                f"year(s): {', '.join(str(y) for y in sorted(set(resolved.values())))}]"
-            )
-            self._vs_dsm_codes = list(resolved.keys())
-            self._update_flow_coef_state()
-            if not auto_mode:
-                self._update_vs_export_buttons()
-
-            # 今回使用しない古い LAS・DSM TIF を削除
-            current_las = {os.path.normpath(p) for p in self._vs_las_paths}
-            current_dsm = {os.path.normpath(p) for p in dsm_tifs}
-            for fname in os.listdir(out_dir):
-                fpath = os.path.normpath(os.path.join(out_dir, fname))
-                if not os.path.isfile(fpath):
-                    continue
-                ext = os.path.splitext(fname)[1].lower()
-                if ext == ".las" and fpath not in current_las:
-                    try:
-                        os.remove(fpath)
-                    except Exception:  # nosec B110
-                        pass
-                elif ext == ".tif" and fpath not in current_dsm and fpath != os.path.normpath(tif_path):
-                    try:
-                        os.remove(fpath)
-                    except Exception:  # nosec B110
-                        pass
-        finally:
-            if not auto_mode:
-                self._dsm_loading = False
-                self.btnBrowseDsm.setEnabled(True)
-                self.btnBrowseDsm.setText("Clear" if self._dsm_path else "Browse")
+            self._update_vs_export_buttons()
+        return True
 
     def _zoom_preview_to_analysis_extent_if_available(self):
         if self.preview_canvas is None:
@@ -5924,10 +5928,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             return f"{max_seq:03d}"
         return f"{max_seq + 1:03d}"
 
-    def _refresh_analysis_combo(self, select_latest=True):
+    def _refresh_analysis_combo(self, select_latest=True, gc_cache=True):
         """解析番号コンボを出力ディレクトリの内容で更新する。
         select_latest=True（デフォルト）: 最新番号を自動選択して表示待機状態にする。
         select_latest=False: 現在の選択を維持する（解析完了後の更新など）。
+        gc_cache=False: DEM キャッシュの掃除をしない（プロジェクト切り替えの途中など）。
         """
         current = self.cmbAnalysisNumber.currentData()
         with QSignalBlocker(self.cmbAnalysisNumber):
@@ -5952,7 +5957,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                    self.chkLoadHillshade, self.chkLoadElevRelief):
             _b.setEnabled(has_data)
         # 解析番号に紐づかない DEM キャッシュを削除
-        self._gc_dem_cache()
+        if gc_cache:
+            self._gc_dem_cache()
 
     def _gc_dem_cache(self):
         """解析番号に紐づかない DEM キャッシュファイルを削除する。
@@ -6094,6 +6100,24 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     def _on_project_cleared(self):
         """プロジェクトクリア時: QGISが既にレイヤを削除済みなので参照だけリセット"""
+        # 解析中にプロジェクトが切り替わった（閉じた・新規・開いた）ときは、
+        # ユーザーが中止を望んだものとして扱う。計算を止め、途中のデータは
+        # 残さない（片付けは _on_analysis_done）。
+        worker = self._analysis_worker
+        if worker is not None and worker.isRunning() and self._analysis_ctx is not None:
+            self._analysis_ctx["project_changed"] = True
+            worker.cancel()
+            self.btnStopAnalysis.setEnabled(False)
+            self.lblAnalysisStatus.setText("Cancelling (the project was changed)…")
+        # DEM の取得中も同じく中止として扱い、取得したファイルは残さない
+        # （保存先が前のプロジェクトのフォルダのため）。
+        if self._dem_worker is not None and self._dem_job_ctx is not None:
+            self._dem_job_ctx["project_changed"] = True
+            self._cancel_dem_job()
+        # 書き出し（CS Map / VS）の途中も同じく中止として扱う
+        for _ctx in self._side_jobs.values():
+            _ctx["project_changed"] = True
+            _ctx["worker"].cancel()
         self._terrain_layer_group = None
         self._loaded_terrain_layers = {}
         self._orig_base_opacity.clear()
@@ -6102,6 +6126,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self._refresh_preview_canvas()
         except Exception:  # nosec B110
             pass
+        # 出力先はプロジェクトのフォルダで決まるので、出力先の表示と解析番号の
+        # 一覧を今の保存先に合わせる（新規プロジェクトで前のフォルダが表示された
+        # ままにならないように）。前のプロジェクトで選んでいた番号は持ち越さない。
+        # プロジェクトを開く場合はこのあと _on_project_read で合わせ直すので、
+        # 途中の仮の保存先で DEM キャッシュを消さないよう掃除はしない。
+        self._update_out_dir_label()
+        with QSignalBlocker(self.cmbAnalysisNumber):
+            self.cmbAnalysisNumber.setCurrentIndex(0)
+        self._refresh_analysis_combo(select_latest=False, gc_cache=False)
 
     def _on_analysis_number_changed(self, _index):
         """解析番号コンボ変更時: 現在の表示状態を保ったまま対象解析へ切り替える。"""
@@ -6194,9 +6227,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     def _on_browse_dsm(self):
         if self._dsm_loading:
-            self._dsm_load_cancel = True
-            self.btnBrowseDsm.setEnabled(False)
-            self.lblDsmInfo.setText("Cancelling…")
+            # 取得中は Cancel ボタン: ワーカーを止める
+            self._cancel_dem_job()
             return
         if self._dsm_path:
             # クリア
@@ -6352,6 +6384,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         can_export = is_exportable_source and has_dem
         has_export = bool(self._vs_export_dir and os.path.isfile(self._vs_export_dir))
 
+        if getattr(self, "_dem_worker", None) is not None and not self._vs_exporting:
+            # DEM をワーカーで取得中: 終わるまで書き出し・送信は使わない
+            # （終わったら _on_dem_job_done から呼び直す）
+            self.btnVsExport.setEnabled(False)
+            self.btnOpenWodmi.setEnabled(False)
+            self.btnVsCancel.setEnabled(False)
+            return
+
         if self._vs_exporting:
             # 処理中: Cancel のみ on
             self.btnVsExport.setEnabled(False)
@@ -6409,7 +6449,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     def _update_cs_map_export_state(self):
         has_dem = self._has_cs_map_dem()
-        busy = bool(getattr(self, "_cs_map_exporting", False))
+        # 書き出し中、または DEM をワーカーで取得中は書き出せない
+        busy = bool(getattr(self, "_cs_map_exporting", False)
+                    or getattr(self, "_dem_worker", None) is not None)
         can_export = has_dem and not busy
         # grpCsMapExport 自体は無効化しない: グループを無効化すると
         # lblCsMapAbout の「about」リンクまで操作不能になり、DEM未読込時に
@@ -6449,14 +6491,32 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             "Other DEM sources are not supported for Export.",
         )
 
+    def _set_vs_export_lock(self, locked):
+        """VS の書き出し中は DEM/DSM の選択と Run Analysis を止める（ZIP に入れる
+        DTM・DSM のファイルが、取り直しやキャッシュの掃除で途中で消えないように）。"""
+        if locked:
+            self._vs_lock_dsm_enabled_before = self.btnBrowseDsm.isEnabled()
+            self.btnBrowseDem.setEnabled(False)
+            self.btnBrowseDsm.setEnabled(False)
+            self.btnRunAnalysis.setEnabled(False)
+        else:
+            self.btnBrowseDem.setEnabled(True)
+            self.btnBrowseDsm.setEnabled(getattr(self, "_vs_lock_dsm_enabled_before", True))
+            if self._analysis_worker is None and self._dem_worker is None:
+                self.btnRunAnalysis.setEnabled(True)
+
     def _on_vs_export(self):
-        """設定済みDTM/DSMを使い、LP/Ortho を S3 から取得して WODMI ZIP に書き出す。"""
-        from .vs_lp import (resolve_years, tiles_for_extent,
-                            download_grid_tif, merge_tifs)
+        """設定済みDTM/DSMを使い、LP/Ortho を S3 から取得して WODMI ZIP に書き出す。
+
+        Ortho の有無の確認と、Ortho の取得・ZIP の作成はワーカーで行う（間で
+        確認の窓を出す）。この関数はすぐ戻る。
+        """
+        from .vs_lp import tiles_for_extent
         from qgis.core import (QgsCoordinateReferenceSystem,
                                QgsCoordinateTransform, QgsProject)
-        import zipfile as _zf
-        import datetime as _dt
+
+        if "vs_export" in self._side_jobs or self._vs_exporting:
+            return
 
         # ── DTM チェック ─────────────────────────────────────────────
         dtm_loader = getattr(self, "_terrain_loader", None)
@@ -6466,9 +6526,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             return
 
         dsm_loader = getattr(self, "_dsm_loader", None)
-        has_dsm = (dsm_loader is not None
-                   and dsm_loader.path
-                   and os.path.isfile(dsm_loader.path))
+        has_dsm = bool(dsm_loader is not None
+                       and dsm_loader.path
+                       and os.path.isfile(dsm_loader.path))
 
         # ── キャンバス範囲 → EPSG:6676 → タイルコード（Ortho用）────
         # ── Ortho タイルコード（DEM/DSM 読込時の範囲に合わせる）────────
@@ -6492,183 +6552,117 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 ext6.xMaximum(), ext6.yMaximum(),
             )
 
-        self.lblVsExportStatus.setText("Checking Ortho…")
-        QtWidgets.QApplication.processEvents()
-        resolved_ortho = resolve_years(codes, lp_type="Ortho") if codes else {}
-        has_ortho = bool(resolved_ortho)
+        # 書き出しに使う値は、ここで写し取っておく（途中で DEM 等が変わっても使わない）
+        ctx_vals = {
+            "dtm_path": dtm_loader.path,
+            "dsm_path": dsm_loader.path if has_dsm else None,
+            "las_paths": [p for p in getattr(self, "_vs_las_paths", []) if os.path.isfile(p)],
+            "las_urls": dict(getattr(self, "_vs_las_urls", {})),
+            # LAS(点群)はVirtual Shizuokaソースのみが持つ。ソース自体に点群データが
+            # 無い場合（長野DEM等）と、VSソースだがDSM未読込でLASが無い場合を区別する。
+            "las_capable": (self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL),
+        }
 
-        msg = (f"• DTM: {os.path.basename(dtm_loader.path)}\n"
-               f"• DSM: {'Set (' + os.path.basename(dsm_loader.path) + ')' if has_dsm else 'Not set (skipped)'}\n"
+        self._vs_exporting = True
+        self._update_vs_export_buttons()
+        self.btnVsCancel.setEnabled(False)  # Ortho の確認の間は中止しない（すぐ終わる）
+        self._set_vs_export_lock(True)
+        self.lblVsExportStatus.setText("Checking Ortho…")
+
+        from .dem_worker import vs_resolve_ortho
+
+        def _job(ctx):
+            return vs_resolve_ortho(ctx, codes)
+
+        def _finish(resolved_ortho, cancelled, error):
+            self._on_vs_ortho_resolved(resolved_ortho, cancelled, error, ctx_vals)
+
+        self._start_side_job("vs_export", _job, self.lblVsExportStatus.setText,
+                             _finish, on_abort=self._end_vs_export)
+
+    def _end_vs_export(self, tmp_dir=None):
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        self._vs_exporting = False
+        self._set_vs_export_lock(False)
+        self._update_vs_export_buttons()
+
+    def _on_vs_ortho_resolved(self, resolved_ortho, cancelled, error, vals):
+        """Ortho の有無が分かったとき: 確認の窓を出し、書き出しをワーカーで始める。"""
+        if cancelled or error:
+            self._end_vs_export()
+            self.lblVsExportStatus.setText(error if error else "Cancelled")
+            return
+        resolved_ortho = resolved_ortho or {}
+        has_ortho = bool(resolved_ortho)
+        dsm_path = vals["dsm_path"]
+        msg = (f"• DTM: {os.path.basename(vals['dtm_path'])}\n"
+               f"• DSM: {'Set (' + os.path.basename(dsm_path) + ')' if dsm_path else 'Not set (skipped)'}\n"
                f"• Ortho: LP/Ortho  — {'included' if has_ortho else 'not available for this area'}\n\n"
                "Proceed?")
         if QtWidgets.QMessageBox.question(
             self, "VS Export", msg,
             QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel
         ) != QtWidgets.QMessageBox.StandardButton.Ok:
+            self._end_vs_export()
             self.lblVsExportStatus.setText("—")
             return
 
-        dtm_path = dtm_loader.path
-        dsm_path = dsm_loader.path if has_dsm else None
-
         # ── 作業ディレクトリ（Ortho用）───────────────────────────────
-        # 固定名だと、長時間の.7z取得中（processEvents()経由でUIイベントは
-        # 処理され続けるため、パネルの閉じ直し等で別インスタンスの_on_vs_export
-        # が並行して走ることがあり得る）に、片方のshutil.rmtreeがもう片方の
-        # 作業ファイルを消してしまう事故が起きる（2026-09-24、実機で発生：ZIP側
-        # で取得済みのタイルが後続の.7z取得中に消え、shutil.copy2がFileNotFoundError）。
-        # 呼び出しごとに一意な名前にして、この衝突自体を起こさないようにする。
+        # 呼び出しごとに一意な名前にする（以前、長時間の.7z取得中に別インスタンスの
+        # 書き出しが並行して走り、片方の rmtree がもう片方の作業ファイルを消した
+        # 事故があった。2026-09-24）。
         import uuid as _uuid
         tmp_dir = os.path.join(self._terrain_output_dir(), f".vs_export_tmp_{_uuid.uuid4().hex}")
         os.makedirs(tmp_dir)
+        zip_dir = os.path.join(self._terrain_output_dir(), "zip")
 
-        # ── エクスポート開始 ──────────────────────────────────────────
-        self._vs_export_cancel = False
-        self._vs_exporting = True
-        self._update_vs_export_buttons()
+        self._update_vs_export_buttons()  # 書き出し中: Cancel のみ on
 
-        zip_path = None
-        success = False
-        try:
-            # ── Ortho (LP/Ortho) ─────────────────────────────────────
-            ortho_path = None
-            if has_ortho:
-                ortho_tifs = []
-                for i, (code, year) in enumerate(resolved_ortho.items()):
-                    if self._vs_export_cancel:
-                        self.lblVsExportStatus.setText("Cancelled")
-                        return
-                    self.lblVsExportStatus.setText(f"Ortho {i + 1}/{len(resolved_ortho)}…")
-                    QtWidgets.QApplication.processEvents()
+        from .dem_worker import vs_export_zip
 
-                    def _ortho_progress(downloaded, total, _i=i):
-                        if total > 0:
-                            self.lblVsExportStatus.setText(
-                                f"Ortho {_i + 1}/{len(resolved_ortho)}: "
-                                f"{downloaded / 1e6:.0f}/{total / 1e6:.0f}MB…"
-                            )
-                        else:
-                            self.lblVsExportStatus.setText(
-                                f"Ortho {_i + 1}/{len(resolved_ortho)}: {downloaded / 1e6:.0f}MB…"
-                            )
-                        QtWidgets.QApplication.processEvents()
+        def _job(ctx):
+            return vs_export_zip(ctx, resolved_ortho, tmp_dir, zip_dir,
+                                 vals["dtm_path"], dsm_path, vals["las_paths"],
+                                 vals["las_urls"], vals["las_capable"])
 
-                    try:
-                        ortho_tifs.append(download_grid_tif(
-                            code, year, tmp_dir, "Ortho", progress_cb=_ortho_progress,
-                        ))
-                    except Exception:  # nosec B110
-                        pass
-                if ortho_tifs:
-                    self.lblVsExportStatus.setText("Merging Ortho…")
-                    QtWidgets.QApplication.processEvents()
-                    ortho_path = os.path.join(tmp_dir, "odm_orthophoto.tif")
-                    if len(ortho_tifs) == 1:
-                        shutil.copy2(ortho_tifs[0], ortho_path)
-                    else:
-                        merge_tifs(ortho_tifs, ortho_path)
+        def _finish(result, cancelled2, error2):
+            self._on_vs_export_done(result, cancelled2, error2, tmp_dir)
 
-            # ── ZIP 作成 ──────────────────────────────────────────────
-            zip_dir = os.path.join(self._terrain_output_dir(), "zip")
-            os.makedirs(zip_dir, exist_ok=True)
-            today = _dt.datetime.now().strftime("%Y%m%d")
-            prefix = f"FOL_{today}"
-            existing = [f for f in os.listdir(zip_dir)
-                        if f.startswith(prefix) and f.endswith("-all.zip")]
-            seq = len(existing) + 1
-            zip_name = f"{prefix}-all.zip" if seq == 1 else f"{prefix}_{seq}-all.zip"
-            zip_path = os.path.join(zip_dir, zip_name)
+        self._start_side_job("vs_export", _job, self.lblVsExportStatus.setText, _finish,
+                             on_abort=lambda: self._end_vs_export(tmp_dir))
 
-            self.lblVsExportStatus.setText("Creating ZIP…")
-            QtWidgets.QApplication.processEvents()
-            las_paths = [p for p in getattr(self, "_vs_las_paths", []) if os.path.isfile(p)]
-            las_urls = getattr(self, "_vs_las_urls", {})
-            # LAS(点群)はVirtual Shizuokaソースのみが持つ。ソース自体に点群データが
-            # 無い場合（長野DEM等）と、VSソースだがDSM未読込でLASが無い場合を区別する。
-            las_capable = (self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL)
-            try:
-                with _zf.ZipFile(zip_path, "w", _zf.ZIP_DEFLATED) as zf:
-                    zf.write(dtm_path, "odm_dem/dtm.tif")
-                    if dsm_path:
-                        zf.write(dsm_path, "odm_dem/dsm.tif")
-                    if ortho_path:
-                        zf.write(ortho_path, "odm_orthophoto/odm_orthophoto.tif")
-                    import json as _json
-                    zip_dir = os.path.dirname(zip_path)
-
-                    # las_sources.json は「実LASの参照」だけでなく「FOL Export由来である
-                    # ことのマーカー」も兼ねる（webodm_importer側 asset_detector.is_fol_source
-                    # がこのファイルの有無だけでFOL由来か判定し、Forest Naturalness Index
-                    # 等のUI表示可否に使う）。そのため実LASが無いソース（長野等）でも
-                    # las配列を空にして必ず書き出す。中身（lasが空かどうか）と、
-                    # ファイルの有無（FOL由来かどうか）は別の意味を持つので混同しない。
-                    las_sources = {"las": []}
-                    if not las_capable:
-                        readme_lines = [
-                            "このDEMソースは点群(LAS)データを使用していません。",
-                            "そのためLASファイルの参照情報はありません。",
-                        ]
-                    elif not las_paths:
-                        readme_lines = [
-                            "LASファイルは取得されませんでした（DSM未読込、または",
-                            "DSM生成時にLASが見つからなかったため）。",
-                            "点群を参照したい場合は先にDSMを読み込んでから再度Exportしてください。",
-                        ]
-                    else:
-                        for las_path in las_paths:
-                            fname = os.path.basename(las_path)
-                            rel = os.path.relpath(las_path, zip_dir)
-                            las_sources["las"].append({
-                                "filename": fname,
-                                "relative": rel,
-                            })
-                        readme_lines = [
-                            "このZIPにLASファイルは含まれていません。",
-                            "LASファイルはlas_sources.jsonの相対パスで参照されます。",
-                            "",
-                            "LASファイルの入手先（ダウンロードURL）:",
-                        ]
-                        for p in las_paths:
-                            fname = os.path.basename(p)
-                            url = las_urls.get(fname, "（URL不明）")
-                            readme_lines.append(f"  {fname}")
-                            readme_lines.append(f"    {url}")
-                        readme_lines += [
-                            "",
-                            "注意: LASファイルを移動した場合はlas_sources.jsonの",
-                            "relativeパスを修正するか、上記URLから再取得してください。",
-                        ]
-                    zf.writestr("las_sources.json",
-                                _json.dumps(las_sources, ensure_ascii=False, indent=2))
-                    zf.writestr("README_LAS_LINKS.txt",
-                                "\n".join(readme_lines))
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(self, "VS Export", f"ZIP creation failed:\n{e}")
+    def _on_vs_export_done(self, result, cancelled, error, tmp_dir):
+        """ZIP を書き出し終えたとき（メインスレッド）。"""
+        if cancelled or error:
+            # 片付け（ボタンの状態の更新）は表示も書き換えるので、先に済ませてから
+            # 中止・エラーの表示を出す（でないと前回の ZIP 名などに戻ってしまう）
+            self._end_vs_export(tmp_dir)
+            if cancelled:
+                self.lblVsExportStatus.setText("Cancelled")
+            elif error.startswith("ZIP creation failed"):
+                QtWidgets.QMessageBox.critical(self, "VS Export", error)
                 self.lblVsExportStatus.setText("—")
-                return
-
-            success = True
-            self._vs_export_dir = zip_path
+            else:
+                self.lblVsExportStatus.setText(error)
+            return
+        try:
+            self._vs_export_dir = result["zip_path"]
             parts = ["DTM included"]
-            parts.append("DSM included" if dsm_path else "DSM not available for this area")
-            parts.append("Ortho included" if ortho_path else "Ortho not available for this area")
+            parts.append("DSM included" if result["has_dsm"] else "DSM not available for this area")
+            parts.append("Ortho included" if result["has_ortho"] else "Ortho not available for this area")
             QtWidgets.QMessageBox.information(
                 self, "VS Export",
-                f"Export complete.\n{zip_name}\n" + ", ".join(parts)
+                f"Export complete.\n{result['zip_name']}\n" + ", ".join(parts)
             )
-
         finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            if not success and zip_path and os.path.exists(zip_path):
-                os.remove(zip_path)
-            self._vs_exporting = False
-            self._update_vs_export_buttons()
+            self._end_vs_export(tmp_dir)
 
     def _on_vs_cancel(self):
-        """エクスポート処理にキャンセルフラグを立てる。"""
-        self._vs_export_cancel = True
-        self.btnVsCancel.setEnabled(False)
-        self.lblVsExportStatus.setText("Cancelling…")
+        """書き出しのワーカーを止める。"""
+        if self._cancel_side_job("vs_export"):
+            self.btnVsCancel.setEnabled(False)
+            self.lblVsExportStatus.setText("Cancelling…")
 
     def _on_open_wodmi(self):
         """エクスポート ZIP を展開して webodm_importer パネルを開く。"""
@@ -6727,112 +6721,14 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             proj.removeMapLayers(remove_ids)
             QtWidgets.QApplication.processEvents()
 
-    def _prepare_dem_for_current_extent(self, status_prefix):
-        """現在のプレビュー範囲でDEMを取得/クリップし、必要なら解析解像度へ丸める。"""
-        _limit_ha = self.cmbAreaLimit.currentData()
-        if _limit_ha and _limit_ha > 0:
-            try:
-                import math as _math
-                _ext = self.preview_canvas.extent()
-                _crs = self.preview_canvas.mapSettings().destinationCrs()
-                _w, _h = _ext.width(), _ext.height()
-                if _crs.isValid() and _crs.isGeographic():
-                    _cy = (_ext.yMinimum() + _ext.yMaximum()) / 2.0
-                    _mx = 111320.0 * _math.cos(_math.radians(abs(_cy)))
-                    _area_ha = (_w * _mx) * (_h * 111320.0) / 1e4
-                else:
-                    _area_ha = _w * _h / 1e4
-                if _area_ha > _limit_ha:
-                    _reply = QtWidgets.QMessageBox.warning(
-                        self, "Area Warning",
-                        f"{status_prefix} area is {_area_ha:.0f} ha, "
-                        f"which exceeds the warning limit of {_limit_ha} ha.\n\nContinue?",
-                        QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel,
-                    )
-                    if _reply != QtWidgets.QMessageBox.StandardButton.Ok:
-                        return None
-            except Exception:  # nosec B110
-                pass
-
-        tile_sentinels = (
-            DemBrowserDialog.GSI_DEM1A_SENTINEL,
-            DemBrowserDialog.GSI_DEM5A_SENTINEL,
-            DemBrowserDialog.GSI_DEM10B_SENTINEL,
-            DemBrowserDialog.TERRARIUM_FINE_SENTINEL,
-            DemBrowserDialog.TERRARIUM_STANDARD_SENTINEL,
-            DemBrowserDialog.TERRARIUM_WIDE_SENTINEL,
-            DemBrowserDialog.VS_LP_GRID_SENTINEL,
-            DemBrowserDialog.NAGANO_SABO_DEM_SENTINEL,
-            DemBrowserDialog.NAGANO_RINMU_DEM_SENTINEL,
-        )
-        dem_path_cur = getattr(self, "_dem_path", "")
-        if dem_path_cur in tile_sentinels:
-            self._terrain_loader = None
-            self.lblAnalysisStatus.setText("Fetching elevation tiles...")
-            QtWidgets.QApplication.processEvents()
-            if dem_path_cur == DemBrowserDialog.VS_LP_GRID_SENTINEL:
-                self._load_vs_lp_grid(auto_dsm=False, update_cs_map_source=True, confirm=False)
-            elif dem_path_cur == DemBrowserDialog.NAGANO_SABO_DEM_SENTINEL:
-                self._load_nagano_sabo_dem(update_cs_map_source=True, auto_dsm=False, confirm=False)
-            elif dem_path_cur == DemBrowserDialog.NAGANO_RINMU_DEM_SENTINEL:
-                self._load_nagano_rinmu_dem(update_cs_map_source=True, confirm=False)
-            else:
-                self._load_gsi_dem(dem_path_cur, update_cs_map_source=True)
-
-        loader = getattr(self, "_terrain_loader", None)
-        if loader is None:
-            self._load_dem_info()
-            loader = getattr(self, "_terrain_loader", None)
-        if loader is None:
-            self.lblAnalysisStatus.setText("Specify a DEM file.")
-            return None
-
-        try:
-            ext = self.preview_canvas.extent()
-            canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
-            dem_crs = QgsCoordinateReferenceSystem()
-            dem_crs.createFromWkt(loader.crs_wkt)
-            if dem_crs.isValid() and canvas_crs.isValid() and canvas_crs != dem_crs:
-                xform = QgsCoordinateTransform(canvas_crs, dem_crs, QgsProject.instance())
-                ext = xform.transformBoundingBox(ext)
-            partial_outside = (
-                dem_path_cur not in tile_sentinels
-                and self._canvas_outside_loader(loader)
-            )
-            dem = loader.clip_to_extent(
-                ext.xMinimum(), ext.yMinimum(), ext.xMaximum(), ext.yMaximum()
-            )
-        except ValueError:
-            self.lblAnalysisStatus.setText("No DEM data in the export range. Adjust the view.")
-            return None
-        except Exception as exc:
-            self.lblAnalysisStatus.setText(f"DEM clip failed: {exc}")
-            return None
-
-        if partial_outside and not self._partial_outside_warned:
-            reply = QtWidgets.QMessageBox.question(
-                self, "Export Range",
-                "The export range extends beyond the DEM data.\n"
-                "Proceed with the available data only?",
-                QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel,
-            )
-            if reply != QtWidgets.QMessageBox.StandardButton.Ok:
-                return None
-            self._partial_outside_warned = True
-
-        if dem.cell_size < _RESAMPLE_THRESHOLD:
-            self.lblAnalysisStatus.setText(
-                f"Resampling {dem.cell_size:.3f}m -> {_RESAMPLE_TARGET}m ..."
-            )
-            QtWidgets.QApplication.processEvents()
-            dem = _resample_dem(dem, _RESAMPLE_TARGET)
-        return dem
-
-    def _prepare_dem_for_cs_map_export(self):
-        """取得済み/選択済みDEM全体をCS MAP用に読み込む。
+    def _prepare_cs_map_source(self):
+        """CS MAP に使う DEM を決める（メインスレッド）。読み込みはワーカーで行う。
 
         CS Map Export はDEM取得を発生させない。取得範囲の不足確認と再取得は
         DEM選択時または解析開始時の責務に限定する。
+        戻り値: {"path": str} か {"loader": data のある DEM}、使えなければ None。
+        DEM ファイルは画面側と別に開いて読む（GDAL のデータセットを別スレッドと
+        共用しないため）。
         """
         tile_sentinels = (
             DemBrowserDialog.GSI_DEM1A_SENTINEL,
@@ -6847,25 +6743,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         )
         dem_path_cur = getattr(self, "_dem_path", "")
         cs_map_path = getattr(self, "_cs_map_dem_path", "")
-        loader = None
+        src = None
 
         if cs_map_path and os.path.exists(cs_map_path):
-            try:
-                from .terrain.dem_loader import DEMLoader
-                loader = DEMLoader()
-                loader.load(cs_map_path)
-            except Exception as exc:
-                self.lblCsMapExportStatus.setText(f"CS MAP DEM read failed: {exc}")
-                return None
+            src = {"path": cs_map_path}
 
-        if loader is None:
+        loader = None
+        if src is None:
             loader = getattr(self, "_terrain_loader", None)
+            if loader is None and dem_path_cur and dem_path_cur not in tile_sentinels:
+                self._load_dem_info()
+                loader = getattr(self, "_terrain_loader", None)
 
-        if loader is None and dem_path_cur and dem_path_cur not in tile_sentinels:
-            self._load_dem_info()
-            loader = getattr(self, "_terrain_loader", None)
-
-        if loader is None:
+        if src is None and loader is None:
             if dem_path_cur in tile_sentinels:
                 self.lblCsMapExportStatus.setText(
                     "No fetched DEM is available. Load/fetch the DEM source first."
@@ -6874,20 +6764,31 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.lblCsMapExportStatus.setText("Specify a DEM file.")
             return None
 
-        try:
-            if getattr(loader, "data", None) is None:
-                loader.read_data()
-        except Exception as exc:
-            self.lblCsMapExportStatus.setText(f"DEM read failed: {exc}")
-            return None
+        if src is None:
+            _lp = getattr(loader, "path", "")
+            if _lp and os.path.isfile(_lp):
+                src = {"path": _lp}
+            elif getattr(loader, "data", None) is not None:
+                src = {"loader": loader}
+            else:
+                self.lblCsMapExportStatus.setText("DEM has no raster data.")
+                return None
 
-        if getattr(loader, "data", None) is None:
-            self.lblCsMapExportStatus.setText("DEM has no raster data.")
-            return None
-
-        rows, cols = loader.data.shape
-        pixels = rows * cols
-        if pixels > 100_000_000:
+        # 大きさの確認（データを読む前に、ファイルの大きさの情報だけで）
+        if "path" in src:
+            try:
+                from osgeo import gdal
+                _ds = gdal.Open(src["path"])
+                if _ds is None:
+                    raise RuntimeError("cannot be opened")
+                cols, rows = _ds.RasterXSize, _ds.RasterYSize
+                _ds = None
+            except Exception as exc:
+                self.lblCsMapExportStatus.setText(f"CS MAP DEM read failed: {exc}")
+                return None
+        else:
+            rows, cols = src["loader"].data.shape
+        if rows * cols > 100_000_000:
             reply = QtWidgets.QMessageBox.warning(
                 self,
                 "CS MAP Export",
@@ -6900,18 +6801,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             )
             if reply != QtWidgets.QMessageBox.StandardButton.Ok:
                 return None
-
-        if np.all(np.isnan(loader.data)):
-            self.lblCsMapExportStatus.setText("DEM has no valid elevation values.")
-            return None
-
-        if loader.cell_size < _CS_MAP_RESAMPLE_THRESHOLD:
-            self.lblCsMapExportStatus.setText(
-                f"Resampling {loader.cell_size:.3f}m -> {_RESAMPLE_TARGET}m ..."
-            )
-            QtWidgets.QApplication.processEvents()
-            loader = _resample_dem(loader, _RESAMPLE_TARGET)
-        return loader
+        return src
 
     @staticmethod
     def _cs_map_center_and_area(dem):
@@ -6991,43 +6881,32 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         basename = os.path.basename(dem_path_cur) if dem_path_cur else ""
         return f"Local file: {basename}" if basename else "Local file (unknown)"
 
-    def _write_cs_map_metadata(self, path, dem, lat, lon, area_ha):
-        """成果物としてのCS MAP GeoTIFFに来歴・データ品質・帰属のメタデータを埋め込む。
-        失敗してもラスタ本体は既に書き出し済みのため、ここでは無視して続行する。"""
-        try:
-            from osgeo import gdal
-            from datetime import datetime
-
-            tags = {
-                "GENERATED_AT": datetime.now().astimezone().isoformat(timespec="seconds"),
-                "PLUGIN": f"Forestry Operations Lite {self._plugin_version()}",
-                "DEM_SOURCE": self._cs_map_dem_source_label(),
-                "DEM_CELL_SIZE_M": f"{dem.cell_size:.2f}",
-                "CENTER_LAT": f"{lat:.6f}",
-                "CENTER_LON": f"{lon:.6f}",
-                "AREA_HA": f"{area_ha:.2f}",
-                "DATA_NOTE": (
-                    "Assumes a LiDAR-grade DEM. Photogrammetric (e.g. WebODM) DTM "
-                    "has low ground-surface accuracy, especially under canopy; "
-                    "prefer open-terrain or leaf-off captures."
-                ),
-                "METHOD_ATTRIBUTION": (
-                    "CS-style terrain visualization method proposed by Nagano "
-                    "Prefecture Forestry Research Center."
-                ),
-                "LICENSE_NOTE": (
-                    "Licensing and attribution requirements of this output "
-                    "depend on the input DEM source."
-                ),
-            }
-            ds = gdal.Open(path, gdal.GA_Update)
-            if ds is not None:
-                for key, value in tags.items():
-                    ds.SetMetadataItem(key, value)
-                ds.FlushCache()
-            ds = None
-        except Exception:  # nosec B110
-            pass
+    def _cs_map_metadata_tags(self, dem, lat, lon, area_ha):
+        """成果物としてのCS MAP GeoTIFFに埋め込む来歴・データ品質・帰属のメタデータ。
+        書き込みはワーカー（dem_worker.cs_map_save）で行う。"""
+        from datetime import datetime
+        return {
+            "GENERATED_AT": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "PLUGIN": f"Forestry Operations Lite {self._plugin_version()}",
+            "DEM_SOURCE": self._cs_map_dem_source_label(),
+            "DEM_CELL_SIZE_M": f"{dem.cell_size:.2f}",
+            "CENTER_LAT": f"{lat:.6f}",
+            "CENTER_LON": f"{lon:.6f}",
+            "AREA_HA": f"{area_ha:.2f}",
+            "DATA_NOTE": (
+                "Assumes a LiDAR-grade DEM. Photogrammetric (e.g. WebODM) DTM "
+                "has low ground-surface accuracy, especially under canopy; "
+                "prefer open-terrain or leaf-off captures."
+            ),
+            "METHOD_ATTRIBUTION": (
+                "CS-style terrain visualization method proposed by Nagano "
+                "Prefecture Forestry Research Center."
+            ),
+            "LICENSE_NOTE": (
+                "Licensing and attribution requirements of this output "
+                "depend on the input DEM source."
+            ),
+        }
 
     @staticmethod
     def _cs_map_find_own_group(root):
@@ -7080,34 +6959,74 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             group.setCustomProperty(_CS_MAP_GROUP_MARKER_KEY, True)
         return group
 
+    # CS Map の書き出しの段階ごとの進捗バーの値（ワーカーからの文言の先頭で決める）
+    _CS_MAP_PROGRESS = (
+        ("Reading DEM", 15),
+        ("Resampling", 30),
+        ("Creating CS MAP", 45),
+        ("Saving CS MAP", 75),
+    )
+
+    def _on_cs_map_export_message(self, text):
+        self.lblCsMapExportStatus.setText(text)
+        for head, value in self._CS_MAP_PROGRESS:
+            if text.startswith(head):
+                self.progressCsMapExport.setValue(value)
+                break
+
+    def _end_cs_map_export(self):
+        """CS Map の書き出しの終わり（成否に関わらず）: 画面の状態を戻す。"""
+        _dsm = getattr(self, "_dsm_loader", None)
+        if _dsm is not None:
+            _dsm.data = None
+        self.progressCsMapExport.setVisible(False)
+        self.progressCsMapExport.setRange(0, 0)
+        self._cs_map_exporting = False
+        self._update_cs_map_export_state()
+
     def _on_cs_map_export_clicked(self):
         """設定済みDEM全体からCS MAPをGeoTIFF出力し、QGISレイヤーに追加する。
         出力ファイル名は中心座標・面積から求めた識別子で決まるため、同じ場所を
-        再エクスポートしても別の場所のCS MAPを巻き込んで上書きすることはない。"""
+        再エクスポートしても別の場所のCS MAPを巻き込んで上書きすることはない。
+
+        DEM の読み込み・CS MAP の計算と、GeoTIFF の保存はワーカーで行う
+        （間でファイル名を決め、終わったらレイヤーを追加する）。この関数はすぐ戻る。
+        """
+        if "cs_map" in self._side_jobs:
+            return
         self._cs_map_exporting = True
         self._update_cs_map_export_state()
         self.lblCsMapExportStatus.setText("Preparing DEM...")
         self.progressCsMapExport.setRange(0, 100)
         self.progressCsMapExport.setValue(5)
         self.progressCsMapExport.setVisible(True)
-        QtWidgets.QApplication.processEvents()
+
+        src = self._prepare_cs_map_source()
+        if src is None:
+            self._end_cs_map_export()
+            return
+
+        from .dem_worker import cs_map_compute
+        _src_path = src.get("path")
+        _src_loader = src.get("loader")
+
+        def _job(ctx):
+            return cs_map_compute(ctx, _src_path, _src_loader, _resample_dem,
+                                  _CS_MAP_RESAMPLE_THRESHOLD, _RESAMPLE_TARGET)
+
+        self._start_side_job("cs_map", _job, self._on_cs_map_export_message,
+                             self._on_cs_map_computed, on_abort=self._end_cs_map_export)
+
+    def _on_cs_map_computed(self, result, cancelled, error):
+        """CS MAP を計算し終えたとき: ファイル名を決め、保存をワーカーで始める。"""
+        if cancelled or error:
+            self.lblCsMapExportStatus.setText(
+                error if error else "CS MAP export cancelled.")
+            self._end_cs_map_export()
+            return
         try:
-            dem = self._prepare_dem_for_cs_map_export()
-            if dem is None:
-                return
-
-            import importlib
-            from .terrain import cs_map as cm
-            from .terrain import result_writer as rw
-
-            cm = importlib.reload(cm)
-            rw = importlib.reload(rw)
-
-            self.lblCsMapExportStatus.setText("Creating CS MAP...")
-            self.progressCsMapExport.setValue(45)
-            QtWidgets.QApplication.processEvents()
-            rgba = cm.compute_cs_map(dem.data, dem.cell_size)
-
+            dem = result["dem"]
+            rgba = result["rgba"]
             export_dir = os.path.join(self._terrain_output_dir(), "cs_map")
             os.makedirs(export_dir, exist_ok=True)
             lat, lon, area_ha = self._cs_map_center_and_area(dem)
@@ -7131,15 +7050,31 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             out_path = os.path.join(export_dir, f"{name}.tif")
             if replacing:
                 self._remove_layers_for_source_path(out_path)
-            path = rw.save_rgba_raster(
-                rgba, dem.gt, dem.crs_wkt, export_dir, name, overwrite=True
-            )
-            if not os.path.exists(path) or os.path.getsize(path) <= 0:
-                raise RuntimeError(f"CS MAP file was not written: {path}")
-            self._write_cs_map_metadata(path, dem, lat, lon, area_ha)
-            self.progressCsMapExport.setValue(75)
-            QtWidgets.QApplication.processEvents()
+            tags = self._cs_map_metadata_tags(dem, lat, lon, area_ha)
+        except Exception as exc:
+            self.lblCsMapExportStatus.setText(f"CS MAP export error: {exc}")
+            self._end_cs_map_export()
+            return
 
+        from .dem_worker import cs_map_save
+
+        def _job(ctx):
+            return cs_map_save(ctx, rgba, dem, export_dir, name, tags)
+
+        def _finish(path, cancelled2, error2):
+            self._on_cs_map_saved(path, cancelled2, error2, replacing)
+
+        self._start_side_job("cs_map", _job, self._on_cs_map_export_message,
+                             _finish, on_abort=self._end_cs_map_export)
+
+    def _on_cs_map_saved(self, path, cancelled, error, replacing):
+        """CS MAP を保存し終えたとき: QGIS レイヤーに追加する（メインスレッド）。"""
+        try:
+            if cancelled or error:
+                self.lblCsMapExportStatus.setText(
+                    error if error else "CS MAP export cancelled.")
+                return
+            self.progressCsMapExport.setValue(75)
             lyr = QgsRasterLayer(path, os.path.basename(path))
             if not lyr.isValid():
                 self.lblCsMapExportStatus.setText(
@@ -7174,13 +7109,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         except Exception as exc:
             self.lblCsMapExportStatus.setText(f"CS MAP export error: {exc}")
         finally:
-            _dsm = getattr(self, "_dsm_loader", None)
-            if _dsm is not None:
-                _dsm.data = None
-            self.progressCsMapExport.setVisible(False)
-            self.progressCsMapExport.setRange(0, 0)
-            self._cs_map_exporting = False
-            self._update_cs_map_export_state()
+            self._end_cs_map_export()
 
     def _on_export_clicked(self):
         """選択中の解析番号の全レイヤー（現在表示中かどうかを問わない）を、
@@ -7189,8 +7118,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         開かずに書類作成等で参照できる実レイヤーにするためのもの。"""
         analysis_number = self.cmbAnalysisNumber.currentData()
         if not analysis_number:
-            self.lblAnalysisStatus.setVisible(True)
-            self.lblAnalysisStatus.setText("Select an analysis run to export.")
+            self._set_load_status("Select an analysis run to export.")
             return
         out_dir = self._terrain_output_dir()
         proj = QgsProject.instance()
@@ -7318,19 +7246,31 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                         buffer_node.setExpanded(False)
                         buffer_node.setItemVisibilityChecked(True)
                     added += 1
-        self.lblAnalysisStatus.setVisible(True)
         if added == 0:
             root.removeChildNode(group)
-            self.lblAnalysisStatus.setText(f"No output files found for {analysis_number}.")
+            self._set_load_status(f"No output files found for {analysis_number}.")
         else:
             msg = f"Exported {added} layer(s) to '{group.name()}'."
             if buffer_errors:
                 msg += f" Buffer skipped: {len(buffer_errors)}."
             if style_fail:
                 msg += f" ({style_fail} style file(s) not written.)"
-            self.lblAnalysisStatus.setText(msg)
+            self._set_load_status(msg)
+
+    def _set_load_status(self, text):
+        """1行目の状態の欄に出す（長い文は端が切れるので、全文はツールチップに）。"""
+        self.lblLoadStatus.setText(text)
+        self.lblLoadStatus.setToolTip(text)
 
     def _run_terrain_analysis(self):
+        # 解析中（ワーカー実行中）は受け付けない。上書きロックの自動再実行
+        # （QTimer）などで重ねて呼ばれても二重に起動しないように。
+        if self._analysis_worker is not None or self._dem_worker is not None:
+            return
+        # DEM の取り直しが終わって始め直した回か（範囲の警告・取り直しの確認は
+        # 答え済みなので聞き直さない）
+        _refetched = getattr(self, "_analysis_after_refetch", False)
+        self._analysis_after_refetch = False
         # ── 解析タイプ選択チェック ──
         if not any([
             self.chkStability.isChecked(),
@@ -7351,7 +7291,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         # ── 解析面積チェック（プレビューキャンバス範囲） ──
         _limit_ha = self.cmbAreaLimit.currentData()
-        if _limit_ha and _limit_ha > 0 and not _retrying:
+        if _limit_ha and _limit_ha > 0 and not _retrying and not _refetched:
             try:
                 import math as _math
                 _ext = self.preview_canvas.extent()
@@ -7413,18 +7353,51 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self._terrain_loader = None  # 古いデータをクリアしてから再取得
                 self.lblAnalysisStatus.setText("Fetching elevation tiles...")
                 QtWidgets.QApplication.processEvents()
+                self._analysis_refetch_stopped = False
                 if self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL:
+                    # VS LP/Grid: ワーカーで取得し、DSM も使っていたら続けて取り直す。
+                    # 取れたら解析を始め直す（ここではいったん戻る）。
                     _want_dsm = (_dsm_path_cur == DemBrowserDialog.VS_LP_GROUND_SENTINEL)
-                    self._load_vs_lp_grid(auto_dsm=False, update_cs_map_source=True, confirm=False)
-                    if _want_dsm:
-                        self._load_vs_lp_ground()
+                    self.btnStopAnalysis.setEnabled(True)
+
+                    def _after_vs_grid(ok):
+                        if ok and _want_dsm and not self._analysis_refetch_stopped:
+                            # DSM の成否に関わらず、DEM が取れていれば解析に進む
+                            self._load_vs_lp_ground(
+                                on_done=lambda _dsm_ok: self._on_analysis_refetch_done(True),
+                                mirror_label=self.lblAnalysisStatus)
+                            return
+                        self._on_analysis_refetch_done(ok)
+
+                    self._load_vs_lp_grid(auto_dsm=False, update_cs_map_source=True,
+                                          confirm=False, on_done=_after_vs_grid,
+                                          mirror_label=self.lblAnalysisStatus)
+                    return
                 elif self._dem_path == DemBrowserDialog.NAGANO_SABO_DEM_SENTINEL:
+                    # 長野 砂防課: ワーカーで取得（DSM も使っていたら DCHM → DSM も）。
+                    # 取れたら解析を始め直す（ここではいったん戻る）。
                     _want_dsm = (_dsm_path_cur == DemBrowserDialog.NAGANO_SABO_DSM_SENTINEL)
-                    self._load_nagano_sabo_dem(auto_dsm=_want_dsm, update_cs_map_source=True, confirm=False)
+                    self.btnStopAnalysis.setEnabled(True)
+                    self._load_nagano_sabo_dem(auto_dsm=_want_dsm, update_cs_map_source=True,
+                                               confirm=False,
+                                               on_done=self._on_analysis_refetch_done,
+                                               mirror_label=self.lblAnalysisStatus)
+                    return
                 elif self._dem_path == DemBrowserDialog.NAGANO_RINMU_DEM_SENTINEL:
-                    self._load_nagano_rinmu_dem(update_cs_map_source=True, confirm=False)
+                    # 長野 林務部: ワーカーで取得し、取れたら解析を始め直す。
+                    self.btnStopAnalysis.setEnabled(True)
+                    self._load_nagano_rinmu_dem(update_cs_map_source=True, confirm=False,
+                                                on_done=self._on_analysis_refetch_done,
+                                                mirror_label=self.lblAnalysisStatus)
+                    return
                 else:
-                    self._load_gsi_dem(self._dem_path, update_cs_map_source=True)
+                    # 国土地理院 / Terrarium: ワーカーで取得し、取れたら解析を
+                    # 始め直す（ここではいったん戻る）。取得中は Stop で中止できる。
+                    self.btnStopAnalysis.setEnabled(True)
+                    self._load_gsi_dem(self._dem_path, update_cs_map_source=True,
+                                       on_done=self._on_analysis_refetch_done,
+                                       mirror_label=self.lblAnalysisStatus)
+                    return
 
         loader = getattr(self, "_terrain_loader", None)
         if loader is None:
@@ -7762,281 +7735,252 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             _shutil.rmtree(tmp_folder)
         os.makedirs(tmp_folder)
 
-        self._cancel_analysis = False
-        self.btnRunAnalysis.setEnabled(False)
-        self.btnStopAnalysis.setEnabled(True)
+        # ── 解析条件を写し取る ──
+        # 計算はワーカースレッドで行い、ワーカーは画面に触らない。ここで
+        # 写し取った値で計算し params.json も書くので、実行中に画面の値が
+        # 変わっても結果と記録はそろう。
+        if self.chkFlowMFD.isChecked():
+            _flow_method = "mfd"
+        elif self.chkFlowDinf.isChecked():
+            _flow_method = "dinf"
+        else:
+            _flow_method = "d8"
+        _p = {
+            "stability":     self.chkStability.isChecked(),
+            "valley":        self.chkValley.isChecked(),
+            "flow":          self.chkFlow.isChecked(),
+            "flow_method":   _flow_method,
+            "phi_deg":       self.spinPhiDeg.value(),
+            "c_kpa":         self.spinCKpa.value(),
+            "z_m":           self.spinZm.value(),
+            "m_sat":         self.spinMSat.value(),
+            "fs_thresh":     self.spinFsThresh.value(),
+            "twi_thresh":    self.spinTwiThresh.value(),
+            "min_area":      self.spinMinArea.value(),
+            "duration_h":    self.spinDuration.value(),
+            "rainfall_mmh":  self.spinRainfall.value(),
+            "total_mm":      self.spinTotalRainfall.value(),
+            "runoff":        self.spinRunoff.value(),
+            "velocity_coef": self.spinVelocityCoef.value(),
+        }
+        _dem_path_for_params = (
+            getattr(self, "_dem_actual_path", None) or getattr(self, "_dem_path", ""))
+
+        # ── DSM（流量推測で使用）: DEM と同じ範囲に切り出しておく ──
+        # DEM/DSM の GDAL データセットは画面側と共用なので、読み出しは
+        # ワーカーでなくここ（メインスレッド）で済ませ、配列だけを渡す。
+        _dsm_data = None
+        if _p["flow"]:
+            try:
+                _dsm_data = self._clip_dsm_for_analysis(dem, ext)
+            except Exception as e:
+                _shutil.rmtree(tmp_folder, ignore_errors=True)
+                self._overwrite_retried = False
+                self.lblAnalysisStatus.setVisible(True)
+                self.lblAnalysisStatus.setText(f"Analysis error: {e}")
+                if _is_overwrite:
+                    self._unload_terrain_group(reset_controls=True)
+                return
+
+        # ── 進捗の段階（チェックされた解析だけ）と、前回実績からの見積もり ──
+        _multi_flow = _flow_method in ("mfd", "dinf")
+        _W = _ANALYSIS_STAGE_WEIGHTS
+        _stages = [
+            ("prep", "Slope / hillshade", _W["prep"]),
+            ("routing", "Flow direction / accumulation", _W["routing"]),
+        ]
+        if _p["stability"]:
+            _stages.append(("stability", "Slope stability", _W["stability"]))
+        if _p["valley"]:
+            _stages.append((
+                "valley",
+                "Valley terrain (MFD)" if _flow_method == "mfd"
+                else "Valley terrain (D∞)" if _flow_method == "dinf"
+                else "Valley terrain",
+                _W["valley_multi"] if _multi_flow else _W["valley"],
+            ))
+        if _p["flow"]:
+            _stages.append(("flow", "Flow estimation", _W["flow"]))
+        _stages.append(("integrate", "Overall risk index", _W["integrate"]))
+        # 時間はほぼ有効セル数に比例する（NoData のセルはループに入らない）
+        _n_cells = int(np.count_nonzero(~np.isnan(dem.data)))
+        _rate_key = self._analysis_rate_key()
+        _rate = self._load_analysis_rate(_rate_key)
+        _estimate_s = _rate * _n_cells / 1e6 if _rate else None
+
         # ここまで来たら上書き前のロック処理は通過済み。自動リトライ時に
         # "still locked / Retrying..." を残すと、解析中もロック処理中に見える。
-        self.lblAnalysisStatus.setVisible(False)
+        # 解析中は段階名と残り時間の表示に使う。
         self.lblAnalysisStatus.clear()
-        self.progressAnalysis.setRange(0, 100)
-        self.progressAnalysis.setValue(5)
-        self.progressAnalysis.setVisible(True)
-        QtWidgets.QApplication.processEvents()
+        self.lblAnalysisStatus.setVisible(True)
+        self.lblAnalysisStatus.setText("Starting…")
+        # 実行ボタンを同じ場所の進捗バーと入れ替える（終わったら戻す）
+        _btn_prog = _ButtonProgress(self.btnRunAnalysis, self.progressAnalysis)
+        # ワーカーからの signal で表示するので、処理を回す pump は要らない
+        prog = _AnalysisProgress(_btn_prog, self.lblAnalysisStatus,
+                                 _stages, lambda: None, estimate_s=_estimate_s)
+        self._set_analysis_running(True)
 
-        def _pe():
-            QtWidgets.QApplication.processEvents()
-            if self._cancel_analysis:
-                raise _StopAnalysis()
+        from .analysis_worker import TerrainAnalysisWorker
+        worker = TerrainAnalysisWorker(dem, _dsm_data, _p, tmp_folder, parent=self)
+        self._analysis_ctx = {
+            "seq": seq,
+            "out_dir": out_dir,
+            "tmp_folder": tmp_folder,
+            "is_overwrite": _is_overwrite,
+            "pre_run_display_state": _pre_run_display_state,
+            "params": _p,
+            "dem_path": _dem_path_for_params,
+            "n_cells": _n_cells,
+            "rate_key": _rate_key,
+            "prog": prog,
+            "btn_prog": _btn_prog,
+            "release_folder_layers": _release_folder_layers,
+            "project_changed": False,
+        }
+        worker.stage.connect(prog.stage)
+        worker.progress.connect(prog.update)
+        worker.done.connect(self._on_analysis_done)
+        self._analysis_worker = worker
+        worker.start()
 
-        saved = []
+    def _clip_dsm_for_analysis(self, dem, ext):
+        """流量推測用に DSM を DEM と同じ範囲・形に切り出した配列を返す（無ければ None）。
+
+        ext は DEM の CRS での解析範囲。読み終えたら DSM のピクセルデータは
+        解放する（メタデータ・GDALハンドルは保持）。
+        """
+        dsm_loader = getattr(self, "_dsm_loader", None)
+        if dsm_loader is None:
+            return None
         try:
-            from .terrain import analysis as ta
-            from .terrain import result_writer as rw
-            import numpy as np
+            # ピクセルデータが未ロードなら遅延読み込み
+            if dsm_loader.data is None:
+                dsm_loader.read_data()
+            clipped = None
+            # DEMと同じ地理的範囲にクリップしてシェイプを合わせる
+            # （実データ/WebODM等ではフルファイルがロードされているため必要）
+            if dsm_loader.data is not None:
+                try:
+                    from qgis.core import (
+                        QgsCoordinateReferenceSystem as _QgsCRS2,
+                        QgsCoordinateTransform as _QgsCT2,
+                    )
+                    _dem_crs2 = _QgsCRS2()
+                    _dem_crs2.createFromWkt(dem.crs_wkt)
+                    _dsm_crs2 = _QgsCRS2()
+                    _dsm_crs2.createFromWkt(dsm_loader.crs_wkt)
+                    _dsm_ext = ext
+                    if (_dsm_crs2.isValid() and _dem_crs2.isValid()
+                            and _dsm_crs2 != _dem_crs2):
+                        _xf2 = _QgsCT2(_dem_crs2, _dsm_crs2, QgsProject.instance())
+                        _dsm_ext = _xf2.transformBoundingBox(ext)
+                    clipped = dsm_loader.clip_to_extent(
+                        _dsm_ext.xMinimum(), _dsm_ext.yMinimum(),
+                        _dsm_ext.xMaximum(), _dsm_ext.yMaximum(),
+                    )
+                except Exception:
+                    clipped = None
+            if clipped is not None and clipped.data is not None \
+                    and clipped.data.shape == dem.data.shape:
+                return clipped.data
+            return None
+        finally:
+            dsm_loader.data = None
 
-            # ── 共通前処理（斜度・SHC・D8流向・流積） ──
-            slope = ta.compute_slope_deg(dem.data, dem.cell_size)
-            # slope / SHC: FOP ゾーニング用。QGIS レイヤには追加しない。
-            rw.save_raster(slope.astype(np.float32), dem.gt, dem.crs_wkt,
-                           tmp_folder, "slope", overwrite=True)
-            shc = ta.compute_shc(dem.data, dem.cell_size)
-            rw.save_raster(shc, dem.gt, dem.crs_wkt, tmp_folder,
-                           "shc", overwrite=True)
-            self.progressAnalysis.setValue(15)
-            _pe()
+    def _analysis_lock_widgets(self):
+        """解析中に操作を止める部品（結果やフォルダの扱いとぶつかるもの）。"""
+        return [
+            self.tabDataSettings,        # DEM/DSM の選択・CS Map / VS の書き出し
+            self._grpAnalysisTypes,      # 解析の種類・流れ方向の方式
+            self.tabParams,              # 解析パラメータ
+            self._areaLimitControls,     # 面積の警告
+            self.lblOutDir,              # 出力先
+            self.chkOverwrite,
+            self._grpDisplayMgmt,        # 解析番号の切り替え・地形レイヤーの表示・Export
+        ]
 
-            # ── 背景地形（Hillshade / Elevation color relief） ──
-            # 解析対象チェックに関わらず、必ず作成する（Terrain Data タブの
-            # チェックはプレビュー・コントロールの表示/非表示を切り替える
-            # だけで、生成自体のON/OFFではない）。
-            hillshade = ta.compute_hillshade(dem.data, dem.cell_size)
-            p = rw.save_raster(hillshade, dem.gt, dem.crs_wkt, tmp_folder,
-                               "hillshade", overwrite=True)
-            saved.append(("Hillshade (DTM)", p, "raster"))
-            p = rw.save_raster(dem.data.astype(np.float32), dem.gt,
-                               dem.crs_wkt, tmp_folder, "elev_relief",
-                               overwrite=True)
-            saved.append(("Elevation Background", p, "raster"))
+    def _set_analysis_running(self, running):
+        for w in self._analysis_lock_widgets():
+            w.setEnabled(not running)
+        self.btnRunAnalysis.setEnabled(not running)
+        self.btnStopAnalysis.setEnabled(running)
 
-            if self.chkStability.isChecked() or self.chkValley.isChecked() \
-                    or self.chkFlow.isChecked():
-                fdir = ta.d8_flow_direction(dem.data)
-                self.progressAnalysis.setValue(25)
-                _pe()
-                accum = ta.flow_accumulation(dem.data, fdir)
-                self.progressAnalysis.setValue(45)
-                _pe()
+    def _on_analysis_done(self, saved, cancelled, error, warning):
+        """ワーカー終了時（メインスレッド）: 後片付けと、成功時の結果の確定・表示。"""
+        ctx = self._analysis_ctx
+        worker = self._analysis_worker
+        self._analysis_ctx = None
+        self._analysis_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        if ctx is None:
+            return
+        ctx["btn_prog"].finish()
+        self._set_analysis_running(False)
+        # 上書きロックの自動リトライ枠をリセット（この実行が cleanup を
+        # 通過したので、次の実行はまた1回だけ黙って再試行できる）。
+        self._overwrite_retried = False
+        tmp_folder = ctx["tmp_folder"]
+        is_overwrite = ctx["is_overwrite"]
 
-            # ── 斜面安定解析 ──
-            if self.chkStability.isChecked():
-                fs = ta.stability_fs(
-                    slope,
-                    phi_deg=self.spinPhiDeg.value(),
-                    c_kpa=self.spinCKpa.value(),
-                    z_m=self.spinZm.value(),
-                    m=self.spinMSat.value(),
-                )
-                p = rw.save_raster(fs, dem.gt, dem.crs_wkt, tmp_folder,
-                                   "stability_fs", overwrite=True)
-                saved.append(("Slope Stability FS", p, "raster"))
-                mask = (fs < self.spinFsThresh.value()) & ~np.isnan(fs)
-                if mask.any():
-                    p2 = rw.mask_to_polygons(mask, dem.gt, dem.crs_wkt,
-                                             tmp_folder, "unstable_zones",
-                                             overwrite=True)
-                    saved.append(("Unstable zones", p2, "vector"))
-                self.progressAnalysis.setValue(60)
-                _pe()
-
-            # ── 沢地形判定（TWI） ──
-            if self.chkValley.isChecked():
-                # Flow Direction Method（Valley/TWI 専用）の選択で集水を計算
-                if self.chkFlowMFD.isChecked():
-                    _prop = ta.mfd_proportions(dem.data, dem.cell_size)
-                    accum_v = ta.multi_flow_accumulation(dem.data, _prop)
-                elif self.chkFlowDinf.isChecked():
-                    _prop = ta.dinf_proportions(dem.data, dem.cell_size)
-                    accum_v = ta.multi_flow_accumulation(dem.data, _prop)
-                else:  # D8（既定・Flow Estimation と共通の集水）
-                    accum_v = accum
-                twi = ta.compute_twi(accum_v, slope, dem.cell_size)
-                p = rw.save_raster(twi, dem.gt, dem.crs_wkt, tmp_folder,
-                                   "twi", overwrite=True)
-                saved.append(("TWI", p, "raster"))
-                min_cells = self.spinMinArea.value() / (dem.cell_size ** 2)
-                vmask = (twi >= self.spinTwiThresh.value()) \
-                    & (accum_v >= min_cells) & ~np.isnan(twi)
-                if vmask.any():
-                    p2 = rw.mask_to_polygons(vmask, dem.gt, dem.crs_wkt,
-                                             tmp_folder, "valley_zones",
-                                             overwrite=True)
-                    saved.append(("Valley Terrain", p2, "vector"))
-                self.progressAnalysis.setValue(70)
-                _pe()
-
-            # ── 流量推測（修正合理式 + 到達時間 Tc ルーティング） ──
-            if self.chkFlow.isChecked():
-                # DSM/DTM 設定時は CS（樹冠高さ）から係数を空間化
-                dsm_loader = getattr(self, "_dsm_loader", None)
-                # ピクセルデータが未ロードなら遅延読み込み
-                if dsm_loader is not None and dsm_loader.data is None:
-                    dsm_loader.read_data()
-                # DEMと同じ地理的範囲にクリップしてシェイプを合わせる
-                # （実データ/WebODM等ではフルファイルがロードされているため必要）
-                if dsm_loader is not None and dsm_loader.data is not None:
-                    try:
-                        from qgis.core import (
-                            QgsCoordinateReferenceSystem as _QgsCRS2,
-                            QgsCoordinateTransform as _QgsCT2,
-                        )
-                        _dem_crs2 = _QgsCRS2()
-                        _dem_crs2.createFromWkt(dem.crs_wkt)
-                        _dsm_crs2 = _QgsCRS2()
-                        _dsm_crs2.createFromWkt(dsm_loader.crs_wkt)
-                        _dsm_ext = ext
-                        if (_dsm_crs2.isValid() and _dem_crs2.isValid()
-                                and _dsm_crs2 != _dem_crs2):
-                            _xf2 = _QgsCT2(_dem_crs2, _dsm_crs2, QgsProject.instance())
-                            _dsm_ext = _xf2.transformBoundingBox(ext)
-                        dsm_loader = dsm_loader.clip_to_extent(
-                            _dsm_ext.xMinimum(), _dsm_ext.yMinimum(),
-                            _dsm_ext.xMaximum(), _dsm_ext.yMaximum(),
-                        )
-                    except Exception:
-                        dsm_loader = None
-                if dsm_loader is not None and dsm_loader.data is not None \
-                        and dsm_loader.data.shape == dem.data.shape:
-                    cs = dsm_loader.data - dem.data
-                    # 時間‐面積法は各セルの局所 C で局所流出を作り、内部で
-                    # 下流累積するので、上流平均でなく per-cell C を渡す。
-                    c_local, velocity_coef = ta.cs_to_flow_coefficients(cs)
-                    self.progressAnalysis.setValue(65)
-                    _pe()
-                else:
-                    c_local = self.spinRunoff.value()
-                    velocity_coef = self.spinVelocityCoef.value()
-                self.progressAnalysis.setValue(72)
-                _pe()
-                local_tt = ta.compute_travel_time(
-                    dem.data, fdir, dem.cell_size,
-                    velocity_coef=velocity_coef,
-                )
-                tc = ta.compute_tc(dem.data, fdir, local_tt)
-                self.progressAnalysis.setValue(78)
-                _pe()
-
-                def _flow_prog(_frac):
-                    self.progressAnalysis.setValue(int(78 + 10 * _frac))
-                    _pe()
-
-                # 時間‐面積法（Clark 単位図法）による負荷3指標
-                Q_peak, Q_mean, _tc = ta.time_area_flow_metrics(
-                    dem.data, fdir, local_tt, tc, dem.cell_size,
-                    c_grid=c_local,
-                    duration_h=self.spinDuration.value(),
-                    i_peak_mmh=self.spinRainfall.value(),
-                    total_mm=self.spinTotalRainfall.value(),
-                    progress_cb=_flow_prog,
-                )
-                p0 = rw.save_raster(tc, dem.gt, dem.crs_wkt, tmp_folder,
-                                    "tc", overwrite=True)
-                saved.append(("Time load Tc[h]", p0, "raster"))
-                p1 = rw.save_raster(Q_peak, dem.gt, dem.crs_wkt, tmp_folder,
-                                    "flow_peak", overwrite=True)
-                saved.append(("Peak load Qp[m³/s]", p1, "raster"))
-                p2 = rw.save_raster(Q_mean, dem.gt, dem.crs_wkt, tmp_folder,
-                                    "flow_mean", overwrite=True)
-                saved.append(("Mean load Qm[m³/s]", p2, "raster"))
-
-            # ── 統合リスク指標（FS/TWI/流量のいずれかがあれば自動生成） ──
-            self.progressAnalysis.setValue(90)
-            _pe()
-            try:
-                from .terrain import integration as ti
-                int_result = ti.build_integrated_index(
-                    tmp_folder,
-                    analysis_prefix="",
-                    fs_caution=self.spinFsThresh.value(),
-                )
-                if int_result["integrated_risk_index"]:
-                    saved.append(("Overall Risk Index", int_result["integrated_risk_index"], "raster"))
-                if int_result["integrated_high_risk"]:
-                    saved.append(("High Risk Areas", int_result["integrated_high_risk"], "vector"))
-            except FileNotFoundError:
-                pass  # 対象ラスタなし（単独の湧水のみ解析時など）
-            except _StopAnalysis:
-                raise
-            except Exception as e_int:
-                self.lblAnalysisStatus.setText(f"Integrated risk error: {e_int}")
-
-        except _StopAnalysis:
-            self.progressAnalysis.setVisible(False)
-            self.progressAnalysis.setRange(0, 0)
+        if cancelled or error:
+            # 中止（プロジェクトの切り替えを含む）・エラーでは途中のデータを残さない
+            shutil.rmtree(tmp_folder, ignore_errors=True)
             self.lblAnalysisStatus.setVisible(True)
-            self.lblAnalysisStatus.setText("Analysis cancelled.")
-            self.btnRunAnalysis.setEnabled(True)
-            self.btnStopAnalysis.setEnabled(False)
-            import shutil as _shutil
-            if os.path.exists(tmp_folder):
-                _shutil.rmtree(tmp_folder)
+            if ctx["project_changed"]:
+                self.lblAnalysisStatus.setText(
+                    "Analysis cancelled because the project was changed.")
+            elif cancelled:
+                self.lblAnalysisStatus.setText("Analysis cancelled.")
+            else:
+                self.lblAnalysisStatus.setText(f"Analysis error: {error}")
             # 上書き時は事前クリーンアップで旧レイヤーを消しているので、
-            # ボタン表示を現実（何も表示なし）に合わせる。
-            if _is_overwrite:
+            # ボタン表示を現実（何も表示なし）に合わせる。プロジェクトが
+            # 切り替わった後は、QGIS がレイヤーを消し参照もリセット済み。
+            if is_overwrite and not ctx["project_changed"]:
                 self._unload_terrain_group(reset_controls=True)
             return
+
+        try:
+            self._finish_analysis(ctx, saved, warning)
         except Exception as e:
-            self.progressAnalysis.setVisible(False)
-            self.progressAnalysis.setRange(0, 0)
+            shutil.rmtree(tmp_folder, ignore_errors=True)
             self.lblAnalysisStatus.setVisible(True)
             self.lblAnalysisStatus.setText(f"Analysis error: {e}")
-            self.btnRunAnalysis.setEnabled(True)
-            self.btnStopAnalysis.setEnabled(False)
-            if _is_overwrite:
-                self._unload_terrain_group(reset_controls=True)
-            return
-        finally:
-            # DSM ピクセルデータを解放（メタデータ・GDALハンドルは保持）
-            _dsm = getattr(self, "_dsm_loader", None)
-            if _dsm is not None:
-                _dsm.data = None
-            # 上書きロックの自動リトライ枠をリセット（この実行が cleanup を
-            # 通過したので、次の実行はまた1回だけ黙って再試行できる）。
-            self._overwrite_retried = False
+
+    def _finish_analysis(self, ctx, saved, warning):
+        """計算が終わった一時フォルダを解析番号のフォルダに確定し、表示する。"""
+        import json as _json
+        import time as _time
+        out_dir = ctx["out_dir"]
+        tmp_folder = ctx["tmp_folder"]
+        _p = ctx["params"]
+
+        # 計算にかかった時間を次回の見積もり用に残す（同じ解析の組み合わせごと）
+        _elapsed_s = ctx["prog"].elapsed()
+        if ctx["n_cells"] > 0:
+            self._save_analysis_rate(ctx["rate_key"], _elapsed_s * 1e6 / ctx["n_cells"])
 
         # ── ファイル数が確定したので解析番号を決定し tmp_folder を1回だけリネーム ──
         N = len(saved)
-        analysis_number = self._format_analysis_number(seq, N)
+        analysis_number = self._format_analysis_number(ctx["seq"], N)
         folder = os.path.join(out_dir, analysis_number)
 
         # 解析条件を params.json に保存（リネーム前に tmp_folder へ書き込む）
-        import json as _json
         _params = {
-            "dem_path": getattr(self, "_dem_actual_path", None) or getattr(self, "_dem_path", ""),
-            "analyses": [
-                k for k, chk in [("stability", self.chkStability),
-                                 ("valley",    self.chkValley),
-                                 ("flow",      self.chkFlow)]
-                if chk.isChecked()
-            ],
+            "dem_path": ctx["dem_path"],
+            "analyses": [k for k in ("stability", "valley", "flow") if _p[k]],
         }
-        if self.chkFlow.isChecked():
-            _params.update({
-                "duration_h":    self.spinDuration.value(),
-                "rainfall_mmh":  self.spinRainfall.value(),
-                "total_mm":      self.spinTotalRainfall.value(),
-                "runoff":        self.spinRunoff.value(),
-                "velocity_coef": self.spinVelocityCoef.value(),
-            })
-        if self.chkStability.isChecked():
-            _params.update({
-                "phi_deg":   self.spinPhiDeg.value(),
-                "c_kpa":     self.spinCKpa.value(),
-                "z_m":       self.spinZm.value(),
-                "m_sat":     self.spinMSat.value(),
-                "fs_thresh": self.spinFsThresh.value(),
-            })
-        if self.chkValley.isChecked():
-            if self.chkFlowMFD.isChecked():
-                _params["flow_method"] = "mfd"
-            elif self.chkFlowDinf.isChecked():
-                _params["flow_method"] = "dinf"
-            else:
-                _params["flow_method"] = "d8"
-            _params.update({
-                "twi_thresh": self.spinTwiThresh.value(),
-                "min_area":   self.spinMinArea.value(),
-            })
+        if _p["flow"]:
+            _params.update({k: _p[k] for k in (
+                "duration_h", "rainfall_mmh", "total_mm", "runoff", "velocity_coef")})
+        if _p["stability"]:
+            _params.update({k: _p[k] for k in (
+                "phi_deg", "c_kpa", "z_m", "m_sat", "fs_thresh")})
+        if _p["valley"]:
+            _params["flow_method"] = _p["flow_method"]
+            _params.update({k: _p[k] for k in ("twi_thresh", "min_area")})
         try:
             with open(os.path.join(tmp_folder, "params.json"), "w", encoding="utf-8") as _f:
                 _json.dump(_params, _f, ensure_ascii=False, indent=2)
@@ -8047,7 +7991,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # 通常は上の事前クリーンアップで folder は存在しないが、番号衝突等の
         # 保険としてここでも「リネーム退避 → 無理なら rmtree」で退ける。
         if os.path.exists(folder):
-            _release_folder_layers(folder)
+            ctx["release_folder_layers"](folder)
             import gc as _gc
             from qgis.PyQt.QtCore import QCoreApplication as _QCA
             _gc.collect()
@@ -8056,11 +8000,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 out_dir, f".trash_{os.path.basename(folder)}_{int(_time.time())}")
             try:
                 os.rename(folder, _trash2)
-                _shutil.rmtree(_trash2, ignore_errors=True)
+                shutil.rmtree(_trash2, ignore_errors=True)
             except OSError:
                 for _attempt in range(10):
                     try:
-                        _shutil.rmtree(folder)
+                        shutil.rmtree(folder)
                         break
                     except (PermissionError, OSError):
                         if _attempt < 9:
@@ -8085,26 +8029,118 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # 上書き: 全クリア（レイヤー除去＋ボタン・内部状態リセット）＝「消した」を明示。
         # 新規: 直前の表示状態を新解析へ引き継ぐ（セレクタ切替と同じ挙動）。
         self._unload_terrain_group(reset_controls=True)
-        if not _is_overwrite:
+        if not ctx["is_overwrite"]:
             self._create_terrain_group(analysis_number)
-            self._restore_terrain_display_state(_pre_run_display_state)
+            self._restore_terrain_display_state(ctx["pre_run_display_state"])
 
         self._update_analysis_condition_label(analysis_number)
         names = ", ".join(n for n, _, _ in saved)
-        self.progressAnalysis.setValue(100)
-        self.progressAnalysis.setVisible(False)
-        self.progressAnalysis.setRange(0, 0)
         self.lblAnalysisStatus.setVisible(True)
-        self.lblAnalysisStatus.setText(
-            f"Done [{analysis_number}]: {names}"
-        )
+        _text = f"Done [{analysis_number}] in {self._format_duration(_elapsed_s)}: {names}"
+        if warning:
+            _text += f"\n{warning}"
+        self.lblAnalysisStatus.setText(_text)
         if self.iface is not None:
             self.iface.mapCanvas().refresh()
-        self.btnRunAnalysis.setEnabled(True)
+
+    def _on_analysis_refetch_done(self, ok):
+        """解析の前の DEM 取り直しが終わったとき: 取れていれば解析を始め直す。"""
         self.btnStopAnalysis.setEnabled(False)
+        self.lblAnalysisStatus.setVisible(True)
+        if getattr(self, "_analysis_refetch_stopped", False):
+            # 取り直しの途中で Stop が押された（DEM の後の DSM の段階を含む）
+            self._analysis_refetch_stopped = False
+            self.lblAnalysisStatus.setText("Analysis cancelled.")
+            return
+        if ok and getattr(self, "_terrain_loader", None) is not None:
+            self._analysis_after_refetch = True
+            self._run_terrain_analysis()
+            return
+        # 取れなかった（中止・エラー）: 理由は DEM の欄と同じ文言を出す
+        self.lblAnalysisStatus.setText(
+            f"DEM fetch did not complete: {self.lblDemInfo.text()}")
 
     def _on_stop_analysis(self):
-        self._cancel_analysis = True
+        # 解析の前の DEM 取り直し中なら、取得を止める（続く DSM の取得・解析もしない）
+        if self._dem_worker is not None:
+            self._analysis_refetch_stopped = True
+            self._cancel_dem_job()
+            self.btnStopAnalysis.setEnabled(False)
+            self.lblAnalysisStatus.setText("Cancelling…")
+            return
+        worker = self._analysis_worker
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+            self.btnStopAnalysis.setEnabled(False)
+            self.lblAnalysisStatus.setText("Cancelling…")
+
+    def shutdown_analysis(self):
+        """パネルを閉じる・プラグインを外すとき: 解析を中止して終わるのを待つ。
+
+        スレッドを残したまま閉じると QGIS が落ちる原因になる。待ったあとの
+        done は受け取らず（閉じた後の画面を触らないため）、ここで片付ける。
+        """
+        worker = self._analysis_worker
+        ctx = self._analysis_ctx
+        if worker is None:
+            return
+        try:
+            worker.done.disconnect(self._on_analysis_done)
+        except (TypeError, RuntimeError):
+            pass
+        worker.cancel()
+        if worker.isRunning():
+            worker.wait(30000)
+        self._analysis_worker = None
+        self._analysis_ctx = None
+        if ctx is not None:
+            shutil.rmtree(ctx["tmp_folder"], ignore_errors=True)
+            ctx["btn_prog"].finish()
+            self._set_analysis_running(False)
+
+    # ── 解析時間の見積もり（前回実績：100万セルあたりの秒数） ──
+    # 時間は機械と解析の組み合わせで大きく違うので、固定値でなく前回の
+    # 実測を QSettings に残して使う。DSM の有無は差が小さいので区別しない。
+
+    def _analysis_rate_key(self):
+        parts = []
+        if self.chkStability.isChecked():
+            parts.append("stability")
+        if self.chkValley.isChecked():
+            parts.append(
+                "valley_mfd" if self.chkFlowMFD.isChecked()
+                else "valley_dinf" if self.chkFlowDinf.isChecked()
+                else "valley_d8")
+        if self.chkFlow.isChecked():
+            parts.append("flow")
+        return "analysis_sec_per_mcell/" + "+".join(parts)
+
+    def _load_analysis_rate(self, key):
+        s = QSettings()
+        s.beginGroup(self._SK)
+        try:
+            v = float(s.value(key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            v = 0.0
+        s.endGroup()
+        return v if v > 0 else None
+
+    def _save_analysis_rate(self, key, sec_per_mcell):
+        s = QSettings()
+        s.beginGroup(self._SK)
+        s.setValue(key, float(sec_per_mcell))
+        s.endGroup()
+
+    @staticmethod
+    def _format_duration(seconds):
+        s = int(round(max(0.0, seconds)))
+        if s < 60:
+            return f"{s} s"
+        m, s = divmod(s, 60)
+        if m < 60:
+            return f"{m} min {s} s"
+        h, m = divmod(m, 60)
+        return f"{h} h {m} min"
 
     # ── 設定の保存・復元 ──────────────────────────────────────────
 
@@ -8437,6 +8473,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._update_cs_map_export_state()
 
     def closeEvent(self, event):
+        # 解析中・DEM 取得中なら中止して終わるのを待つ（スレッドを残して閉じない）
+        self.shutdown_analysis()
+        self._shutdown_dem_job()
+        self._shutdown_side_jobs()
         self._save_settings()
         self._save_layer_settings_to_project()  # レイヤー設定をプロジェクトにも保存
         self._unload_terrain_group()
@@ -8461,6 +8501,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.iface.mapCanvas().extentsChanged.disconnect(self._on_main_canvas_changed)
             except Exception:  # nosec B110
                 pass
+        # 開き直したときに initialize_window_mode でつなぎ直す
+        self._project_signals_connected = False
         self._restore_base_layer_opacity()
         self.closingPlugin.emit()
         event.accept()

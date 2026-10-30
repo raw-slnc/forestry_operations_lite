@@ -3,7 +3,7 @@ name=Forestry Operations Lite
 qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
 description=Terrain analysis for forestry sites: DEM/DSM loading, slope, TWI, stability index, CS MAP export, and time-area flow-load estimation.
-version=1.2.2
+version=1.3.0
 author=Hideharu Masai
 email=hideharumasai@void.mints.ne.jp
 
@@ -14,6 +14,7 @@ repository=https://github.com/raw-slnc/forestry_operations_lite
 
 hasProcessingProvider=no
 changelog=
+    1.3.0 - Terrain analysis, DEM/DSM fetching, and CS Map / WebODM Importer export no longer freeze QGIS. Analysis shows the current step and estimated time remaining. Switching projects or closing the plugin window cancels a running task and removes its partial files. Faster analysis with the same results. Export is renamed "Export to Project" and moved next to the analysis run selector. Fixed project open/save not being detected after reopening the plugin window, and the output folder not updating for a new unsaved project. Minor UI adjustments.
     1.2.2 - Terrain Data can now select Nagano Prefecture open-data DEM directly in the DEM browser, with DSM automatically computed from matching canopy height (CHM) data where available. Fixed Refresh (layer list) unexpectedly reverting a just-made Background/Tile layer choice back to a previously saved one. Adjusted Wetland Terrain's low/mid filter strength (low is stronger, mid is weaker). CS Map Export: exported layers are now grouped under "FOL_CSMap", placed directly below your GPKG/SHP layers instead of at the very bottom of the layer panel. Minor UI adjustments.
     1.2.1 - CS Map Export: change the output file naming scheme; embed provenance, data-quality, and attribution metadata in the output GeoTIFF; update related manual sections.
     1.2.0 - Rebuilt Flow analysis with the time-area method (Clark unit hydrograph), adding Qp, Qm, and Tc outputs with improved visualization and filtering. Add standalone CS Map Export under Terrain Data; it is based on CS-style terrain visualization and uses a color balance tuned for Forestry Operations Lite so analysis layers such as flow, wetness, and terrain features remain easy to interpret. The CS output can be added directly to QGIS and assigned to Layer Settings > Tile Layer, stays disabled until DEM data is available, shows local export progress, and uses stable RGB output for QGIS layer-property adjustments. Rainfall input handling, layer/export behavior, and Windows overwrite support were refined. High Risk Areas now use a faster raster-mask workflow, older results can be converted, and DEM/DSM selection can include WebODM Importer-managed terrain assets. The startup window layout was compacted, with preview controls kept visible and cleaner left-panel spacing. Also adjusted design-storm handling and updated the manual. Documentation and About text note CS立体図 attribution, the independent FOL implementation, and input-data licensing. [IMPORTANT] Improved preview rendering stability for terrain layer switching. Further refinements may follow based on field testing.

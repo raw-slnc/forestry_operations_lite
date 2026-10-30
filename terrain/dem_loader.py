@@ -280,7 +280,8 @@ class GSITileDEMLoader:
 
     # ── 範囲取得 ──────────────────────────────────────────────────────
 
-    def fetch_for_extent(self, lon_min, lat_min, lon_max, lat_max, sources=None, cancel_cb=None):
+    def fetch_for_extent(self, lon_min, lat_min, lon_max, lat_max, sources=None, cancel_cb=None,
+                         progress_cb=None):
         """WGS84 経緯度範囲のタイルをダウンロードして numpy 配列に組み立てる。
         sources を省略すると TILE_SOURCES（1m→5m→10m）の順で自動フォールバックする。
 
@@ -291,6 +292,8 @@ class GSITileDEMLoader:
             省略時は TILE_SOURCES を使用。ルート計算など特定解像度を指定する場合に渡す。
         cancel_cb : callable | None
             呼び出すと True を返す場合、タイル取得をキャンセルする。
+        progress_cb : callable(done, total) | None
+            タイルを1枚取得するごとに呼ぶ（解像度を切り替えると数え直す）。
         """
         self.last_errors = []
         self._used_source_label = None
@@ -304,7 +307,8 @@ class GSITileDEMLoader:
                 tile_url, tile_zoom, label = item
                 encoding = "gsi"
             result = self._fetch_tiles(lon_min, lat_min, lon_max, lat_max,
-                                       tile_url, tile_zoom, encoding, cancel_cb=cancel_cb)
+                                       tile_url, tile_zoom, encoding, cancel_cb=cancel_cb,
+                                       progress_cb=progress_cb)
             if result is None:  # キャンセルされた
                 self._cancelled = True
                 return self
@@ -351,9 +355,10 @@ class GSITileDEMLoader:
         self.nodata    = None
         return self
 
-    def _fetch_tiles(self, lon_min, lat_min, lon_max, lat_max, tile_url, zoom, encoding="gsi", cancel_cb=None):
+    def _fetch_tiles(self, lon_min, lat_min, lon_max, lat_max, tile_url, zoom, encoding="gsi", cancel_cb=None,
+                     progress_cb=None):
         """指定URLとzoomでタイルを取得し (total_arr, zoom, x0, y0) を返す。
-        キャンセル時は None を返す。"""
+        キャンセル時は None を返す。progress_cb(done, total) はタイル1枚ごとに呼ぶ。"""
         max_tile = 2 ** zoom - 1
         TS = self.TILE_SIZE
 
@@ -377,6 +382,9 @@ class GSITileDEMLoader:
             )
 
         total_arr = np.full((ny * TS, nx * TS), np.nan, dtype=np.float64)
+        n_total = nx * ny
+        if progress_cb is not None:
+            progress_cb(0, n_total)
 
         for iy, ty in enumerate(range(y0, y1 + 1)):
             for ix, tx in enumerate(range(x0, x1 + 1)):
@@ -391,6 +399,8 @@ class GSITileDEMLoader:
                     if not hasattr(self, 'last_errors'):
                         self.last_errors = []
                     self.last_errors.append(f"z={zoom} x={tx} y={ty}: {err}")
+                if progress_cb is not None:
+                    progress_cb(iy * nx + ix + 1, n_total)
 
         return (total_arr, zoom, x0, y0)
 
