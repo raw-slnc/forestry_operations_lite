@@ -126,7 +126,7 @@ Use the **Open in WODMI** button to open the exported ZIP directly in the WebODM
 - The Netherlands, France and New Zealand sources are listed in the DEM / DSM browser only when the Design Preview overlaps that country.
 - The DEM is fetched for the current Design Preview extent. For the Netherlands and France, the matching DSM (same survey) is then fetched automatically for the DEM extent. The DSM row can still be cancelled, cleared and fetched again on its own, and a DSM chosen later is also fetched for the DEM extent, so moving the map does not shift it.
 - Clearing the DEM also clears the matching DSM.
-- Fetched files are kept in `remote_dem/`. When a file fetched earlier from the same source already covers the needed extent, it is used without downloading again. Cached DEM/DSM files are kept while an analysis references them or they are currently loaded, and are removed after they are no longer referenced.
+- Fetched files are kept in `remote_dem/`. When a file fetched earlier from the same source already covers the needed extent, it is used without downloading again. Cached DEM/DSM files are kept while an analysis references them or they are currently loaded. After they are no longer referenced, cache cleanup removes them when the analysis list is next refreshed.
 - The PDOK WCS can be slow, LiDAR HD does not yet cover all of France, and the LINZ copy on AWS may lag the latest LINZ release. These notes are also shown in the DEM browser.
 - LINZ DEM tiles are LERC-compressed. If the GDAL bundled with QGIS cannot read LERC (for example the Flatpak build), the plugin says so and does not fetch.
 
@@ -219,7 +219,7 @@ forestry_operations_lite/
 │   ├── cs_map.tif                             ← overwrite mode
 │   └── cs_map_YYYYMMDD_HHMMSS.tif             ← non-overwrite mode
 │
-└── {run_number}/                 # Analysis results (e.g. 0011, 0012, 0010+2)
+└── {run_number}/                 # Analysis results (e.g. 0017, 0027, 0030+2)
     ├── params.json               ← analysis parameters
     ├── stability_fs.tif          ← slope stability factor of safety
     ├── unstable_zones.gpkg       ← FS < threshold polygons
@@ -233,8 +233,8 @@ forestry_operations_lite/
     └── integrated_high_risk.gpkg ← high-risk area polygons
 ```
 
-**Run number format:** `{seq:3d}{n_files:1d}` (e.g. `0011` = run 001, 1 file).
-When more than 9 files: `{seq}0+{n-10}` (e.g. `0010+2` = run 001, 12 files).
+**Run number format:** `{seq:03d}{n_files:1d}` (e.g. `0017` = sequence 001, 7 files).
+When more than 9 files: `{seq}0+{n-10}` (e.g. `0030+2` = sequence 003, 12 files).
 
 
 ---
@@ -378,7 +378,7 @@ AWS S3上のバーチャル静岡オープンデータを使用する機能で�
 - オランダ・フランス・ニュージーランドのソースは、Design Preview がその国に掛かっているときだけ DEM / DSM ブラウザに表示されます。
 - DEM は現在の Design Preview の範囲で取得します。オランダ・フランスでは、続けて同じ測量の DSM を DEM の範囲で自動取得します。DSM 行は単独で中止・Clear・再取得でき、あとから選んだ DSM も DEM の範囲で取得するため、地図を動かしてもずれません。
 - DEM を Clear すると、組の DSM もクリアします。
-- 取得したファイルは `remote_dem/` に残し、同じソースで前に取得したファイルが必要な範囲を覆っていれば、ダウンロードせずにそれを使います。解析から参照されている、または現在読み込み中の DEM/DSM は保持し、参照されなくなったキャッシュは削除します。
+- 取得したファイルは `remote_dem/` に残し、同じソースで前に取得したファイルが必要な範囲を覆っていれば、ダウンロードせずにそれを使います。解析から参照されている、または現在読み込み中の DEM/DSM は保持します。参照されなくなったキャッシュは、次に解析一覧を更新したときに削除します。
 - PDOK の WCS は時間がかかることがあり、LiDAR HD はフランス全土をまだ覆っておらず、AWS 上の LINZ データは最新版より遅れることがあります。これらの注意は DEM ブラウザにも表示します。
 - LINZ DEM のタイルは LERC 圧縮です。QGIS に同梱の GDAL が LERC を読めない場合（Flatpak 版など）は、その旨を表示して取得しません。
 
@@ -471,7 +471,7 @@ forestry_operations_lite/
 │   ├── cs_map.tif                             ← 上書きモード
 │   └── cs_map_YYYYMMDD_HHMMSS.tif             ← 非上書きモード
 │
-└── {解析番号}/                   # 解析結果（例: 0011, 0012, 0010+2）
+└── {解析番号}/                   # 解析結果（例: 0017, 0027, 0030+2）
     ├── params.json               ← 解析パラメータ
     ├── stability_fs.tif          ← 斜面安定性（安全率）
     ├── unstable_zones.gpkg       ← 不安定ゾーンポリゴン（FS < 閾値）
@@ -485,8 +485,8 @@ forestry_operations_lite/
     └── integrated_high_risk.gpkg ← 高リスクエリアポリゴン
 ```
 
-**解析番号フォーマット：** `{連番3桁}{ファイル数1桁}`（例: `0011` = 第1回解析・1ファイル）
-ファイル数が10以上の場合: `{連番}0+{n-10}`（例: `0010+2` = 第1回解析・12ファイル）
+**解析番号フォーマット：** `{連番3桁}{ファイル数1桁}`（例: `0017` = シーケンス001・7ファイル）
+ファイル数が10以上の場合: `{連番}0+{n-10}`（例: `0030+2` = シーケンス003・12ファイル）
 
 
 ---

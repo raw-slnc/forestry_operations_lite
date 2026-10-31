@@ -149,7 +149,7 @@ missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin
   <li>The fetched Virtual Shizuoka data extent is not continuously shown as a boundary in the preview. When the analysis area extends beyond the fetched VS LP/Grid DTM, the plugin asks whether to fetch it again (see <em>Re-fetching before analysis</em> below); VS LP -&gt; DSM is fetched again together with it.</li>
   <li>Local DEM/DSM files can be analyzed with partial overlap, using the available data. For Virtual Shizuoka data, fetching the data for the intended analysis range first avoids re-fetching at analysis time.</li>
   <li>VS LP -&gt; DSM downloads LAS files (~237 MB per tile) into <code>vs_lp_ground/</code> under the analysis output folder. There is no time-based expiry: after each successful VS LP -&gt; DSM run only the LAS tiles used by that run are kept and older LAS files are removed. Re-running the same area reuses the cached LAS without re-downloading. Delete <code>vs_lp_ground/</code> manually to reclaim space.</li>
-  <li>Fetched DEM/DSM files are cached in <code>dem/</code>, <code>vs_lp_grid/</code> and <code>remote_dem/</code>, and are removed automatically once no saved analysis run references them and they are not currently loaded.</li>
+  <li>Fetched DEM/DSM files are cached in <code>dem/</code>, <code>vs_lp_grid/</code> and <code>remote_dem/</code>. Files referenced by a saved analysis or currently loaded are kept; once no longer referenced, cache cleanup removes them when the analysis list is next refreshed.</li>
 </ul>
 <div class="note">
   The DEM browser only offers VS LP/Grid DTM / VS LP -&gt; DSM when the current Design Preview extent overlaps Shizuoka Prefecture. Pan/zoom the preview into Shizuoka first if these options are not listed.<br>
@@ -161,7 +161,7 @@ missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin
   <li>The DEM / DSM browser lists these sources only when the Design Preview overlaps the country: <strong>AHN4 DTM / DSM</strong> (Netherlands, 0.5 m), <strong>IGN LiDAR HD MNT / MNS</strong> (France, 0.5 m) and <strong>LINZ DEM</strong> (New Zealand, 1 m, DEM only).</li>
   <li>The DEM is fetched for the current Design Preview extent. For the Netherlands and France, the DSM from the same survey is then fetched automatically for the DEM extent.</li>
   <li>The DSM row can be cancelled, cleared and fetched again on its own. A DSM chosen later is also fetched for the DEM extent, so moving the map does not shift it. Clearing the DEM also clears the matching DSM.</li>
-  <li>Fetched files are saved in <code>remote_dem/</code> under the analysis output folder. When a file fetched earlier from the same source already covers the needed extent, it is used without downloading again. Cached DEM/DSM files are kept while an analysis references them or they are currently loaded, and are removed after they are no longer referenced.</li>
+  <li>Fetched files are saved in <code>remote_dem/</code> under the analysis output folder. When a file fetched earlier from the same source already covers the needed extent, it is used without downloading again. Cached DEM/DSM files are kept while an analysis references them or they are currently loaded. After they are no longer referenced, cache cleanup removes them when the analysis list is next refreshed.</li>
   <li>LINZ DEM tiles are LERC-compressed. If the GDAL bundled with QGIS cannot read LERC (for example the Flatpak build), the plugin says so and does not fetch.</li>
 </ul>
 <div class="note">
@@ -426,7 +426,7 @@ USDA NRCS National Engineering Handbook, Part 630.</p>
   <tr><td><code>zip/FOL_*-all.zip</code></td><td>Export for WebODM Importer (DTM / DSM / Ortho; <code>DATA_SOURCES.txt</code> for Netherlands / France / New Zealand)</td></tr>
 </table>
 <div class="note">
-  Analysis runs are saved in numbered subfolders (<code>0001</code>, <code>0002</code>, …) and are never deleted automatically &mdash; an overwrite run replaces its own number, otherwise runs accumulate. The next run number is (highest existing number) + 1: deleting a run in the middle leaves that number unused, while deleting the highest-numbered run frees it for reuse. Deleting a run folder also lets the DEM/DSM cache cleanup free any file in <code>dem/</code>, <code>vs_lp_grid/</code> or <code>remote_dem/</code> that no remaining run still references and that is not currently loaded. To keep the output folder and its cache from growing without bound, delete run folders you no longer need directly in the file manager (the plugin does not need to be running).
+  Analysis runs are saved in subfolders whose names combine a three-digit run sequence with the number of output files: for example, <code>0017</code> is sequence 001 with 7 files, and <code>0030+2</code> is sequence 003 with 12 files. Runs are never deleted automatically &mdash; an overwrite run replaces its own sequence, otherwise the sequence increases. Deleting a middle sequence leaves it unused, while deleting the highest sequence frees it for reuse. Deleting a run folder also lets the DEM/DSM cache cleanup free files in <code>dem/</code>, <code>vs_lp_grid/</code>, and <code>remote_dem/</code> that no remaining run references and that are not currently loaded. To keep the output folder and its cache from growing without bound, delete run folders you no longer need directly in the file manager; cleanup runs when the plugin next refreshes the analysis list.
 </div>
 </div>
 
@@ -669,7 +669,7 @@ protect.</p>
   <li>取得済みの Virtual Shizuoka data の範囲は、取得後にプレビュー上へ常時枠表示されるわけではありません。解析範囲が取得済みの VS LP/Grid DTM の外に出るときは、再取得するかを確認します（下の「解析前の再取得」参照）。VS LP -&gt; DSM も一緒に取り直します。</li>
   <li>通常のローカル DEM/DSM は一部範囲外でも利用可能な範囲で解析できます。Virtual Shizuoka data は、解析したい範囲を決めてから先に取得しておくと、解析時の再取得が要りません。</li>
   <li>VS LP -&gt; DSM は LAS ファイル（1タイル約 237 MB）を解析出力フォルダ内の <code>vs_lp_ground/</code> に保存します。期間による自動削除はなく、VS LP -&gt; DSM の実行が成功するたびに、その実行で使ったタイルの LAS だけを残して古い LAS を削除します。同じ範囲の再実行はキャッシュ済み LAS を再利用します（再ダウンロードなし）。容量を空けたいときは <code>vs_lp_ground/</code> を手動で削除してください。</li>
-  <li>取得した DEM/DSM ファイルは <code>dem/</code>、<code>vs_lp_grid/</code>、<code>remote_dem/</code> にキャッシュされ、どの保存済み解析からも参照されず、現在読み込み中でもなくなると自動的に削除されます。</li>
+  <li>取得した DEM/DSM ファイルは <code>dem/</code>、<code>vs_lp_grid/</code>、<code>remote_dem/</code> にキャッシュします。保存済み解析から参照されている、または現在読み込み中のファイルは保持し、参照されなくなったファイルは次に解析一覧を更新したときにキャッシュ整理で削除します。</li>
 </ul>
 <div class="note">
   DEM ブラウザに VS LP/Grid DTM・VS LP -&gt; DSM が表示されるのは、今の Design Preview の範囲が静岡県と重なっている場合だけです。表示されない場合は、先にプレビューを静岡県内へズーム・パンしてください。<br>
@@ -681,7 +681,7 @@ protect.</p>
   <li>DEM / DSM ブラウザには、Design Preview がその国に掛かっているときだけ、<strong>AHN4 DTM / DSM</strong>（オランダ・0.5 m）、<strong>IGN LiDAR HD MNT / MNS</strong>（フランス・0.5 m）、<strong>LINZ DEM</strong>（ニュージーランド・1 m・DEM のみ）が表示されます。</li>
   <li>DEM は現在の Design Preview の範囲で取得します。オランダ・フランスでは、続けて同じ測量の DSM を DEM の範囲で自動取得します。</li>
   <li>DSM 行は単独で中止・Clear・再取得できます。あとから選んだ DSM も DEM の範囲で取得するため、地図を動かしてもずれません。DEM を Clear すると組の DSM もクリアします。</li>
-  <li>取得したファイルは解析出力フォルダ内の <code>remote_dem/</code> に保存します。同じソースで前に取得したファイルが必要な範囲を覆っていれば、ダウンロードせずにそれを使います。解析から参照されている、または現在読み込み中の DEM/DSM は保持し、参照されなくなったキャッシュは削除します。</li>
+  <li>取得したファイルは解析出力フォルダ内の <code>remote_dem/</code> に保存します。同じソースで前に取得したファイルが必要な範囲を覆っていれば、ダウンロードせずにそれを使います。解析から参照されている、または現在読み込み中の DEM/DSM は保持します。参照されなくなったキャッシュは、次に解析一覧を更新したときに削除します。</li>
   <li>LINZ DEM のタイルは LERC 圧縮です。QGIS に同梱の GDAL が LERC を読めない場合（Flatpak 版など）は、その旨を表示して取得しません。</li>
 </ul>
 <div class="note">
@@ -929,7 +929,7 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
   <tr><td><code>zip/FOL_*-all.zip</code></td><td>Export for WebODM Importer の書き出し（DTM / DSM / Ortho。オランダ・フランス・ニュージーランドは <code>DATA_SOURCES.txt</code> 付き）</td></tr>
 </table>
 <div class="note">
-  解析結果は番号付きサブフォルダ（<code>0001</code>, <code>0002</code>, …）に保存され、自動削除は行いません。上書き解析は同じ番号を差し替えるだけで、それ以外は溜まっていきます。次の番号は「既存の最大番号 + 1」です。途中の番号を削除してもその番号は再使用されず、最大番号のフォルダを削除した場合のみ次でその番号が再利用されます。フォルダを削除すると、どの解析からも参照されず、現在読み込み中でもない <code>dem/</code>、<code>vs_lp_grid/</code>、<code>remote_dem/</code> 内のファイルを DEM/DSM キャッシュ整理が解放できるようになります。出力フォルダとキャッシュが際限なく肥大しないよう、不要になった番号フォルダはファイルマネージャで直接削除してください（プラグインの起動は不要です）。
+  解析結果は、3桁の解析シーケンスと出力ファイル数を組み合わせた名前のサブフォルダに保存します。例えば<code>0017</code>はシーケンス001・7ファイル、<code>0030+2</code>はシーケンス003・12ファイルです。解析結果は自動削除せず、上書き解析は同じシーケンスを差し替え、それ以外はシーケンスが増えます。途中のシーケンスを削除しても再使用せず、最大シーケンスを削除した場合は次回その番号を再利用します。解析フォルダを削除すると、残る解析から参照されず、現在読み込み中でもない<code>dem/</code>、<code>vs_lp_grid/</code>、<code>remote_dem/</code>内のファイルをDEM/DSMキャッシュ整理が解放できるようになります。出力フォルダとキャッシュが際限なく肥大しないよう、不要な解析フォルダはファイルマネージャで直接削除してください。キャッシュ整理はプラグインが次に解析一覧を更新したときに実行します。
 </div>
 </div>
 
