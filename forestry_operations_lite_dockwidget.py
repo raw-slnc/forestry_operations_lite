@@ -6206,9 +6206,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     def _gc_dem_cache(self):
         """解析番号に紐づかない DEM キャッシュファイルを削除する。
-        dem/ と vs_lp_grid/ 内のファイルのうち、いずれかの解析フォルダの
-        params.json に dem_path として記録されていないものを削除する。
-        現在ロード中のファイルは保持する。
+        dem/、vs_lp_grid/、remote_dem/ 内のファイルのうち、いずれかの解析
+        フォルダの params.json に DEM/DSM として記録されていないものを削除する。
+        現在ロード中の DEM/DSM は保持する。
         """
         import json as _json
         out_dir = self._terrain_output_dir()
@@ -6223,6 +6223,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 dp = p.get("dem_path", "")
                 if dp:
                     referenced.add(os.path.normpath(dp))
+                flow_conditions = p.get("flow_coefficients", {})
+                dsm = (flow_conditions.get("dsm", {})
+                       if isinstance(flow_conditions, dict) else {})
+                dsm_path = dsm.get("path", "") if isinstance(dsm, dict) else ""
+                if dsm_path:
+                    referenced.add(os.path.normpath(dsm_path))
             except Exception:  # nosec B110
                 pass
 
@@ -6233,9 +6239,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         cur = getattr(self, "_cs_map_dem_path", None)
         if cur:
             referenced.add(os.path.normpath(cur))
+        dsm_loader = getattr(self, "_dsm_loader", None)
+        cur = getattr(dsm_loader, "path", None) if dsm_loader is not None else None
+        if cur:
+            referenced.add(os.path.normpath(cur))
 
-        # dem/ と vs_lp_grid/ 内の未参照ファイルを削除
-        for sub in ("dem", "vs_lp_grid"):
+        # 管理対象の DEM/DSM キャッシュから未参照ファイルを削除
+        for sub in ("dem", "vs_lp_grid", "remote_dem"):
             sub_dir = os.path.join(out_dir, sub)
             if not os.path.isdir(sub_dir):
                 continue

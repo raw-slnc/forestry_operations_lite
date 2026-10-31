@@ -1015,13 +1015,59 @@ def _fetch_nzcog(ctx, spec, bbox, out_dir):
         gdal.SetThreadLocalConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", None)
 
 
+def _find_fetched_raster(out_dir, prefix, epsg, bbox, cell):
+    """前に取得したファイルのうち、bbox を覆うもの（いちばん小さいもの）を探す。
+
+    同じソース（prefix）で、座標系が epsg と分かり、範囲が bbox を含むものだけ。
+    座標系の付いていない古いファイル（IGN の座標系の修正前など）は使わない。
+    """
+    from osgeo import gdal, osr
+    tol = cell * 0.01
+    best = None
+    try:
+        names = os.listdir(out_dir)
+    except OSError:
+        return None
+    for name in names:
+        if not (name.startswith(prefix + "_") and name.endswith(".tif")):
+            continue
+        path = os.path.join(out_dir, name)
+        try:
+            ds = gdal.Open(path)
+            if ds is None:
+                continue
+            srs = osr.SpatialReference(wkt=ds.GetProjection())
+            code = srs.GetAuthorityCode(None)
+            ds = None
+            if code != str(epsg):
+                continue
+            x0, y0, x1, y1 = _raster_bbox(path)
+        except Exception:  # nosec B112  読めないファイルは使わない
+            continue
+        if (x0 <= bbox[0] + tol and y0 <= bbox[1] + tol
+                and x1 >= bbox[2] - tol and y1 >= bbox[3] - tol):
+            area = (x1 - x0) * (y1 - y0)
+            if best is None or area < best[0]:
+                best = (area, path)
+    return best[1] if best else None
+
+
 def fetch_remote_raster(ctx, sentinel, bbox, out_dir):
     """海外の公開 DEM / DSM を bbox（ソースの座標系）で取得する。
 
+    前に取得したファイルが bbox を覆っていれば、ダウンロードせずにそれを使う。
     戻り値: {"loader": DEMLoader, "tif_path": str}
     """
+    from .terrain.dem_loader import DEMLoader
     spec = REMOTE_SOURCES[sentinel]
     os.makedirs(out_dir, exist_ok=True)
+    cached = _find_fetched_raster(out_dir, spec["prefix"], spec["epsg"],
+                                  _snap_bbox(bbox, spec["cell"]), spec["cell"])
+    if cached:
+        ctx.report(f"Using {spec['label']} fetched earlier…")
+        loader = DEMLoader()
+        loader.load(cached)
+        return {"loader": loader, "tif_path": cached}
     if spec["kind"] == "nzcog":
         return _fetch_nzcog(ctx, spec, bbox, out_dir)
     return _fetch_ogc(ctx, spec, bbox, out_dir)
