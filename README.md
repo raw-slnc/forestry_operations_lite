@@ -9,7 +9,7 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 ## Features
 
 - Load DEM from local files or online sources (GSI elevation tiles for Japan; AWS Terrarium for global coverage; high-resolution open data for the Netherlands, France and New Zealand)
-- Optional DSM — when loaded alongside DEM, canopy height is used to refine flow coefficients automatically
+- Optional DSM — aligned to the analysis DEM grid; canopy height sets flow coefficients where DSM is valid, and editable fallback coefficients cover missing DSM cells. Each run records DSM coverage and applied settings in `params.json` and Analysis Conditions.
 - Compute **slope stability** (infinite-slope factor of safety), **TWI** (Topographic Wetness Index), **valley terrain**, and **flow estimation**
 - Export a **CS MAP** terrain visualization from the current DEM extent, with optional direct assignment to Layer Settings > Tile Layer
 - Preview canvas with bidirectional sync to the QGIS main map window
@@ -262,7 +262,7 @@ https://paypal.me/rawslnc
 ## 機能
 
 - ローカルファイルまたはオンラインのソース（国土地理院標高タイル・AWS Terrarium全球対応・オランダ／フランス／ニュージーランドの高精度オープンデータ）からDEMを読み込み
-- DSMオプション — DEMと併せて読み込むと、樹冠高から流出係数を自動算出
+- DSMオプション — 解析用DEMのグリッドに合わせ、有効なDSMでは樹冠高から流出・流速係数を自動算出。欠損部は指定した補完係数を使用し、DSM適用率と使用条件を `params.json` と Analysis Conditions に記録・表示します。
 - **斜面安定性**（無限斜面安全率）・**TWI**（地形湿潤指数）・**沢地形**・**流量推測**を計算
 - 現在のDEM範囲から **CS MAP** 地形表現を出力し、Layer Settings > Tile Layer へ直接割り当て可能
 - QGISメインマップとの双方向同期プレビューキャンバス

@@ -52,6 +52,7 @@ class TerrainAnalysisWorker(QThread):
         self._tmp = tmp_folder
         self._cancelled = False
         self._last_frac = -1.0
+        self.flow_conditions = None
 
     def cancel(self):
         self._cancelled = True
@@ -183,15 +184,20 @@ class TerrainAnalysisWorker(QThread):
         # ── 流量推測（修正合理式 + 到達時間 Tc ルーティング） ──
         if p["flow"]:
             self._stage("flow")
-            # DSM/DTM 設定時は CS（樹冠高さ）から係数を空間化
-            if self._dsm_data is not None:
-                cs = self._dsm_data - dem.data
-                # 時間‐面積法は各セルの局所 C で局所流出を作り、内部で
-                # 下流累積するので、上流平均でなく per-cell C を渡す。
-                c_local, velocity_coef = ta.cs_to_flow_coefficients(cs)
-            else:
-                c_local = p["runoff"]
-                velocity_coef = p["velocity_coef"]
+            c_local, velocity_coef, self.flow_conditions = ta.prepare_flow_coefficients(
+                dem.data, self._dsm_data,
+                runoff_coef=p["runoff"], velocity_coef=p["velocity_coef"])
+            self.flow_conditions["dsm"] = dict(p.get("dsm_info", {}))
+            if (self._dsm_data is not None
+                    and not self.flow_conditions["dsm_valid_cells"]):
+                self.flow_conditions["dsm"]["status"] = "no_valid_cells"
+            self.flow_conditions["plugin_version"] = p.get("plugin_version", "")
+            self.flow_conditions["grid"] = {
+                "shape": list(dem.data.shape),
+                "geotransform": [float(value) for value in dem.gt],
+                "crs_wkt": dem.crs_wkt,
+                "cell_size_m": float(dem.cell_size),
+            }
             self._prog()(0.01)
             local_tt = ta.compute_travel_time(
                 dem.data, fdir, dem.cell_size,
@@ -208,6 +214,7 @@ class TerrainAnalysisWorker(QThread):
                 duration_h=p["duration_h"],
                 i_peak_mmh=p["rainfall_mmh"],
                 total_mm=p["total_mm"],
+                **ta.FLOW_ROUTING_OPTIONS,
                 progress_cb=self._prog(0.27, 0.96),
             )
             path = rw.save_raster(tc, dem.gt, dem.crs_wkt, tmp_folder,

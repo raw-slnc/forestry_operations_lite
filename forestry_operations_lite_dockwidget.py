@@ -23,6 +23,10 @@ FORM_CLASS, _ = uic.loadUiType(
 )
 
 
+class _DsmPreparationCancelled(Exception):
+    """The user cancelled DSM preparation before analysis starts."""
+
+
 # 解析の各段階の重み（100万セルでの実測秒、Linux 開発機、2026-10-31。
 # ポリゴン化にマスクを渡す版で測り直し）。ポリゴン化（stability / valley /
 # integrate の大半）は対象域の形で大きく変わるので目安。残り時間は実行中の
@@ -2458,14 +2462,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.spinVelocityCoef.setSingleStep(0.05); self.spinVelocityCoef.setDecimals(2)
         self.spinVelocityCoef.setToolTip("Flow velocity coef. v_coef [m/s]  velocity = v_coef × tan(slope)^0.5\nForest: 0.3, grass: 0.6, pavement: 1.5")
         self._lbl_vel_coef = QtWidgets.QLabel("Flow velocity coef.")
+        self._lbl_runoff_coef = QtWidgets.QLabel("Runoff coef. C")
         _pf_defs = [
             ("i_peak",              self.spinRainfall,      "Peak rainfall intensity  1–500 mm/h"),
-            ("Runoff coef. C",      self.spinRunoff,        "0.1–1.0  (forest 0.3, grass 0.6, bare soil 0.9)"),
+            (self._lbl_runoff_coef, self.spinRunoff,        "0.1–1.0  (forest 0.3, grass 0.6, bare soil 0.9)"),
             ("Total rainfall",      self.spinTotalRainfall, "Total precipitation for the period  1–2000 mm"),
             ("Duration T",          self.spinDuration,      "Rainfall duration vs. Tc  0.5–72 h"),
             (self._lbl_vel_coef,    self.spinVelocityCoef,  "Forest 0.3, grass 0.6, pavement 1.5  (0.01–5.0 m/s)"),
         ]
         self._rain_hint = {}   # spinbox -> 動的更新するグレーの注記ラベル
+        self._flow_coef_hints = {}
         for i, (en, w, hint) in enumerate(_pf_defs):
             row = i * 2
             ql = en if isinstance(en, QtWidgets.QLabel) else QtWidgets.QLabel(en)
@@ -2476,6 +2482,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             pf_lay.addWidget(_hl, row + 1, 0, 1, 2)
             if w in (self.spinRainfall, self.spinTotalRainfall, self.spinDuration):
                 self._rain_hint[w] = _hl
+            if w in (self.spinRunoff, self.spinVelocityCoef):
+                _hl.setWordWrap(True)
+                self._flow_coef_hints[w] = (_hl, hint)
         self._sync_rain_bounds("peak")   # 初期の受付範囲・注記を反映
         pf_lay.setRowStretch(len(_pf_defs) * 2, 1)
 
@@ -6395,6 +6404,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         lbl = getattr(self, "lblAnalysisCondition", None)
         if lbl is None:
             return
+        lbl.setToolTip("")
         if not analysis_number:
             lbl.setText("Select a run to view conditions")
             return
@@ -6437,6 +6447,30 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 f"{p.get('rainfall_mmh','-')}mm/h · "
                 f"total {p.get('total_mm','-')}mm"
             )
+            applied = p.get("flow_coefficients")
+            if not isinstance(applied, dict) or applied.get("mode") not in ("manual", "dsm", "mixed"):
+                parts.append("DSM usage: not recorded (legacy run)")
+            else:
+                dsm_info = applied.get("dsm", {})
+                if applied["mode"] == "manual":
+                    reason = {
+                        "not_selected": "no DSM",
+                        "no_valid_cells": "DSM has no valid coverage",
+                        "unavailable": "DSM unavailable",
+                    }.get(dsm_info.get("status"), "no valid DSM")
+                    parts.append(f"Manual coefficients ({reason})")
+                else:
+                    coverage = applied["dsm_coverage"] * 100
+                    parts.append(f"DSM auto: {coverage:.1f}% / Manual fallback: {100 - coverage:.1f}%")
+                if applied["fallback_cells"]:
+                    fallback = applied["fallback"]
+                    prefix = "Manual" if applied["mode"] == "manual" else "Fallback"
+                    parts.append(f"{prefix}: C={fallback['runoff_coef']:g} · "
+                                 f"velocity coef.={fallback['velocity_coef']:g}")
+                lbl.setToolTip(
+                    f"DSM: {dsm_info.get('path') or 'Not used'}\n"
+                    f"Model: {applied.get('model_version', '-')}\n"
+                    f"DSM cells: {applied['dsm_valid_cells']} / {applied['dem_valid_cells']}")
         lbl.setText("\n".join(parts) if parts else "No conditions")
 
     def _load_dem_info(self):
@@ -6530,14 +6564,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._update_vs_export_buttons()
 
     def _update_flow_coef_state(self):
-        """DSM/DTM設定時は流出係数・流速係数をCSから自動計算するためグレーアウト。"""
+        """Keep manual coefficients editable as the fallback for DSM gaps."""
         has_dsm = bool(self._dsm_path)
-        for w in (self.spinRunoff, self.spinVelocityCoef):
-            w.setEnabled(not has_dsm)
-            w.setToolTip(
-                "Auto-calculated from canopy height when DSM/DTM is set" if has_dsm
-                else w.toolTip()
-            )
+        self._lbl_runoff_coef.setText("Fallback runoff coef. C" if has_dsm else "Runoff coef. C")
+        self._lbl_vel_coef.setText("Fallback flow velocity coef." if has_dsm else "Flow velocity coef.")
+        for w, tooltip in (
+            (self.spinRunoff, "Runoff coefficient C"),
+            (self.spinVelocityCoef,
+             "Flow velocity coef. [m/s]: velocity = coef. x tan(slope)^0.5"),
+        ):
+            w.setEnabled(True)
+            w.setToolTip("Used for missing DSM cells; valid DSM cells use canopy height"
+                         if has_dsm else tooltip)
+            hint_label, manual_hint = self._flow_coef_hints[w]
+            hint_label.setText("DSM gaps only. " + manual_hint if has_dsm else manual_hint)
 
     def _update_resample_indicator(self):
         """terrain_loader の解像度に応じて Resample インジケーターを更新する。"""
@@ -7981,6 +8021,22 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             QtWidgets.QApplication.processEvents()
             dem = _resample_dem(dem, _RESAMPLE_TARGET)
 
+        # Resolve DSM errors before overwrite cleanup so Cancel preserves existing runs.
+        _dsm_data, _dsm_info = None, {}
+        if self.chkFlow.isChecked():
+            try:
+                _dsm_data, _dsm_info = self._clip_dsm_for_analysis(dem)
+            except _DsmPreparationCancelled:
+                self._overwrite_retried = False
+                self.lblAnalysisStatus.setVisible(True)
+                self.lblAnalysisStatus.setText("Analysis cancelled.")
+                return
+            except Exception as e:
+                self._overwrite_retried = False
+                self.lblAnalysisStatus.setVisible(True)
+                self.lblAnalysisStatus.setText(f"DSM preparation error: {e}")
+                return
+
         # 解析シーケンス番号を決定（ファイル保存前に確定）
         seq = self._next_seq(self.chkOverwrite.isChecked())
 
@@ -8124,25 +8180,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             "total_mm":      self.spinTotalRainfall.value(),
             "runoff":        self.spinRunoff.value(),
             "velocity_coef": self.spinVelocityCoef.value(),
+            "plugin_version": self._plugin_version(),
+            "dsm_info": _dsm_info,
         }
         _dem_path_for_params = (
             getattr(self, "_dem_actual_path", None) or getattr(self, "_dem_path", ""))
-
-        # ── DSM（流量推測で使用）: DEM と同じ範囲に切り出しておく ──
-        # DEM/DSM の GDAL データセットは画面側と共用なので、読み出しは
-        # ワーカーでなくここ（メインスレッド）で済ませ、配列だけを渡す。
-        _dsm_data = None
-        if _p["flow"]:
-            try:
-                _dsm_data = self._clip_dsm_for_analysis(dem, ext)
-            except Exception as e:
-                _shutil.rmtree(tmp_folder, ignore_errors=True)
-                self._overwrite_retried = False
-                self.lblAnalysisStatus.setVisible(True)
-                self.lblAnalysisStatus.setText(f"Analysis error: {e}")
-                if _is_overwrite:
-                    self._unload_terrain_group(reset_controls=True)
-                return
 
         # ── 進捗の段階（チェックされた解析だけ）と、前回実績からの見積もり ──
         _multi_flow = _flow_method in ("mfd", "dinf")
@@ -8206,49 +8248,65 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._analysis_worker = worker
         worker.start()
 
-    def _clip_dsm_for_analysis(self, dem, ext):
-        """流量推測用に DSM を DEM と同じ範囲・形に切り出した配列を返す（無ければ None）。
+    def _clip_dsm_for_analysis(self, dem):
+        """Read the DSM on the final DEM grid and retain the actual source record."""
+        from .terrain.dem_loader import DEMLoader
 
-        ext は DEM の CRS での解析範囲。読み終えたら DSM のピクセルデータは
-        解放する（メタデータ・GDALハンドルは保持）。
-        """
         dsm_loader = getattr(self, "_dsm_loader", None)
-        if dsm_loader is None:
-            return None
-        try:
-            # ピクセルデータが未ロードなら遅延読み込み
-            if dsm_loader.data is None:
-                dsm_loader.read_data()
-            clipped = None
-            # DEMと同じ地理的範囲にクリップしてシェイプを合わせる
-            # （実データ/WebODM等ではフルファイルがロードされているため必要）
-            if dsm_loader.data is not None:
-                try:
-                    from qgis.core import (
-                        QgsCoordinateReferenceSystem as _QgsCRS2,
-                        QgsCoordinateTransform as _QgsCT2,
-                    )
-                    _dem_crs2 = _QgsCRS2()
-                    _dem_crs2.createFromWkt(dem.crs_wkt)
-                    _dsm_crs2 = _QgsCRS2()
-                    _dsm_crs2.createFromWkt(dsm_loader.crs_wkt)
-                    _dsm_ext = ext
-                    if (_dsm_crs2.isValid() and _dem_crs2.isValid()
-                            and _dsm_crs2 != _dem_crs2):
-                        _xf2 = _QgsCT2(_dem_crs2, _dsm_crs2, QgsProject.instance())
-                        _dsm_ext = _xf2.transformBoundingBox(ext)
-                    clipped = dsm_loader.clip_to_extent(
-                        _dsm_ext.xMinimum(), _dsm_ext.yMinimum(),
-                        _dsm_ext.xMaximum(), _dsm_ext.yMaximum(),
-                    )
-                except Exception:
-                    clipped = None
-            if clipped is not None and clipped.data is not None \
-                    and clipped.data.shape == dem.data.shape:
-                return clipped.data
-            return None
-        finally:
-            dsm_loader.data = None
+        source = getattr(self, "_dsm_path", "")
+        info = {
+            "selected_source": source or None,
+            "path": getattr(dsm_loader, "path", None),
+            "status": "not_selected",
+            "resampling": None,
+        }
+        if not source and dsm_loader is None:
+            return None, info
+        while True:
+            try:
+                if dsm_loader is None:
+                    path = info["path"] or source
+                    dsm_loader = DEMLoader().open_metadata(path)
+                info["path"] = dsm_loader.path
+                data, resampling = dsm_loader.read_aligned_to(dem)
+                info.update({
+                    "status": "aligned",
+                    "resampling": resampling,
+                    "source_grid": {
+                        "geotransform": list(dsm_loader.gt),
+                        "crs_wkt": dsm_loader.crs_wkt,
+                    },
+                })
+                self._dsm_loader = dsm_loader
+                return data, info
+            except Exception as exc:
+                action = self._ask_dsm_alignment_recovery(str(exc))
+                if action == "continue":
+                    info.update({"status": "unavailable", "error": str(exc)})
+                    return None, info
+                if action != "retry":
+                    raise _DsmPreparationCancelled() from exc
+            finally:
+                if dsm_loader is not None:
+                    dsm_loader.data = None
+            dsm_loader = None  # Retry reopens the file rather than reusing a failed handle.
+
+    def _ask_dsm_alignment_recovery(self, details):
+        msg = QtWidgets.QMessageBox(self)
+        msg.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        msg.setWindowTitle("DSM Preparation Problem")
+        msg.setText("DSM could not be read or aligned to the analysis DEM.")
+        msg.setInformativeText("Continue without DSM uses the specified runoff and velocity coefficients.")
+        msg.setDetailedText(details)
+        role = QtWidgets.QMessageBox.ButtonRole
+        retry = msg.addButton("Retry", role.AcceptRole)
+        proceed = msg.addButton("Continue without DSM", role.DestructiveRole)
+        cancel = msg.addButton("Cancel", role.RejectRole)
+        msg.setDefaultButton(retry)
+        msg.setEscapeButton(cancel)
+        msg.exec()
+        clicked = msg.clickedButton()
+        return "retry" if clicked is retry else "continue" if clicked is proceed else "cancel"
 
     def _analysis_lock_widgets(self):
         """解析中に操作を止める部品（結果やフォルダの扱いとぶつかるもの）。"""
@@ -8275,6 +8333,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._analysis_ctx = None
         self._analysis_worker = None
         if worker is not None:
+            if ctx is not None:
+                ctx["flow_conditions"] = worker.flow_conditions
             worker.deleteLater()
         if ctx is None:
             return
@@ -8337,17 +8397,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         if _p["flow"]:
             _params.update({k: _p[k] for k in (
                 "duration_h", "rainfall_mmh", "total_mm", "runoff", "velocity_coef")})
+            _params["flow_coefficients"] = ctx["flow_conditions"]
         if _p["stability"]:
             _params.update({k: _p[k] for k in (
                 "phi_deg", "c_kpa", "z_m", "m_sat", "fs_thresh")})
         if _p["valley"]:
             _params["flow_method"] = _p["flow_method"]
             _params.update({k: _p[k] for k in ("twi_thresh", "min_area")})
-        try:
-            with open(os.path.join(tmp_folder, "params.json"), "w", encoding="utf-8") as _f:
-                _json.dump(_params, _f, ensure_ascii=False, indent=2)
-        except Exception:  # nosec B110
-            pass
+        with open(os.path.join(tmp_folder, "params.json"), "w", encoding="utf-8") as _f:
+            _json.dump(_params, _f, ensure_ascii=False, indent=2, allow_nan=False)
 
         # tmp_folder を最終フォルダ名に一括リネーム（inotify イベントを1回に集約）
         # 通常は上の事前クリーンアップで folder は存在しないが、番号衝突等の

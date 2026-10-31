@@ -520,6 +520,7 @@ def fetch_nagano_dchm_dsm(ctx, codes, dchm_out_dir, dsm_out_dir, dem_tif_path):
             "", dchm_merged, format="MEM",
             outputBounds=(dem_gt[0], dem_gt[3] + h * dem_gt[5], dem_gt[0] + w * dem_gt[1], dem_gt[3]),
             width=w, height=h, dstSRS=dem_wkt,
+            dstNodata=float("nan"), outputType=gdal.GDT_Float64,
         )
         if dchm_ds is None:
             raise RuntimeError("DCHM warp failed")
@@ -528,14 +529,14 @@ def fetch_nagano_dchm_dsm(ctx, codes, dchm_out_dir, dsm_out_dir, dem_tif_path):
         dchm_arr = dchm_band.ReadAsArray().astype(np.float64)
         dchm_ds = None
 
+        valid = np.isfinite(dem_arr) & np.isfinite(dchm_arr)
         if dchm_nodata is not None:
-            dchm_arr = np.where(dchm_arr == dchm_nodata, 0.0, dchm_arr)
-        dchm_arr = np.where(np.isnan(dchm_arr), 0.0, dchm_arr)
-        dchm_arr = np.where(dchm_arr < 0, 0.0, dchm_arr)  # 樹冠高の負値はノイズとして0扱い
-
-        dsm_arr = dem_arr + dchm_arr
+            valid &= dchm_arr != dchm_nodata
         if dem_nodata is not None:
-            dsm_arr = np.where(dem_arr == dem_nodata, dem_nodata, dsm_arr)
+            valid &= dem_arr != dem_nodata
+        dsm_nodata = dem_nodata if dem_nodata is not None and np.isfinite(dem_nodata) else -9999.0
+        # Missing canopy data stays missing; a measured zero height remains bare ground.
+        dsm_arr = np.where(valid, dem_arr + np.maximum(dchm_arr, 0.0), dsm_nodata)
 
         os.makedirs(dsm_out_dir, exist_ok=True)
         dsm_path = os.path.join(dsm_out_dir, f"nagano_dsm_{ts}.tif")
@@ -546,8 +547,7 @@ def fetch_nagano_dchm_dsm(ctx, codes, dchm_out_dir, dsm_out_dir, dem_tif_path):
         out_ds.SetGeoTransform(dem_gt)
         out_ds.SetProjection(dem_wkt)
         out_band = out_ds.GetRasterBand(1)
-        if dem_nodata is not None:
-            out_band.SetNoDataValue(dem_nodata)
+        out_band.SetNoDataValue(dsm_nodata)
         out_band.WriteArray(dsm_arr.astype(np.float32))
         out_band.FlushCache()
         out_ds = None

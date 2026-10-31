@@ -22,6 +22,14 @@ import numpy as np
 # 一番重い MFD の累積（約8µs/セル）でも 0.15秒ほどに1回になる。
 _PROGRESS_EVERY = 16384
 
+FLOW_MODEL_VERSION = "time-area-clark-d8-canopy-2"
+FLOW_ROUTING_OPTIONS = {"clark_k": 0.75, "n_time": 24}
+FLOW_CANOPY_COEFFICIENTS = {
+    "c_forest": 0.15, "c_bare": 0.55,
+    "v_forest": 0.30, "v_bare": 0.60,
+    "cs_forest": 10.0, "cs_bare": 3.0,
+}
+
 
 def _sub_progress(progress_cb, lo, hi):
     """progress_cb の 0..1 を lo..hi に割り当てた callback を返す（None は None）。"""
@@ -769,18 +777,59 @@ def time_area_flow_metrics(dem, flow_dir, local_tt, tc, cell_size,
 def cs_to_flow_coefficients(cs_grid,
                             c_forest=0.15, c_bare=0.55,
                             v_forest=0.30, v_bare=0.60,
-                            cs_forest=10.0, cs_bare=3.0):
+                            cs_forest=10.0, cs_bare=3.0,
+                            fallback_c=0.8, fallback_v=0.3):
     """樹冠高さ（CS = DSM − DEM）から流出係数・流速係数の空間グリッドを生成。
 
     cs_bare  以下: 伐採地・裸地 → C=c_bare,  v=v_bare
     cs_forest以上: 密林         → C=c_forest, v=v_forest
     中間: 線形補間
+    欠損・非有限値: 指定した補完係数
 
     戻り値: (c_grid, v_grid) — いずれも float32 の 2D 配列
     """
-    cs = np.where(np.isnan(cs_grid), cs_forest, cs_grid)  # NaN は密林扱い
+    valid = np.isfinite(cs_grid)
+    cs = np.where(valid, cs_grid, cs_bare)
     cs = np.clip(cs, cs_bare, cs_forest)
     t = (cs - cs_bare) / max(cs_forest - cs_bare, 1e-6)   # 0=裸地, 1=密林
     c_grid = (c_bare  + t * (c_forest - c_bare)).astype(np.float32)
     v_grid = (v_bare  + t * (v_forest - v_bare)).astype(np.float32)
+    c_grid = np.where(valid, c_grid, fallback_c).astype(np.float32)
+    v_grid = np.where(valid, v_grid, fallback_v).astype(np.float32)
     return c_grid, v_grid
+
+
+def prepare_flow_coefficients(dem, dsm_data=None, runoff_coef=0.8,
+                              velocity_coef=0.3):
+    """Build the applied coefficients and their coverage record from the same mask."""
+    dem_valid = np.isfinite(dem)
+    dem_cells = int(np.count_nonzero(dem_valid))
+    dsm_cells = 0
+    c_local, v_local = float(runoff_coef), float(velocity_coef)
+    if dsm_data is not None:
+        if dsm_data.shape != dem.shape:
+            raise ValueError("DSM must be aligned to the analysis DEM grid")
+        cs = dsm_data - dem
+        dsm_valid = dem_valid & np.isfinite(dsm_data) & np.isfinite(cs)
+        dsm_cells = int(np.count_nonzero(dsm_valid))
+        if dsm_cells:
+            cs = np.where(dsm_valid, cs, np.nan)
+            c_local, v_local = cs_to_flow_coefficients(
+                cs, **FLOW_CANOPY_COEFFICIENTS,
+                fallback_c=runoff_coef, fallback_v=velocity_coef)
+    mode = "manual" if not dsm_cells else (
+        "dsm" if dsm_cells == dem_cells else "mixed")
+    conditions = {
+        "schema_version": 1,
+        "model_version": FLOW_MODEL_VERSION,
+        "mode": mode,
+        "dem_valid_cells": dem_cells,
+        "dsm_valid_cells": dsm_cells,
+        "fallback_cells": dem_cells - dsm_cells,
+        "dsm_coverage": dsm_cells / dem_cells if dem_cells else 0.0,
+        "fallback": {"runoff_coef": float(runoff_coef),
+                     "velocity_coef": float(velocity_coef)},
+        "canopy_coefficients": dict(FLOW_CANOPY_COEFFICIENTS),
+        "routing": dict(FLOW_ROUTING_OPTIONS),
+    }
+    return c_local, v_local, conditions

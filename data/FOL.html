@@ -139,7 +139,8 @@ missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin
 <ul>
   <li>Select a general-purpose DEM, or one covering the area where you'll run the terrain analysis.</li>
   <li>Select a DSM covering the same extent as the DEM data.</li>
-  <li>Selecting DSM data lets the runoff and velocity coefficients for flow estimation be calculated automatically from the DSM.</li>
+  <li>The DSM is aligned to the final analysis DEM grid. Valid DSM cells use canopy-height-based runoff and velocity coefficients; missing cells use the editable fallback coefficients. Read/alignment failures offer Retry, Continue without DSM, or Cancel.</li>
+  <li>Analysis Conditions shows DSM coverage and any manual fallback. Applied settings and the actual DSM path are saved in <code>params.json</code>. Older runs without these records show that DSM usage is not recorded.</li>
 </ul>
 
 <h4>Virtual Shizuoka Features</h4>
@@ -355,8 +356,9 @@ convolved with a design-storm hyetograph, then routed through one linear reservo
   <tr><th>Layer</th><th>Meaning</th></tr>
   <tr><td><strong>Peak load</strong>&nbsp; Qp [m³/s]</td>
       <td>Maximum instantaneous discharge — the acute load. Highest where a steep,
-      compact catchment concentrates its flow in sync. Used for crossing / culvert
-      sizing and the width of the zone exposed to scour or inundation.</td></tr>
+      compact catchment concentrates its flow in sync. Used to identify where crossing
+      or culvert capacity, scour protection, and the width of the exposed zone require
+      closer consideration.</td></tr>
   <tr><td><strong>Mean load</strong>&nbsp; Qm [m³/s]</td>
       <td>Event volume divided by the local response time (<code>duration + Tc</code>)
       — the sustained load. Suppressed where Tc is large. <code>Peak ÷ Mean</code>
@@ -399,7 +401,8 @@ USDA NRCS National Engineering Handbook, Part 630.</p>
     <td>
       Guideline: forest 0.3 / grassland 0.6 / paved surface 1.5 m/s.<br>
       When DSM/DTM is set, the runoff and velocity coefficients are computed per
-      cell from canopy height.
+      cell from canopy height. The editable coefficient fields apply only to missing
+      DSM cells; without a usable DSM they apply to the entire analysis area.
     </td>
   </tr>
 </table>
@@ -542,6 +545,78 @@ Forestry Operations Lite.</p>
 </ul>
 </div>
 
+<!-- ============================================================ -->
+<div class="sec">
+<h2>Analysis Logic, Limits, and Intent</h2>
+
+<p>Forestry Operations Lite does not treat any one layer as the answer. It places several
+indicators on the same terrain so that their overlap, separation, and location can be
+examined before forestry work is planned. The values are calculated consistently from the
+selected data and settings, but they remain indicators of the conditions represented by
+that data and scenario.</p>
+
+<h3>How the current analysis is constructed</h3>
+<ul>
+  <li><strong>Common terrain:</strong> The DEM supplies elevation, slope, terrain form, flow
+      direction, and upstream accumulation. These form the common spatial framework for the
+      analysis.</li>
+  <li><strong>Slope Stability:</strong> The infinite-slope equation calculates FS from terrain
+      slope and the selected internal friction angle, cohesion, soil depth, and saturation
+      ratio. The same settings are applied across the analysis area as one review scenario;
+      the FS threshold controls how widely caution areas are collected.</li>
+  <li><strong>Valley Terrain / TWI:</strong> Terrain convergence and slope are combined into a
+      wetness indicator. D8, D-infinity, and MFD describe different ways of distributing
+      upslope contribution, while the TWI threshold and minimum catchment area determine
+      which parts are extracted for review.</li>
+  <li><strong>Flow Load:</strong> A design storm is combined with D8 travel time and a
+      time-area / Clark-style linear-storage calculation. Peak, Mean, and Time load show
+      where the selected scenario concentrates quickly, persists, or responds slowly. When
+      a DSM is available, canopy height varies the runoff and velocity coefficients at valid
+      cells; the editable fallback values are used elsewhere. This is a simplified numerical
+      runoff scenario, not an implementation of HEC-HMS or a measured hydrograph.</li>
+  <li><strong>Overall Risk Index:</strong> FS, TWI, and Peak load scores are added to reveal
+      places where indicators overlap. The sum is a review priority, not a probability of
+      failure and not proof of a causal relationship between the component layers.</li>
+</ul>
+
+<h3>Limits to keep visible</h3>
+<ul>
+  <li>The soil and saturation settings express one condition across the area. They do not
+      map every local change in soil layer, root system, compaction, groundwater, or recent
+      rainfall.</li>
+  <li>DEM and DSM represent their acquisition date, resolution, classification, and
+      processing. Canopy height does not by itself distinguish canopy density, understory,
+      soil properties, or non-forest objects contained in a DSM.</li>
+  <li>Grid resolution, NoData, pits and flats, flow-direction method, thresholds, and design
+      rainfall all affect the pattern. Values with physical units are still model responses
+      under the selected conditions, not observations of the site.</li>
+  <li>The outputs do not replace field judgment, geotechnical or hydraulic investigation,
+      structure design, or the applicable forestry-road and drainage standards. They show
+      where those questions deserve attention.</li>
+</ul>
+
+<h3>Why FOL uses indicators</h3>
+<p>Calling the outputs indicators is not a denial of analysis. More accurate terrain data,
+better parameters, and improved methods can bring an analysis closer to actual conditions.
+That improvement can continue, but data and computation do not become the field itself.
+The same applies to larger or institutionally published models: more components provide a
+different and often more detailed approximation, not an automatic claim to truth.</p>
+
+<p>Field observation is therefore not used merely to certify whether the map is correct.
+The map helps decide where to look; the site supplies context that the data does not hold;
+and the practitioner updates the work plan from both. Slope Stability, Valley Terrain,
+Flow Load, background terrain, and existing roads should be read together when considering
+road alignment, harvesting and extraction, drainage, crossings, or areas to retain and
+protect.</p>
+
+<div class="important-note">
+  FOL does not decide whether work can or cannot be carried out. It provides a common
+  starting point for asking what is happening at a location, what could change through the
+  work, and what should be checked before a decision is made. The final interpretation and
+  decision remain with the people who know and work in the forest.
+</div>
+</div>
+
 <hr>
 <p style="font-size:0.8em;color:#888;text-align:center;">
   Forestry Operations Lite &nbsp;|&nbsp; Developed by Avid Tree Work
@@ -584,7 +659,8 @@ Forestry Operations Lite.</p>
 <ul>
   <li>DEM は汎用データか、地形解析を行う箇所のデータを選択してください。</li>
   <li>DSM データは、地表データの DEM データ設定と範囲を同じくするデータを選んでください。</li>
-  <li>DSM データを選択することで流量推測における流出係数・流速係数がDSMを基に自動計算されます。</li>
+  <li>DSMはリサンプル後の解析用DEMと同じグリッドに合わせます。有効なDSMでは樹冠高から流出・流速係数を自動計算し、欠損部には編集可能な補完係数を使います。読み込み・位置合わせの失敗時は Retry / Continue without DSM / Cancel から選択します。</li>
+  <li>Analysis ConditionsにDSM適用率と補完条件を表示し、実際に使ったDSMのパスと設定を <code>params.json</code> に保存します。記録のない過去の結果はDSM使用状況を「記録なし」と表示します。</li>
 </ul>
 
 <h4>Virtual Shizuoka Features</h4>
@@ -792,7 +868,7 @@ FS は傾斜角・内部摩擦角・粘着力・土壌深度・飽和率から�
   <tr><th>レイヤー</th><th>意味</th></tr>
   <tr><td><strong>Peak load</strong>&nbsp; Qp [m³/s]</td>
       <td>最大瞬間流量＝急性の負荷。急でコンパクトな集水域が同期して集中する所で高い。
-      横断構造物・暗渠の規模、洗掘・氾濫がかかる帯の幅の目安に。</td></tr>
+      横断構造物・暗渠の容量、洗掘対策、影響を受ける帯の幅を詳しく検討すべき位置の目安に。</td></tr>
   <tr><td><strong>Mean load</strong>&nbsp; Qm [m³/s]</td>
       <td>イベント総体積を応答時間（<code>継続時間 + Tc</code>）で割った、持続的な負荷。
       Tc が大きい所ほど抑制される。<code>Peak ÷ Mean</code> がフラッシュ性の指標。</td></tr>
@@ -829,7 +905,7 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
     <td><strong>流速係数</strong></td>
     <td>
       林地 0.3 / 草地 0.6 / 舗装面 1.5 m/s が目安。<br>
-      DSM/DTM を設定した場合、流出係数・流速係数は樹冠高さからセルごとに計算されます。
+      DSM/DTM を設定した場合、有効なセルは樹冠高から係数を計算し、入力欄は欠損部の補完に使います。利用可能なDSMがなければ解析範囲全体に入力係数を使います。
     </td>
   </tr>
 </table>
@@ -961,6 +1037,41 @@ WebODM の DTM/DSM アセットを Forestry Operations Lite の DEM/DSM ブラ�
   <li>Forestry Operations Lite から書き出したZIPを <code>webodm_importer</code> で読み戻した
       データは意図的に除外します。FOL由来の往復出力は入力候補として表示しません。</li>
 </ul>
+</div>
+
+<!-- ============================================================ -->
+<div class="sec">
+<h2>解析の論理・限界・考え方</h2>
+
+<p>Forestry Operations Lite は、どれか一つのレイヤーを答えとはしません。複数の指標を同じ地形上に置き、
+その重なり、離れ方、位置を、施業を計画する前に検討するためのものです。値は選択したデータと設定から
+一貫した方法で計算されますが、そのデータと想定条件が表す範囲の指標であることは変わりません。</p>
+
+<h3>現在の解析を組み立てる論理</h3>
+<ul>
+  <li><strong>共通地形:</strong> DEMから標高、傾斜、地形形状、流向、上流集水量を求め、すべての解析に共通する空間的な土台とします。</li>
+  <li><strong>Slope Stability:</strong> 地形の傾斜と、設定した内部摩擦角、粘着力、土壌深度、飽和率から無限斜面式でFSを計算します。同じ設定を解析範囲へ一つの検討条件として適用し、FS閾値で要注意箇所をどこまで拾うかを決めます。</li>
+  <li><strong>Valley Terrain / TWI:</strong> 地形の集水性と傾斜を組み合わせて湿潤地形の指標を作ります。D8、D∞、MFDは上流からの寄与を異なる方法で分配し、TWI閾値と最小集水面積で検討対象を抽出します。</li>
+  <li><strong>Flow Load:</strong> 設計降雨、D8による流達時間、時間‐面積法とClark系の線形貯留を組み合わせます。Peak、Mean、Time loadは、設定したシナリオでどこに速く集中するか、持続するか、応答が遅いかを示します。DSMが利用できる場合は有効セルの樹冠高から流出係数・流速係数を変化させ、欠損部には編集可能な補完値を使います。これは簡略化した数値的な流出シナリオであり、HEC-HMSの実装でも、観測ハイドログラフでもありません。</li>
+  <li><strong>Overall Risk Index:</strong> FS、TWI、Peak loadの点数を加算し、複数の指標が重なる場所を示します。合計値は検討の優先度であり、崩壊確率でも、各指標間の因果関係を証明するものでもありません。</li>
+</ul>
+
+<h3>見失ってはいけない限界</h3>
+<ul>
+  <li>土壌と飽和率の設定は、解析範囲へ一つの条件を与えるものです。土層、根系、締固め、地下水、直前の降雨など、場所ごとの変化をすべて地図化するものではありません。</li>
+  <li>DEMとDSMは、取得時期、解像度、分類、処理方法を含んだデータです。樹冠高だけで樹冠密度、下層植生、土壌特性、DSMに含まれる森林以外の物体まで自動的に区別することはできません。</li>
+  <li>格子解像度、NoData、窪地・平坦地、流向方式、閾値、設計降雨によって表示される分布は変わります。物理単位を持つ値も、選択した条件に対するモデルの応答であり、現地で観測した事実そのものではありません。</li>
+  <li>出力は、現場判断、地質・水理調査、構造物設計、適用される作業道・排水基準に代わるものではありません。それらをどこで検討すべきかを示します。</li>
+</ul>
+
+<h3>なぜ指標として扱うのか</h3>
+<p>「指標」と呼ぶことは解析の否定ではありません。より正確な地形データ、より適切な設定、より良い計算方法により、解析は現実へ近づきます。その改善は続けられますが、データと計算が現場そのものになることはありません。規模が大きいモデルや公的機関が公開するモデルも同じで、構成要素が多いことは異なる、より詳細な近似を可能にしますが、それだけで真実になるわけではありません。</p>
+
+<p>したがって現場確認は、地図が正しいかを認定するだけの作業ではありません。地図が見るべき場所を示し、現場がデータにない事情を与え、その両方から作業者が計画を更新します。Slope Stability、Valley Terrain、Flow Load、背景地形、既存路網を重ね、路線、伐採・集材、排水、横断箇所、残す場所・守る場所を考えるために使います。</p>
+
+<div class="important-note">
+  FOLは、施業が可能か不可能かを決定しません。その場所で何が起きているか、施業によって何が変わり得るか、判断の前に何を確かめるかを考えるための共通の出発点を作ります。最終的な読み取りと判断は、森林を知り、そこで仕事をする人に残されます。
+</div>
 </div>
 
 <hr>
