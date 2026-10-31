@@ -608,6 +608,64 @@ class DemBrowserDialog(QtWidgets.QDialog):
     TERRARIUM_STANDARD_SENTINEL = "__TERRARIUM_STD__"
     TERRARIUM_WIDE_SENTINEL     = "__TERRARIUM_WIDE__"
 
+    # 海外の公開 DEM / DSM（ログイン不要・キャンバス範囲で自動取得）。
+    # 取得の仕様（URL・座標系・解像度）は dem_worker.REMOTE_SOURCES と同じ文字列で引く。
+    AHN_DTM_SENTINEL         = "__AHN_DTM__"
+    AHN_DSM_SENTINEL         = "__AHN_DSM__"
+    IGN_LIDARHD_MNT_SENTINEL = "__IGN_LIDARHD_MNT__"
+    IGN_LIDARHD_MNS_SENTINEL = "__IGN_LIDARHD_MNS__"
+    LINZ_DEM_SENTINEL        = "__LINZ_DEM_1M__"
+    REMOTE_DEM_SENTINELS = (AHN_DTM_SENTINEL, IGN_LIDARHD_MNT_SENTINEL, LINZ_DEM_SENTINEL)
+    REMOTE_DSM_SENTINELS = (AHN_DSM_SENTINEL, IGN_LIDARHD_MNS_SENTINEL)
+    # 同じ測量から作られた DEM → DSM。DEM を取ったら続けて DEM の範囲で DSM も取る
+    REMOTE_DSM_PAIR = {AHN_DTM_SENTINEL: AHN_DSM_SENTINEL,
+                       IGN_LIDARHD_MNT_SENTINEL: IGN_LIDARHD_MNS_SENTINEL}
+    # センチネル → DEM/DSM 欄に出す短い名前
+    REMOTE_SHORT_NAMES = {
+        AHN_DTM_SENTINEL:         "AHN4 DTM (0.5m)",
+        AHN_DSM_SENTINEL:         "AHN4 DSM (0.5m)",
+        IGN_LIDARHD_MNT_SENTINEL: "IGN LiDAR HD MNT (0.5m)",
+        IGN_LIDARHD_MNS_SENTINEL: "IGN LiDAR HD MNS (0.5m)",
+        LINZ_DEM_SENTINEL:        "LINZ DEM (1m)",
+    }
+    # キャンバス範囲に紐づくセッション固有のソースなので QSettings に保存しない
+    SESSION_ONLY_SENTINELS = SESSION_ONLY_SENTINELS + REMOTE_DEM_SENTINELS + REMOTE_DSM_SENTINELS
+
+    _NOTE_AHN = (
+        "⚠ The PDOK WCS can be slow (about 15 s per 0.36 km²), and some tools report that "
+        "WCS access may be retired in the future.")
+    _NOTE_IGN = (
+        "⚠ LiDAR HD does not yet cover all of France, and no data is published in restricted "
+        "zones (ZICAD). The distribution platform moved to the Géoplateforme in 2025, so "
+        "service details may change.")
+    _NOTE_LINZ = (
+        "⚠ The dataset is still being updated, and the copy on AWS may not always match the "
+        "latest LINZ release.")
+    # (見出し, WGS84 bbox, 色, DEM 項目, DSM 項目)  項目 = (sentinel, 表示名, 情報テキスト)
+    _REMOTE_REGIONS = [
+        ("── Netherlands open data (AHN4, auto-fetch) ──", (3.2, 50.7, 7.3, 53.6), "#8a4a00",
+         [(AHN_DTM_SENTINEL, "🌐  AHN4 DTM  0.5m  (Netherlands, auto-fetch)",
+           "AHN4 (Actueel Hoogtebestand Nederland) 0.5m DTM — EPSG:28992, CC0.\n"
+           "Fetched from the PDOK WCS for the current canvas extent.\n" + _NOTE_AHN)],
+         [(AHN_DSM_SENTINEL, "🌐  AHN4 DSM  0.5m  (Netherlands, auto-fetch)",
+           "AHN4 (Actueel Hoogtebestand Nederland) 0.5m DSM — EPSG:28992, CC0.\n"
+           "Fetched from the PDOK WCS for the current canvas extent.\n" + _NOTE_AHN)]),
+        ("── France open data (IGN LiDAR HD, auto-fetch) ──", (-5.5, 41.2, 9.8, 51.2), "#1a3a8a",
+         [(IGN_LIDARHD_MNT_SENTINEL, "🌐  IGN LiDAR HD MNT  0.5m  (France, auto-fetch)",
+           "IGN LiDAR HD MNT (terrain) 0.5m — EPSG:2154, Licence Ouverte Etalab 2.0.\n"
+           "Fetched from the Géoplateforme WMS-R for the current canvas extent.\n" + _NOTE_IGN)],
+         [(IGN_LIDARHD_MNS_SENTINEL, "🌐  IGN LiDAR HD MNS  0.5m  (France, auto-fetch)",
+           "IGN LiDAR HD MNS (surface) 0.5m — EPSG:2154, Licence Ouverte Etalab 2.0.\n"
+           "Fetched from the Géoplateforme WMS-R for the current canvas extent.\n" + _NOTE_IGN)]),
+        ("── New Zealand open data (LINZ, auto-fetch) ──", (166.0, -47.5, 179.0, -34.0), "#1a6b6b",
+         [(LINZ_DEM_SENTINEL, "🌐  LINZ DEM  1m  (New Zealand, auto-fetch)",
+           "LINZ New Zealand 1m DEM — EPSG:2193, CC BY 4.0 (attribution: Toitū Te Whenua "
+           "Land Information New Zealand and the survey licensors).\n"
+           "Read from Cloud Optimised GeoTIFFs on AWS (nz-elevation) for the current canvas extent.\n"
+           + _NOTE_LINZ)],
+         []),
+    ]
+
     # (sentinel, リスト表示名, ダウンロードURL, 情報テキスト)
     _COPERNICUS_ITEMS = [
         ("__COPERNICUS_GLO30__",
@@ -740,6 +798,25 @@ class DemBrowserDialog(QtWidgets.QDialog):
             item.setFont(f)
             item.setForeground(QColor("#1a5276"))
             self._list.addItem(item)
+
+        # ── 海外の公開 DEM / DSM（地図がその国に掛かっているときだけ）──
+        for _title, _bbox, _color, _dem_items, _dsm_items in self._REMOTE_REGIONS:
+            _items = _dem_items if self._mode == "dem" else _dsm_items
+            if not _items or not self._canvas_overlaps_bbox(_bbox):
+                continue
+            sec_r = QtWidgets.QListWidgetItem(_title)
+            sec_r.setFlags(Qt.ItemFlag.NoItemFlags)
+            sec_r.setForeground(QColor(_color))
+            f_r = QFont(); f_r.setBold(True)
+            sec_r.setFont(f_r)
+            self._list.addItem(sec_r)
+            for sentinel, label, _info in _items:
+                item = QtWidgets.QListWidgetItem(label)
+                item.setData(Qt.ItemDataRole.UserRole, sentinel)
+                f = QFont(); f.setBold(True)
+                item.setFont(f)
+                item.setForeground(QColor(_color))
+                self._list.addItem(item)
 
         sep = QtWidgets.QListWidgetItem("── Local Files ──────────────────────")
         sep.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -941,6 +1018,20 @@ class DemBrowserDialog(QtWidgets.QDialog):
                 self._selected_url = None
                 return
 
+        # 海外の公開 DEM / DSM
+        for _title, _bbox, _color, _dem_items, _dsm_items in self._REMOTE_REGIONS:
+            for sentinel, _label, info_text in _dem_items + _dsm_items:
+                if path == sentinel:
+                    if sentinel == self.LINZ_DEM_SENTINEL:
+                        from .dem_worker import LERC_MISSING_MESSAGE, gdal_has_lerc
+                        if not gdal_has_lerc():
+                            info_text += "\n" + LERC_MISSING_MESSAGE
+                    self._lbl_info.setText(info_text)
+                    self._btn_ok.setEnabled(True)
+                    self._btn_open_url.setVisible(False)
+                    self._selected_url = None
+                    return
+
         # GSI タイルソース
         for sentinel, _label, info_text in self._GSI_ITEMS:
             if path == sentinel:
@@ -1107,6 +1198,23 @@ class DemBrowserDialog(QtWidgets.QDialog):
             )
         except Exception:
             return True
+
+    def _canvas_overlaps_bbox(self, bbox_wgs84):
+        """プレビューキャンバスの範囲が WGS84 の bbox（lon_min, lat_min, lon_max, lat_max）と重なるか。"""
+        if self._canvas is None or self._canvas.extent().isEmpty():
+            return False
+        try:
+            wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+            canvas_crs = self._canvas.mapSettings().destinationCrs()
+            xform = QgsCoordinateTransform(canvas_crs, wgs84, QgsProject.instance())
+            ext84 = xform.transformBoundingBox(self._canvas.extent())
+            lon_min, lat_min, lon_max, lat_max = bbox_wgs84
+            return not (
+                ext84.xMaximum() < lon_min or ext84.xMinimum() > lon_max
+                or ext84.yMaximum() < lat_min or ext84.yMinimum() > lat_max
+            )
+        except Exception:
+            return False
 
     def _canvas_overlaps_shizuoka(self):
         """プレビューキャンバスの範囲が VIRTUAL SHIZUOKA エリア（静岡県）と重なるか確認。"""
@@ -1849,13 +1957,20 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._dsm_loading = False   # DSM をワーカーで取得中（DSM の Browse が Cancel）
         self._vs_export_dir = ""
         self._vs_exporting = False
-        self._vs_wodmi_opened = False
+        # ZIP を書き出したときの (DTM, DSM) のファイル。今の DTM/DSM と同じ間だけ
+        # その ZIP を有効とみなす（取り直しでファイルが変わったら書き出し直し）。
+        self._vs_export_sig = None
+        self._vs_export_pending_sig = None
         self._vs_dem_codes = []   # VS LP/Grid 読込時のタイルコード（Ortho 範囲合わせ用）
         self._vs_dsm_codes = []   # VS LP/Ground 読込時のタイルコード（同上）
-        # Export for WebODM Importer は Virtual Shizuoka 専用（2026-09-24、長野対応は
-        # データの不整合・配布形式の複雑さから廃止しVS限定に戻した）。
+        # Export for WebODM Importer は Virtual Shizuoka と、オルソが取れる海外の公開データ
+        # （オランダ AHN4・フランス IGN LiDAR HD・ニュージーランド LINZ）。DSM はどれも任意。長野対応は 2026-09-24 に
+        # データの不整合・配布形式の複雑さから廃止した。
         self._EXPORTABLE_DEM_SENTINELS = (
             DemBrowserDialog.VS_LP_GRID_SENTINEL,
+            DemBrowserDialog.AHN_DTM_SENTINEL,
+            DemBrowserDialog.IGN_LIDARHD_MNT_SENTINEL,
+            DemBrowserDialog.LINZ_DEM_SENTINEL,
         )
 
         # ── VS Export グループ ──────────────────────────────────────────────
@@ -4865,7 +4980,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 DemBrowserDialog.VS_LP_GRID_SENTINEL,
                 DemBrowserDialog.NAGANO_SABO_DEM_SENTINEL,
                 DemBrowserDialog.NAGANO_RINMU_DEM_SENTINEL,
-            )
+            ) or (self._dsm_path
+                  and self._dsm_path == DemBrowserDialog.REMOTE_DSM_PAIR.get(self._dem_path))
             # VS LP/Grid・長野砂防DEMはDEM取得に紐づくDSMを連動クリアする。
             # 長野林務部DEMはDSMなしでDSM Browseを無効化しているため状態を戻す。
             self._clear_dem_selection(clear_dsm=_clear_dsm)
@@ -4918,6 +5034,37 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 self.lblDsmInfo.setText("Not available (Nagano DEM has no DSM)")
                 # ワーカーで取得。すぐ戻る。
                 self._load_nagano_rinmu_dem(on_done=self._on_browse_dem_fetch_done)
+            elif path in DemBrowserDialog.REMOTE_DEM_SENTINELS:
+                # 海外の公開 DEM（キャンバス範囲でワーカー取得）。DSM は別に選べるので、
+                # 取れなかったときも DSM の選択は消さない。
+                self._dem_path = path
+                self.txtDemPath.setText(DemBrowserDialog.REMOTE_SHORT_NAMES[path])
+                self.txtDemPath.setToolTip("Auto-fetch for the current canvas extent")
+                self.btnBrowseDem.setText("Clear")
+                self.btnBrowseDsm.setEnabled(True)
+
+                _pair_dsm = DemBrowserDialog.REMOTE_DSM_PAIR.get(path)
+
+                def _after_remote_dsm(_ok):
+                    self._update_vs_export_buttons()
+                    self._update_cs_map_export_state()
+
+                def _after_remote_dem(ok):
+                    if not ok:
+                        self._clear_dem_selection(clear_dsm=False, dem_info=self.lblDemInfo.text())
+                    elif _pair_dsm:
+                        # 同じ測量の DSM を DEM の範囲で続けて取る（VS と同じ流れ）。
+                        # DSM の欄は使えるままなので、中止・Clear・取り直しは DSM だけでできる。
+                        self._dsm_path = _pair_dsm
+                        self.txtDsmPath.setText(DemBrowserDialog.REMOTE_SHORT_NAMES[_pair_dsm])
+                        self.txtDsmPath.setToolTip("Auto-fetch within the DEM extent")
+                        self.btnBrowseDsm.setText("Clear")
+                        self._load_remote_raster(_pair_dsm, target="dsm", on_done=_after_remote_dsm)
+                        return
+                    self._update_vs_export_buttons()
+                    self._update_cs_map_export_state()
+
+                self._load_remote_raster(path, target="dem", on_done=_after_remote_dem)
             elif path in _tile_labels:
                 display, tooltip = _tile_labels[path]
                 self._dem_path = path
@@ -4973,6 +5120,94 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             return dst_path
         except Exception:
             return src_path
+
+    def _load_remote_raster(self, sentinel, target="dem", update_cs_map_source=True,
+                            on_done=None, mirror_label=None):
+        """海外の公開 DEM / DSM（AHN・IGN LiDAR HD・LINZ）をキャンバス範囲で取得する。
+
+        target="dem" なら _terrain_loader、"dsm" なら _dsm_loader を差し替える。
+        取得はワーカースレッドで行うので、この関数はすぐ戻る。終わったら on_done(ok)。
+        取得を始めずに戻る場合（プレビューに範囲が無い）も on_done(False)。
+        """
+        from .dem_worker import REMOTE_SOURCES, fetch_remote_raster
+        spec = REMOTE_SOURCES[sentinel]
+        label = self.lblDsmInfo if target == "dsm" else self.lblDemInfo
+
+        def _done(ok):
+            if on_done is not None:
+                on_done(ok)
+
+        src_crs = QgsCoordinateReferenceSystem(f"EPSG:{spec['epsg']}")
+        # DSM は DEM と同じ範囲で取る（地図を動かしていてもずれない）
+        bbox = self._dem_extent_in(src_crs) if target == "dsm" else None
+        if bbox is None:
+            if self.preview_canvas is None or self.preview_canvas.extent().isEmpty():
+                label.setText("⚠ No extent on preview canvas. Display a map and try again.")
+                _done(False)
+                return
+            canvas_crs = self.preview_canvas.mapSettings().destinationCrs()
+            ext = QgsCoordinateTransform(canvas_crs, src_crs, QgsProject.instance()) \
+                .transformBoundingBox(self.preview_canvas.extent())
+            bbox = (ext.xMinimum(), ext.yMinimum(), ext.xMaximum(), ext.yMaximum())
+        out_dir = os.path.join(self._terrain_output_dir(), "remote_dem")
+        label.setText(f"Fetching {spec['label']}...")
+
+        def _job(ctx):
+            return fetch_remote_raster(ctx, sentinel, bbox, out_dir)
+
+        def _finish(result, cancelled, error):
+            ok = self._finish_remote_raster(result, cancelled, error, spec, target,
+                                            update_cs_map_source)
+            _done(ok)
+
+        self._start_dem_job(_job, _finish, mirror_label=mirror_label,
+                            button="dsm" if target == "dsm" else "dem", label=label)
+
+    def _dem_extent_in(self, crs):
+        """読み込み済み DEM の範囲を crs で (x0, y0, x1, y1)。DEM が無ければ None。"""
+        loader = getattr(self, "_terrain_loader", None)
+        path = getattr(loader, "path", None) if loader is not None else None
+        if not path or not os.path.isfile(path) or not getattr(loader, "crs_wkt", None):
+            return None
+        try:
+            from .dem_worker import _raster_bbox
+            x0, y0, x1, y1 = _raster_bbox(path)
+            dem_crs = QgsCoordinateReferenceSystem()
+            dem_crs.createFromWkt(loader.crs_wkt)
+            rect = QgsRectangle(x0, y0, x1, y1)
+            if dem_crs.isValid() and dem_crs != crs:
+                rect = QgsCoordinateTransform(dem_crs, crs, QgsProject.instance()).transformBoundingBox(rect)
+            return (rect.xMinimum(), rect.yMinimum(), rect.xMaximum(), rect.yMaximum())
+        except Exception:  # 範囲が分からなければキャンバス範囲で取る
+            return None
+
+    def _finish_remote_raster(self, result, cancelled, error, spec, target, update_cs_map_source):
+        """海外の公開 DEM / DSM の取得結果を画面へ反映する（メインスレッド）。成功なら True。"""
+        label = self.lblDsmInfo if target == "dsm" else self.lblDemInfo
+        if cancelled:
+            label.setText("Cancelled")
+            return False
+        if error:
+            label.setText(error)
+            return False
+        loader = result["loader"]
+        tif_path = result["tif_path"]
+        if target == "dsm":
+            self._dsm_loader = loader
+            self.txtDsmPath.setToolTip(tif_path)
+            self.lblDsmInfo.setText(f"{loader.info_text()}  [{spec['label']}]")
+            self._update_flow_coef_state()
+            return True
+        self._terrain_loader = loader
+        self._dem_actual_path = tif_path  # 実ファイルパス（params.json 用）
+        if update_cs_map_source:
+            self._cs_map_dem_path = tif_path
+        self._vs_dem_codes = []  # 非 VS ソース: コードなし
+        self._partial_outside_warned = False
+        self.txtDemPath.setToolTip(tif_path)
+        self.lblDemInfo.setText(f"{loader.info_text()}  [{spec['label']}]")
+        self._update_resample_indicator()
+        return True
 
     def _load_gsi_dem(self, sentinel=None, update_cs_map_source=True, on_done=None,
                       mirror_label=None):
@@ -6259,6 +6494,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 )
                 self.btnBrowseDsm.setText("Clear")
                 self._load_vs_lp_ground()
+            elif path in DemBrowserDialog.REMOTE_DSM_SENTINELS:
+                # 海外の公開 DSM（DEM があれば DEM の範囲、無ければキャンバス範囲でワーカー取得）
+                self._dsm_path = path
+                self.txtDsmPath.setText(DemBrowserDialog.REMOTE_SHORT_NAMES[path])
+                self.txtDsmPath.setToolTip("Auto-fetch within the DEM extent")
+                self.btnBrowseDsm.setText("Clear")
+                self._load_remote_raster(path, target="dsm")
             elif path:
                 self._dsm_path = path
                 self.txtDsmPath.setText(os.path.basename(path))
@@ -6314,7 +6556,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
     def _reset_vs_export_state(self):
         """DEM/DSM 変更時に export 状態をリセットする。"""
         self._vs_export_dir = ""
-        self._vs_wodmi_opened = False
+        self._vs_export_sig = None
+
+    def _current_export_sig(self):
+        """書き出しの条件 = 今の DTM / DSM のファイル。"""
+        dtm = getattr(self, "_terrain_loader", None)
+        dsm = getattr(self, "_dsm_loader", None)
+        dtm_path = getattr(dtm, "path", None) if dtm is not None else None
+        dsm_path = getattr(dsm, "path", None) if dsm is not None else None
+        return (dtm_path or None,
+                dsm_path if dsm_path and os.path.isfile(dsm_path) else None)
 
     def _canvas_outside_loader(self, loader):
         """現在のキャンバス範囲が loader の地理的範囲外を含む場合 True を返す。"""
@@ -6357,11 +6608,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         """Export・Open in WODMI ボタンの有効/無効を状態に応じて更新する。
 
         状態遷移:
-          初期/terrain未設定  → 全off
-          VS DEM セット       → Export on / Open off / Cancel off（DSM は任意）
-          エクスポート処理中  → Export off / Open off / Cancel on
-          エクスポート完了    → Export on / Open on  / Cancel off
-          Open in WODMI後    → 全off（DEM変更で Export が復活）
+          初期/条件が揃わない  → 全off
+          書き出せる DEM セット → Export on / Open off / Cancel off（DSM は任意）
+          エクスポート処理中    → Export off / Open off / Cancel on
+          エクスポート完了      → Export off / Open on / Cancel off
+                                  （Open を押しても変わらない。DTM/DSM のファイルが
+                                   変わるか ZIP が消えたら、書き出し前に戻る）
         """
         import qgis.utils
         has_wodmi = any("webodm_importer" in k for k in qgis.utils.plugins)
@@ -6381,8 +6633,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # Export は自動取得系DEMソースのみ対応（DSMは任意、Orthoはソース依存）。
         # 対応ソース一覧は _EXPORTABLE_DEM_SENTINELS / _on_show_export_sources 参照。
         is_exportable_source = self._dem_path in self._EXPORTABLE_DEM_SENTINELS
+        # DSM はどのソースも任意（海外ソースは DEM と組の DSM を自動で取るので普段は入る）
         can_export = is_exportable_source and has_dem
-        has_export = bool(self._vs_export_dir and os.path.isfile(self._vs_export_dir))
+        # 書き出した ZIP が残っていて、書き出したときから DTM/DSM が変わっていない
+        has_export = bool(self._vs_export_dir and os.path.isfile(self._vs_export_dir)
+                          and self._vs_export_sig == self._current_export_sig())
 
         if getattr(self, "_dem_worker", None) is not None and not self._vs_exporting:
             # DEM をワーカーで取得中: 終わるまで書き出し・送信は使わない
@@ -6398,17 +6653,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.btnOpenWodmi.setEnabled(False)
             self.btnVsCancel.setEnabled(True)
 
-        elif self._vs_wodmi_opened:
-            # WODMI 送信済: DEM/DSM 変更があるまで全 off
-            self.btnVsExport.setEnabled(False)
-            self.btnOpenWodmi.setEnabled(False)
-            self.btnVsCancel.setEnabled(False)
-            self.lblVsExportStatus.setText("Sent to WODMI")
-
         elif has_export:
-            # エクスポート完了: Export（再エクスポート）と Open in WODMI が使える
-            self.btnVsExport.setEnabled(True)
-            self.btnVsExport.setToolTip("Re-export to ZIP")
+            # 書き出し済み: 条件（DTM/DSM）が変わるまで Export は止め、Open in WODMI は
+            # 何度でも押せる。ZIP が消えたら書き出し前に戻る。
+            self.btnVsExport.setEnabled(False)
+            self.btnVsExport.setToolTip(
+                "Already exported for the current DTM/DSM.\n"
+                "Change the DEM or DSM to export again.")
             self.btnOpenWodmi.setEnabled(True)
             self.btnOpenWodmi.setToolTip("Open webodm_importer with exported ZIP")
             self.btnVsCancel.setEnabled(False)
@@ -6416,12 +6667,18 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.lblVsExportStatus.setToolTip(self._vs_export_dir)
 
         elif can_export:
-            # VS DEM セット: Export が使える（DSM は任意）
+            # 書き出せる DEM がセット済み: Export が使える（DSM は任意）
             self.btnVsExport.setEnabled(True)
-            self.btnVsExport.setToolTip(
-                "Exports Virtual Shizuoka LP/Grid (DTM) to a WODMI ZIP.\n"
-                "DSM (LAS) is included as well if loaded."
-            )
+            if self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL:
+                self.btnVsExport.setToolTip(
+                    "Exports Virtual Shizuoka LP/Grid (DTM) to a WODMI ZIP.\n"
+                    "DSM (LAS) is included as well if loaded."
+                )
+            else:
+                self.btnVsExport.setToolTip(
+                    "Exports the DTM, the DSM (if set) and an orthophoto to a WODMI ZIP,\n"
+                    "with DATA_SOURCES.txt (acquisition dates, sources, licences)."
+                )
             self.btnOpenWodmi.setEnabled(False)
             self.btnOpenWodmi.setToolTip("Export first to enable")
             self.btnVsCancel.setEnabled(False)
@@ -6431,8 +6688,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             # VS ソース未設定 / terrain 未設定: 全 off
             self.btnVsExport.setEnabled(False)
             self.btnVsExport.setToolTip(
-                "Available once VS LP/Grid is selected as DEM\n"
-                "(Virtual Shizuoka-only export)"
+                "Available once a supported DEM source is selected\n"
+                "(Virtual Shizuoka LP/Grid, AHN4 DTM, IGN LiDAR HD MNT, LINZ DEM)"
             )
             self.btnOpenWodmi.setEnabled(False)
             self.btnOpenWodmi.setToolTip("Export first to enable")
@@ -6486,8 +6743,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         """「Supported Sources」リンククリック時、対応DEMソースと内訳をモーダルで示す。"""
         QtWidgets.QMessageBox.information(
             self, "Export for WebODM Importer — Supported Sources",
-            "Export supports Virtual Shizuoka LP/Grid only:\n\n"
-            "DTM, DSM (optional), Ortho (area-dependent), LAS reference\n\n"
+            "Export supports these DEM sources:\n\n"
+            "• Virtual Shizuoka LP/Grid — DTM, DSM (optional), Ortho (area-dependent), "
+            "LAS reference\n"
+            "• AHN4 DTM (Netherlands) — DTM, DSM (optional, fetched with the DTM), "
+            "Ortho (PDOK Luchtfoto)\n"
+            "• IGN LiDAR HD MNT (France) — DTM, DSM (optional, fetched with the DTM), "
+            "Ortho (IGN BD ORTHO, "
+            "the year closest to the LiDAR survey)\n"
+            "• LINZ DEM 1m (New Zealand) — DTM, DSM (optional), Ortho (LINZ aerial imagery, "
+            "the survey closest to the DEM survey)\n\n"
+            "For the Netherlands, France and New Zealand, the ZIP also contains DATA_SOURCES.txt "
+            "(data list, acquisition dates, sources and licences). Point clouds are not "
+            "included.\n\n"
             "Other DEM sources are not supported for Export.",
         )
 
@@ -6530,6 +6798,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                        and dsm_loader.path
                        and os.path.isfile(dsm_loader.path))
 
+        from .dem_worker import REMOTE_EXPORT_SOURCES
+        if self._dem_path in REMOTE_EXPORT_SOURCES:
+            self._start_remote_export(dtm_loader.path, dsm_loader.path if has_dsm else None)
+            return
+
         # ── キャンバス範囲 → EPSG:6676 → タイルコード（Ortho用）────
         # ── Ortho タイルコード（DEM/DSM 読込時の範囲に合わせる）────────
         # VS LP ソースで読み込んだ場合は保存済みコードを使う。
@@ -6563,6 +6836,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             "las_capable": (self._dem_path == DemBrowserDialog.VS_LP_GRID_SENTINEL),
         }
 
+        self._vs_export_pending_sig = self._current_export_sig()
         self._vs_exporting = True
         self._update_vs_export_buttons()
         self.btnVsCancel.setEnabled(False)  # Ortho の確認の間は中止しない（すぐ終わる）
@@ -6648,15 +6922,79 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             return
         try:
             self._vs_export_dir = result["zip_path"]
-            parts = ["DTM included"]
-            parts.append("DSM included" if result["has_dsm"] else "DSM not available for this area")
-            parts.append("Ortho included" if result["has_ortho"] else "Ortho not available for this area")
-            QtWidgets.QMessageBox.information(
-                self, "VS Export",
-                f"Export complete.\n{result['zip_name']}\n" + ", ".join(parts)
-            )
+            self._vs_export_sig = self._vs_export_pending_sig
+            if result.get("summary"):
+                QtWidgets.QMessageBox.information(
+                    self, "Export for WebODM Importer",
+                    f"Export complete.\n{result['zip_name']}\n\n"
+                    + "\n".join(result["summary"])
+                    + "\n\nThe data list, acquisition dates, sources and licences are saved "
+                      "in DATA_SOURCES.txt in the ZIP.")
+            else:
+                parts = ["DTM included"]
+                parts.append("DSM included" if result["has_dsm"] else "DSM not available for this area")
+                parts.append("Ortho included" if result["has_ortho"] else "Ortho not available for this area")
+                QtWidgets.QMessageBox.information(
+                    self, "VS Export",
+                    f"Export complete.\n{result['zip_name']}\n" + ", ".join(parts)
+                )
         finally:
             self._end_vs_export(tmp_dir)
+
+    def _start_remote_export(self, dtm_path, dsm_path):
+        """海外ソース（AHN4・IGN LiDAR HD）の書き出し。撮影時期とオルソの年をワーカーで
+        調べ、確認の窓を出してから、オルソの取得と ZIP の作成をワーカーで行う。"""
+        vals = {"dem_sentinel": self._dem_path, "dsm_sentinel": self._dsm_path,
+                "dtm_path": dtm_path, "dsm_path": dsm_path}
+        self._vs_export_pending_sig = self._current_export_sig()
+        self._vs_exporting = True
+        self._update_vs_export_buttons()  # 調べるのに時間がかかるので Cancel は使える
+        self._set_vs_export_lock(True)
+        self.lblVsExportStatus.setText("Checking acquisition dates…")
+
+        from .dem_worker import remote_export_plan
+
+        def _job(ctx):
+            return remote_export_plan(ctx, vals["dem_sentinel"], vals["dsm_sentinel"],
+                                      dtm_path, dsm_path)
+
+        def _finish(plan, cancelled, error):
+            self._on_remote_export_planned(plan, cancelled, error, vals)
+
+        self._start_side_job("vs_export", _job, self.lblVsExportStatus.setText,
+                             _finish, on_abort=self._end_vs_export)
+
+    def _on_remote_export_planned(self, plan, cancelled, error, vals):
+        """書き出しの中身が決まったとき: 年・出典を示して確かめ、書き出しを始める。"""
+        if cancelled or error:
+            self._end_vs_export()
+            self.lblVsExportStatus.setText(error if error else "Cancelled")
+            return
+        from .dem_worker import remote_export_summary, remote_export_zip
+        msg = ("\n".join(remote_export_summary(plan))
+               + "\n\nA data list with acquisition dates, sources and licences "
+                 "(DATA_SOURCES.txt) will be saved in the ZIP.\n\nProceed?")
+        if QtWidgets.QMessageBox.question(
+            self, "Export for WebODM Importer", msg,
+            QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel
+        ) != QtWidgets.QMessageBox.StandardButton.Ok:
+            self._end_vs_export()
+            self.lblVsExportStatus.setText("—")
+            return
+        import uuid as _uuid
+        tmp_dir = os.path.join(self._terrain_output_dir(), f".vs_export_tmp_{_uuid.uuid4().hex}")
+        os.makedirs(tmp_dir)
+        zip_dir = os.path.join(self._terrain_output_dir(), "zip")
+        self._update_vs_export_buttons()
+
+        def _job(ctx):
+            return remote_export_zip(ctx, plan, tmp_dir, zip_dir, vals["dtm_path"], vals["dsm_path"])
+
+        def _finish(result, cancelled2, error2):
+            self._on_vs_export_done(result, cancelled2, error2, tmp_dir)
+
+        self._start_side_job("vs_export", _job, self.lblVsExportStatus.setText, _finish,
+                             on_abort=lambda: self._end_vs_export(tmp_dir))
 
     def _on_vs_cancel(self):
         """書き出しのワーカーを止める。"""
@@ -6670,6 +7008,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         zip_path = self._vs_export_dir
         if not zip_path or not os.path.isfile(zip_path):
+            self._update_vs_export_buttons()
+            if self.btnVsExport.isEnabled():
+                self.lblVsExportStatus.setText("ZIP not found. Export again.")
             return
 
         _wodmi_key = next((k for k in qgis.utils.plugins if "webodm_importer" in k), None)
@@ -6697,9 +7038,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             wodmi.panel._src_edit.setText(zip_path)
             wodmi.panel._detect_assets()
 
-        # ZIP を WODMI に渡したので送信済み状態へ遷移
-        self._vs_export_dir = ""
-        self._vs_wodmi_opened = True
+        # 条件が変わるまでは同じ ZIP をもう一度渡せるよう、状態はそのまま
         self._update_vs_export_buttons()
 
     def _remove_layers_for_source_path(self, path):
@@ -6871,6 +7210,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             _S.TERRARIUM_WIDE_SENTINEL: "AWS Terrarium elevation tiles (~10m)",
             _S.NAGANO_SABO_DEM_SENTINEL: "Nagano DEM (Sabo Division, 2021-2025), 0.5m, source: geospatial.jp",
             _S.NAGANO_RINMU_DEM_SENTINEL: "Nagano DEM (Forestry Dept, 2013-2014), 0.5m, source: geospatial.jp",
+            _S.AHN_DTM_SENTINEL: "AHN4 DTM 0.5m (Actueel Hoogtebestand Nederland, CC0), source: PDOK",
+            _S.IGN_LIDARHD_MNT_SENTINEL: "IGN LiDAR HD MNT 0.5m (IGN, Licence Ouverte Etalab 2.0), source: Géoplateforme",
+            _S.LINZ_DEM_SENTINEL: "LINZ New Zealand 1m DEM (Toitū Te Whenua LINZ, CC BY 4.0), source: nz-elevation (AWS)",
         }
         if dem_path_cur in fixed_labels:
             return fixed_labels[dem_path_cur]
@@ -7333,7 +7675,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             DemBrowserDialog.VS_LP_GRID_SENTINEL,
             DemBrowserDialog.NAGANO_SABO_DEM_SENTINEL,
             DemBrowserDialog.NAGANO_RINMU_DEM_SENTINEL,
-        )
+        ) + DemBrowserDialog.REMOTE_DEM_SENTINELS
         _dem_path_cur = getattr(self, "_dem_path", "")
 
         if _dem_path_cur in _TILE_SENTINELS:
@@ -7389,6 +7731,26 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     self._load_nagano_rinmu_dem(update_cs_map_source=True, confirm=False,
                                                 on_done=self._on_analysis_refetch_done,
                                                 mirror_label=self.lblAnalysisStatus)
+                    return
+                elif self._dem_path in DemBrowserDialog.REMOTE_DEM_SENTINELS:
+                    # 海外の公開 DEM: ワーカーで取得し、DSM も海外の公開 DSM なら
+                    # 続けて取り直す。取れたら解析を始め直す（ここではいったん戻る）。
+                    _want_dsm = _dsm_path_cur in DemBrowserDialog.REMOTE_DSM_SENTINELS
+                    self.btnStopAnalysis.setEnabled(True)
+
+                    def _after_remote_dem(ok):
+                        if ok and _want_dsm and not self._analysis_refetch_stopped:
+                            # DSM の成否に関わらず、DEM が取れていれば解析に進む
+                            self._load_remote_raster(
+                                _dsm_path_cur, target="dsm",
+                                on_done=lambda _dsm_ok: self._on_analysis_refetch_done(True),
+                                mirror_label=self.lblAnalysisStatus)
+                            return
+                        self._on_analysis_refetch_done(ok)
+
+                    self._load_remote_raster(self._dem_path, target="dem",
+                                             on_done=_after_remote_dem,
+                                             mirror_label=self.lblAnalysisStatus)
                     return
                 else:
                     # 国土地理院 / Terrarium: ワーカーで取得し、取れたら解析を

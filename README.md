@@ -8,7 +8,7 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 
 ## Features
 
-- Load DEM from local files or tile services (GSI elevation tiles for Japan; AWS Terrarium for global coverage)
+- Load DEM from local files or online sources (GSI elevation tiles for Japan; AWS Terrarium for global coverage; high-resolution open data for the Netherlands, France and New Zealand)
 - Optional DSM — when loaded alongside DEM, canopy height is used to refine flow coefficients automatically
 - Compute **slope stability** (infinite-slope factor of safety), **TWI** (Topographic Wetness Index), **valley terrain**, and **flow estimation**
 - Export a **CS MAP** terrain visualization from the current DEM extent, with optional direct assignment to Layer Settings > Tile Layer
@@ -17,6 +17,8 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 - Map lock: fix the preview to the analysis extent while continuing to navigate the main window freely
 - Analysis results are grouped and managed by run number in the QGIS layer panel
 - Preview status bar shows centre coordinates, scale, area (ha), and CRS
+- Analysis, DEM/DSM fetching, CS MAP export and WebODM Importer export run in the background, so QGIS stays responsive; analysis shows the current step and the estimated time remaining
+- Running tasks can be stopped with **Stop** / **Cancel**; switching projects or closing the plugin window cancels a running task and removes its partial files
 
 ![QGIS Main Window](forestry_operations_lite_QGIS_window.jpg)
 
@@ -59,7 +61,7 @@ These features use Virtual Shizuoka open data hosted on AWS S3 and are not avail
 
 - **VS LP/Grid 0.5 m DEM** — auto-fetched from S3 for the current canvas extent
 - **Auto DSM** — selecting VS LP/Grid as DEM automatically fetches and sets VS LP/Ground as DSM; no manual DSM selection is needed
-- **Export for WebODM Importer** — packages DTM, DSM, ortho, and LAS point cloud into a ZIP for use with the [WebODM Importer](https://github.com/raw-slnc/webodm_importer) plugin
+- **Export for WebODM Importer** — packages DTM, DSM and ortho into a ZIP for use with the [WebODM Importer](https://github.com/raw-slnc/webodm_importer) plugin (see [Export for WebODM Importer](#export-for-webodm-importer))
 
 ### VS LP/Grid workflow
 
@@ -70,21 +72,33 @@ These features use Virtual Shizuoka open data hosted on AWS S3 and are not avail
 5. **Cancel** on the DEM row cancels both DEM and DSM operations
 6. **Clear** on the DEM row clears both DEM and DSM
 
-### Export for WebODM Importer
+---
 
-The **Export for WebODM Importer** section packages the loaded VS LP terrain data into a ZIP that the WebODM Importer plugin can load directly.
+## Export for WebODM Importer
+
+The **Export for WebODM Importer** section packages the loaded terrain data into a ZIP that the [WebODM Importer](https://github.com/raw-slnc/webodm_importer) plugin can load directly.
 
 **Requirements:**
 - WebODM Importer plugin must be installed (controls are disabled otherwise)
-- DEM source must be VS LP/Grid (DSM is set automatically)
+- DEM source is one of: VS LP/Grid (Shizuoka), AHN4 DTM (Netherlands), IGN LiDAR HD MNT (France), LINZ DEM 1m (New Zealand)
+- DSM is optional for every source (it is included when DSM Data is set)
+
+**Buttons:**
+- **Export** is enabled once the requirements are met, and greyed out while the exported ZIP is still valid
+- **Open in WODMI** is enabled once a ZIP has been exported and stays enabled until the DTM or DSM changes (a new selection, Clear, or a re-fetch) or the ZIP is deleted
+- **Cancel** stops an export in progress
 
 **What is included in the ZIP:**
-- DTM — VS LP/Grid GeoTIFF (0.5 m)
-- DSM — VS LP/Ground converted from LAS (0.5 m)
-- Ortho — VS LP/Ortho tiles for the same tile range as DEM/DSM (skipped if not available)
-- LAS point cloud — raw LAS files from DSM generation, packed into `odm_georeferencing/`
 
-All data is fetched for the same tile range (determined at DEM load time), ensuring geographic consistency.
+| Source | DTM | DSM (if set) | Ortho |
+|---|---|---|---|
+| VS LP/Grid | VS LP/Grid (0.5 m) | VS LP → DSM (0.5 m) | VS LP/Ortho for the same tile range (skipped if not available) |
+| AHN4 DTM | AHN4 DTM (0.5 m) | AHN4 DSM (0.5 m) | PDOK Luchtfoto 2021 (resampled to 0.25 m) |
+| IGN LiDAR HD MNT | IGN LiDAR HD MNT (0.5 m) | IGN LiDAR HD MNS (0.5 m) | IGN BD ORTHO from the year closest to the LiDAR survey (0.25 m) |
+| LINZ DEM 1m | LINZ DEM (1 m) | — (no DSM source yet) | LINZ aerial imagery from the survey closest to the DEM survey (0.25 m) |
+
+- For the Netherlands, France and New Zealand, the orthophoto is cut to the DTM extent and grid, and the ZIP also contains `DATA_SOURCES.txt` with the data list, acquisition dates, sources and licences. The confirmation and completion dialogs show the same acquisition dates, and a note is shown when the orthophoto and the elevation data were acquired in different years or the orthophoto does not cover the whole area.
+- Point clouds are not put into the ZIP. For VS LP/Grid, `las_sources.json` refers to the LAS files that were downloaded to create the DSM (`vs_lp_ground/`), and `README_LAS_LINKS.txt` lists their download URLs. For the other sources `las_sources.json` is written with an empty list.
 
 Use the **Open in WODMI** button to open the exported ZIP directly in the WebODM Importer panel.
 
@@ -101,6 +115,23 @@ Use the **Open in WODMI** button to open the exported ZIP directly in the WebODM
 | Local file | Any | As-is | GeoTIFF, ZIP, or folder |
 | Copernicus GLO-30 | Worldwide | 30 m | Free account required (OpenTopography) |
 | VS LP/Grid | Shizuoka Pref., Japan | 0.5 m | Auto-fetched from S3 — see Virtual Shizuoka Features |
+| Nagano Sabo Division R3-4 DEM | Nagano Pref., Japan | 0.5 m | Auto-fetched (HTTP Range) from G空間情報センター; DSM generated automatically from the same-year DCHM |
+| Nagano Forestry Dept. DEM | Nagano Pref., Japan | 0.5 m | Auto-fetched (HTTP Range) from G空間情報センター; no DSM |
+| AHN4 DTM / DSM | Netherlands | 0.5 m | PDOK WCS, EPSG:28992, CC0 |
+| IGN LiDAR HD MNT / MNS | France (coverage still in progress) | 0.5 m | Géoplateforme WMS-R, EPSG:2154, Licence Ouverte (Etalab 2.0) |
+| LINZ DEM | New Zealand | 1 m | COGs on AWS (nz-elevation), EPSG:2193, CC BY 4.0; requires a GDAL build with LERC support |
+
+### Open data sources outside Japan
+
+- The Netherlands, France and New Zealand sources are listed in the DEM / DSM browser only when the Design Preview overlaps that country.
+- The DEM is fetched for the current Design Preview extent. For the Netherlands and France, the matching DSM (same survey) is then fetched automatically for the DEM extent. The DSM row can still be cancelled, cleared and fetched again on its own, and a DSM chosen later is also fetched for the DEM extent, so moving the map does not shift it.
+- Clearing the DEM also clears the matching DSM.
+- The PDOK WCS can be slow, LiDAR HD does not yet cover all of France, and the LINZ copy on AWS may lag the latest LINZ release. These notes are also shown in the DEM browser.
+- LINZ DEM tiles are LERC-compressed. If the GDAL bundled with QGIS cannot read LERC (for example the Flatpak build), the plugin says so and does not fetch.
+
+### Re-fetching before analysis
+
+For auto-fetched DEM sources (GSI, Terrarium, VS LP/Grid, Nagano, the Netherlands, France, New Zealand), the analysis uses the DEM already fetched. Only when the analysis area extends beyond it, the plugin asks whether to fetch it again; **OK** re-fetches the DEM (and the DSM, if set) and then runs the analysis, **No** cancels the run. Local DEM files are analysed on the overlapping part without asking.
 
 ### CRS recommendations
 
@@ -159,6 +190,17 @@ forestry_operations_lite/
 │   ├── gsi_dem5a_YYYYMMDD_HHMMSS.tif
 │   └── gsi_dem5a_YYYYMMDD_HHMMSS_utm53.tif   ← reprojected to UTM
 │
+├── nagano_sabo_dem/              # Nagano Sabo Division DEM tiles — Nagano only (GeoTIFF)
+├── nagano_dchm/                  # Nagano DCHM (canopy height) tiles — Nagano only
+├── nagano_dsm/                   # DSM generated from DEM + DCHM — Nagano only
+│   └── nagano_dsm_YYYYMMDD_HHMMSS.tif
+├── nagano_rinmu_dem/             # Nagano Forestry Dept. DEM tiles — Nagano only (GeoTIFF)
+│
+├── remote_dem/                   # Netherlands / France / New Zealand DEM and DSM (GeoTIFF)
+│   ├── ahn_dtm_YYYYMMDD_HHMMSS.tif
+│   ├── ign_lidarhd_mns_YYYYMMDD_HHMMSS.tif
+│   └── linz_dem_YYYYMMDD_HHMMSS.tif
+│
 ├── vs_lp_grid/                   # VS LP/Grid DEM tiles — Shizuoka only (GeoTIFF)
 │   ├── {tile_code}.tif
 │   └── vs_grid_YYYYMMDD_HHMMSS.tif           ← merged (multi-tile)
@@ -168,7 +210,7 @@ forestry_operations_lite/
 │   ├── {tile_code}_dsm.tif                   ← converted DSM
 │   └── vs_dsm_YYYYMMDD_HHMMSS.tif            ← merged (multi-tile)
 │
-├── zip/                          # Export ZIPs for WebODM Importer — Shizuoka only
+├── zip/                          # Export ZIPs for WebODM Importer
 │   ├── FOL_YYYYMMDD-all.zip
 │   └── FOL_YYYYMMDD_2-all.zip                ← sequential if same day
 │
@@ -219,7 +261,7 @@ https://paypal.me/rawslnc
 
 ## 機能
 
-- ローカルファイルまたはタイルサービス（国土地理院標高タイル・AWS Terrarium全球対応）からDEMを読み込み
+- ローカルファイルまたはオンラインのソース（国土地理院標高タイル・AWS Terrarium全球対応・オランダ／フランス／ニュージーランドの高精度オープンデータ）からDEMを読み込み
 - DSMオプション — DEMと併せて読み込むと、樹冠高から流出係数を自動算出
 - **斜面安定性**（無限斜面安全率）・**TWI**（地形湿潤指数）・**沢地形**・**流量推測**を計算
 - 現在のDEM範囲から **CS MAP** 地形表現を出力し、Layer Settings > Tile Layer へ直接割り当て可能
@@ -228,6 +270,8 @@ https://paypal.me/rawslnc
 - 地図ロック：解析範囲にプレビューを固定しながら、メインウィンドウは自由に操作可能
 - 解析結果はQGISレイヤーパネルに解析番号グループで管理
 - プレビューステータスバーに中心座標・縮尺・面積（ha）・CRSを表示
+- 解析・DEM/DSMの取得・CS MAP出力・WebODM Importer向け書き出しはバックグラウンドで行い、QGISの操作を止めない。解析中は現在の段階と残り時間の目安を表示
+- 実行中の処理は **Stop** / **Cancel** で中止でき、プロジェクトの切り替えやプラグインウィンドウを閉じた場合も中止して途中のファイルを削除
 
 ---
 
@@ -268,7 +312,7 @@ AWS S3上のバーチャル静岡オープンデータを使用する機能で�
 
 - **VS LP/Grid 0.5m DEM** — 現在のキャンバス範囲のタイルをS3から自動取得
 - **DSM自動設定** — DEMにVS LP/Gridを選択すると、VS LP/GroundがDSMとして自動取得・設定される（手動でのDSM選択は不要）
-- **Export for WebODM Importer** — DTM・DSM・オルソ・LAS点群を [WebODM Importer](https://github.com/raw-slnc/webodm_importer) プラグイン向けZIPにエクスポート
+- **Export for WebODM Importer** — DTM・DSM・オルソを [WebODM Importer](https://github.com/raw-slnc/webodm_importer) プラグイン向けZIPにエクスポート（[Export for WebODM Importer](#export-for-webodm-importer-1) 参照）
 
 ### VS LP/Grid ワークフロー
 
@@ -279,21 +323,33 @@ AWS S3上のバーチャル静岡オープンデータを使用する機能で�
 5. **DEM行のCancel** でDEM・DSM両方の処理をキャンセル
 6. **DEM行のClear** でDEM・DSM両方をクリア
 
-### Export for WebODM Importer
+---
 
-**Export for WebODM Importer** セクションでは、読み込み済みのVS LP地形データを [WebODM Importer](https://github.com/raw-slnc/webodm_importer) プラグインが直接読み込めるZIP形式にパッケージ化できます。
+## Export for WebODM Importer
+
+**Export for WebODM Importer** セクションでは、読み込み済みの地形データを [WebODM Importer](https://github.com/raw-slnc/webodm_importer) プラグインが直接読み込めるZIP形式にまとめます。
 
 **使用条件：**
 - WebODM Importer プラグインがインストールされていること（未インストール時はすべての操作が無効）
-- DEMソースがVS LP/Gridであること（DSMは自動設定）
+- DEMソースが VS LP/Grid（静岡）・AHN4 DTM（オランダ）・IGN LiDAR HD MNT（フランス）・LINZ DEM 1m（ニュージーランド）のいずれかであること
+- DSM はどのソースでも任意（DSM Data がセットされていれば含める）
+
+**ボタン：**
+- **Export** は条件が揃うと押せるようになり、書き出したZIPが有効な間はグレーになる
+- **Open in WODMI** はZIPを書き出すと押せるようになり、DTM・DSM が変わる（選び直し・Clear・取り直し）か、ZIPが消えるまで押せるまま
+- **Cancel** で書き出しを中止
 
 **ZIPに含まれるデータ：**
-- DTM — VS LP/Grid GeoTIFF（0.5 m）
-- DSM — VS LP/Ground からLAS変換したGeoTIFF（0.5 m）
-- Ortho — DEM読込時と同じタイル範囲のVS LP/Ortho（対象外エリアはスキップ）
-- LAS点群 — DSM生成時の生LASファイルを `odm_georeferencing/` に格納
 
-DEM読込時のタイル範囲に基づいて全データが取得されるため、地理的整合性が保たれます。
+| ソース | DTM | DSM（セット時） | Ortho |
+|---|---|---|---|
+| VS LP/Grid | VS LP/Grid（0.5 m） | VS LP → DSM（0.5 m） | 同じタイル範囲の VS LP/Ortho（対象外エリアはスキップ） |
+| AHN4 DTM | AHN4 DTM（0.5 m） | AHN4 DSM（0.5 m） | PDOK Luchtfoto 2021（0.25 mに変換） |
+| IGN LiDAR HD MNT | IGN LiDAR HD MNT（0.5 m） | IGN LiDAR HD MNS（0.5 m） | LiDAR の撮影年に最も近い年の IGN BD ORTHO（0.25 m） |
+| LINZ DEM 1m | LINZ DEM（1 m） | ―（DSM ソースは未対応） | DEM の測量に最も近い撮影の LINZ 航空写真（0.25 m） |
+
+- オランダ・フランス・ニュージーランドでは、オルソを DTM の範囲・格子に合わせて切り出し、データ一覧・撮影時期・出典・ライセンスを書いた `DATA_SOURCES.txt` もZIPに入れます。確認・完了の窓にも同じ撮影時期を表示し、オルソと標高データの撮影年が違う場合や、オルソが範囲全体を覆わない場合は注記を出します。
+- 点群はZIPに入れません。VS LP/Grid では、DSM 作成のために取得した LAS（`vs_lp_ground/`）を `las_sources.json` で参照し、`README_LAS_LINKS.txt` にダウンロードURLを記載します。ほかのソースでは `las_sources.json` を空の一覧で書き出します。
 
 **Open in WODMI** ボタンを押すと、エクスポートしたZIPをWebODM Importerパネルで直接開けます。
 
@@ -310,6 +366,23 @@ DEM読込時のタイル範囲に基づいて全データが取得されるた�
 | ローカルファイル | 任意 | 元データ準拠 | GeoTIFF・ZIP・フォルダ |
 | Copernicus GLO-30 | 全球 | 30 m | 無料アカウント必要（OpenTopography） |
 | VS LP/Grid | 静岡県 | 0.5 m | S3から自動取得 — バーチャル静岡機能参照 |
+| 長野県 砂防課 R3-4 DEM | 長野県 | 0.5 m | G空間情報センターから自動取得（HTTP Range）。同年度のDCHMからDSMを自動生成 |
+| 長野県 林務部 DEM | 長野県 | 0.5 m | G空間情報センターから自動取得（HTTP Range）。DSMなし |
+| AHN4 DTM / DSM | オランダ | 0.5 m | PDOK WCS、EPSG:28992、CC0 |
+| IGN LiDAR HD MNT / MNS | フランス（整備中の地域あり） | 0.5 m | Géoplateforme WMS-R、EPSG:2154、Licence Ouverte（Etalab 2.0） |
+| LINZ DEM | ニュージーランド | 1 m | AWS上のCOG（nz-elevation）、EPSG:2193、CC BY 4.0。LERCに対応したGDALが必要 |
+
+### 日本以外のオープンデータ
+
+- オランダ・フランス・ニュージーランドのソースは、Design Preview がその国に掛かっているときだけ DEM / DSM ブラウザに表示されます。
+- DEM は現在の Design Preview の範囲で取得します。オランダ・フランスでは、続けて同じ測量の DSM を DEM の範囲で自動取得します。DSM 行は単独で中止・Clear・再取得でき、あとから選んだ DSM も DEM の範囲で取得するため、地図を動かしてもずれません。
+- DEM を Clear すると、組の DSM もクリアします。
+- PDOK の WCS は時間がかかることがあり、LiDAR HD はフランス全土をまだ覆っておらず、AWS 上の LINZ データは最新版より遅れることがあります。これらの注意は DEM ブラウザにも表示します。
+- LINZ DEM のタイルは LERC 圧縮です。QGIS に同梱の GDAL が LERC を読めない場合（Flatpak 版など）は、その旨を表示して取得しません。
+
+### 解析前の再取得
+
+自動取得型の DEM（国土地理院・Terrarium・VS LP/Grid・長野・オランダ・フランス・ニュージーランド）は、取得済みの DEM で解析します。解析範囲がその外に出るときだけ再取得するかを確認し、**OK** で DEM（DSM がセットされていれば DSM も）を取り直してから解析、**No** で解析を中止します。ローカルの DEM ファイルは確認なしで重なる部分を解析します。
 
 ### CRS推奨
 
@@ -368,6 +441,17 @@ forestry_operations_lite/
 │   ├── gsi_dem5a_YYYYMMDD_HHMMSS.tif
 │   └── gsi_dem5a_YYYYMMDD_HHMMSS_utm53.tif   ← UTMに再投影済み
 │
+├── nagano_sabo_dem/              # 長野県 砂防課 DEMタイル（長野限定・GeoTIFF）
+├── nagano_dchm/                  # 長野県 DCHM（樹冠高）タイル（長野限定）
+├── nagano_dsm/                   # DEM + DCHM から作ったDSM（長野限定）
+│   └── nagano_dsm_YYYYMMDD_HHMMSS.tif
+├── nagano_rinmu_dem/             # 長野県 林務部 DEMタイル（長野限定・GeoTIFF）
+│
+├── remote_dem/                   # オランダ・フランス・ニュージーランドの DEM / DSM（GeoTIFF）
+│   ├── ahn_dtm_YYYYMMDD_HHMMSS.tif
+│   ├── ign_lidarhd_mns_YYYYMMDD_HHMMSS.tif
+│   └── linz_dem_YYYYMMDD_HHMMSS.tif
+│
 ├── vs_lp_grid/                   # VS LP/Grid DEMタイル（静岡限定・GeoTIFF）
 │   ├── {タイルコード}.tif
 │   └── vs_grid_YYYYMMDD_HHMMSS.tif           ← マージ済み（複数タイル）
@@ -377,7 +461,7 @@ forestry_operations_lite/
 │   ├── {タイルコード}_dsm.tif               ← 変換済みDSM
 │   └── vs_dsm_YYYYMMDD_HHMMSS.tif            ← マージ済み（複数タイル）
 │
-├── zip/                          # WebODM Importer向けエクスポートZIP（静岡限定）
+├── zip/                          # WebODM Importer向けエクスポートZIP
 │   ├── FOL_YYYYMMDD-all.zip
 │   └── FOL_YYYYMMDD_2-all.zip                ← 同日2回目以降
 │
