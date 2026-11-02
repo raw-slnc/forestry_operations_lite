@@ -17,6 +17,25 @@
 """
 import numpy as np
 
+# セルごとの Python ループで progress_cb を呼ぶ間隔（セル数）。
+# 一番重い MFD の累積（約8µs/セル）でも 0.15秒ほどに1回になる。
+_PROGRESS_EVERY = 16384
+
+FLOW_MODEL_VERSION = "time-area-clark-d8-canopy-2"
+FLOW_ROUTING_OPTIONS = {"clark_k": 0.75, "n_time": 24}
+FLOW_CANOPY_COEFFICIENTS = {
+    "c_forest": 0.15, "c_bare": 0.55,
+    "v_forest": 0.30, "v_bare": 0.60,
+    "cs_forest": 10.0, "cs_bare": 3.0,
+}
+
+
+def _sub_progress(progress_cb, lo, hi):
+    """progress_cb の 0..1 を lo..hi に割り当てた callback を返す（None は None）。"""
+    if progress_cb is None:
+        return None
+    return lambda frac: progress_cb(lo + (hi - lo) * frac)
+
 
 def compute_slope_deg(dem, cell_size):
     """Horn法で傾斜角（度）を計算"""
@@ -51,16 +70,25 @@ def compute_shc(dem, cell_size, window=5):
     ラスタとして出力する。
 
     window : 標準偏差を計算するウィンドウサイズ（奇数推奨）。デフォルト=5
+
+    ウィンドウ内の有効セル数・和・二乗和を uniform_filter で求め、
+    std = sqrt(E[x²] − E[x]²) で計算する。以前の generic_filter（セルごとに
+    Python 関数を呼ぶ）と同じ値になり（有効セルが1以下なら 0、端は nearest）、
+    桁違いに速い（100万セルで 8秒 → 0.05秒）。
     """
-    from scipy.ndimage import generic_filter
+    from scipy.ndimage import uniform_filter
 
     curv = compute_curvature(dem, cell_size)
-
-    def _nanstd(v):
-        v = v[~np.isnan(v)]
-        return np.std(v) if len(v) > 1 else 0.0
-
-    shc = generic_filter(curv, _nanstd, size=window, mode="nearest")
+    valid = ~np.isnan(curv)
+    z = np.where(valid, curv, 0.0)
+    k = float(window * window)
+    cnt = uniform_filter(valid.astype(np.float64), size=window, mode="nearest") * k
+    s1 = uniform_filter(z, size=window, mode="nearest") * k
+    s2 = uniform_filter(z * z, size=window, mode="nearest") * k
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = s1 / cnt
+        var = np.maximum(s2 / cnt - mean * mean, 0.0)
+    shc = np.where(cnt > 1.5, np.sqrt(var), 0.0)
     shc[np.isnan(dem)] = np.nan
     return shc.astype(np.float32)
 
@@ -97,12 +125,13 @@ def d8_flow_direction(dem):
     return flow_dir
 
 
-def flow_accumulation(dem, flow_dir, weight=None):
+def flow_accumulation(dem, flow_dir, weight=None, progress_cb=None):
     """D8流向から上流集水セル数（または重み和）を累積（標高降順に処理）
 
     weight: None の場合は各セル=1（通常の集水セル数）。
             2D配列を渡すと各セルの値を重みとして上流側に累積する。
             上流加重平均 = flow_accumulation(weight) / flow_accumulation()
+    progress_cb : callable(frac) 省略可。0..1 の進捗を返す。
     """
     rows, cols = dem.shape
     accum = (np.ones((rows, cols), dtype=np.float64)
@@ -116,8 +145,11 @@ def flow_accumulation(dem, flow_dir, weight=None):
     r_arr, c_arr = np.where(valid_mask)
     elev_arr = dem[r_arr, c_arr]
     order = np.argsort(-elev_arr)  # 高い順
+    n = order.size
 
-    for idx in order:
+    for i, idx in enumerate(order):
+        if progress_cb is not None and not i % _PROGRESS_EVERY:
+            progress_cb(i / n)
         r, c = int(r_arr[idx]), int(c_arr[idx])
         d = int(flow_dir[r, c])
         if d in DIR_OFFSET:
@@ -126,6 +158,8 @@ def flow_accumulation(dem, flow_dir, weight=None):
             if 0 <= nr < rows and 0 <= nc < cols and valid_mask[nr, nc]:
                 accum[nr, nc] += accum[r, c]
 
+    if progress_cb is not None:
+        progress_cb(1.0)
     return accum
 
 
@@ -216,12 +250,13 @@ def dinf_proportions(dem, cell_size):
     return prop.astype(np.float32)
 
 
-def multi_flow_accumulation(dem, prop, weight=None):
+def multi_flow_accumulation(dem, prop, weight=None, progress_cb=None):
     """multi-flow 分配率 prop から上流集水を累積する（標高降順に処理）。
 
     prop   : mfd_proportions / dinf_proportions の戻り値 (rows,cols,8)。
     weight : None=各セル 1（集水セル数相当）。2D配列で重み付き累積。
              上流加重平均 = multi_flow_accumulation(weight) / multi_flow_accumulation()
+    progress_cb : callable(frac) 省略可。0..1 の進捗を返す。
     """
     rows, cols = dem.shape
     accum = (np.ones((rows, cols), dtype=np.float64)
@@ -230,7 +265,10 @@ def multi_flow_accumulation(dem, prop, weight=None):
     valid = ~np.isnan(dem)
     r_arr, c_arr = np.where(valid)
     order = np.argsort(-dem[r_arr, c_arr])  # 高い順
-    for idx in order:
+    n = order.size
+    for i, idx in enumerate(order):
+        if progress_cb is not None and not i % _PROGRESS_EVERY:
+            progress_cb(i / n)
         r, c = int(r_arr[idx]), int(c_arr[idx])
         base = accum[r, c]
         for k, (dr, dc) in enumerate(_NB8):
@@ -239,6 +277,8 @@ def multi_flow_accumulation(dem, prop, weight=None):
                 nr, nc = r + dr, c + dc
                 if 0 <= nr < rows and 0 <= nc < cols and valid[nr, nc]:
                     accum[nr, nc] += base * pk
+    if progress_cb is not None:
+        progress_cb(1.0)
     return accum
 
 
@@ -349,7 +389,7 @@ def compute_travel_time(dem, flow_dir, cell_size,
     return local_tt
 
 
-def compute_tc(dem, flow_dir, local_tt):
+def compute_tc(dem, flow_dir, local_tt, progress_cb=None):
     """
     各セルの流達時間 Tc [hours] を計算する。
 
@@ -361,6 +401,8 @@ def compute_tc(dem, flow_dir, local_tt):
       2. 最大累積時間 max_cum_tt を headwater から出口方向に伝播
          （標高降順で max_cum_tt[下流] = max(max_cum_tt[下流], max_cum_tt[上流])）
       3. Tc[C] = max_cum_tt[C] - cum_tt[C]
+
+    progress_cb : callable(frac) 省略可。0..1 の進捗を返す（Step 1・2 で半分ずつ）。
     """
     rows, cols = dem.shape
     DIR_OFFSET = {
@@ -370,10 +412,13 @@ def compute_tc(dem, flow_dir, local_tt):
     valid = ~np.isnan(dem)
     r_arr, c_arr = np.where(valid)
     elev = dem[r_arr, c_arr]
+    n = elev.size
 
     # --- Step 1: cum_tt_to_outlet（標高昇順 = 出口→ headwater） ---
     cum_tt = np.where(valid, local_tt, 0.0)
-    for idx in np.argsort(elev):          # 低い順
+    for i, idx in enumerate(np.argsort(elev)):          # 低い順
+        if progress_cb is not None and not i % _PROGRESS_EVERY:
+            progress_cb(0.5 * i / n)
         r, c = int(r_arr[idx]), int(c_arr[idx])
         d = int(flow_dir[r, c])
         if d in DIR_OFFSET:
@@ -384,7 +429,9 @@ def compute_tc(dem, flow_dir, local_tt):
 
     # --- Step 2: max_cum_tt（標高降順 = headwater→出口へ伝播） ---
     max_cum_tt = cum_tt.copy()
-    for idx in np.argsort(-elev):         # 高い順
+    for i, idx in enumerate(np.argsort(-elev)):         # 高い順
+        if progress_cb is not None and not i % _PROGRESS_EVERY:
+            progress_cb(0.5 + 0.5 * i / n)
         r, c = int(r_arr[idx]), int(c_arr[idx])
         d = int(flow_dir[r, c])
         if d in DIR_OFFSET:
@@ -397,6 +444,8 @@ def compute_tc(dem, flow_dir, local_tt):
     # --- Step 3: Tc = max upstream cum_tt − own cum_tt ---
     tc = max_cum_tt - cum_tt
     tc[~valid] = np.nan
+    if progress_cb is not None:
+        progress_cb(1.0)
     return tc
 
 
@@ -444,7 +493,7 @@ def flow_routing_3metrics(accum, tc, cell_size, duration_h,
 #   適用範囲: 線形・時間不変系、地表流主体の小〜中流域（目安 〜数 km²）、
 #             単一設計ハイエトグラフ、D8 単一流向。指針であって厳密解ではない。
 
-def cum_travel_time_to_outlet(dem, flow_dir, local_tt):
+def cum_travel_time_to_outlet(dem, flow_dir, local_tt, progress_cb=None):
     """各セルから下流の領域出口までの累積移動時間 [h]。
 
     compute_tc の Step 1 と同一。時間‐面積法の等到達時間（isochrone）基準
@@ -460,7 +509,10 @@ def cum_travel_time_to_outlet(dem, flow_dir, local_tt):
     r_arr, c_arr = np.where(valid)
     elev = dem[r_arr, c_arr]
     cum_tt = np.where(valid, local_tt, 0.0).astype(np.float64)
-    for idx in np.argsort(elev):          # 低い順（出口 → headwater）
+    n = elev.size
+    for i, idx in enumerate(np.argsort(elev)):          # 低い順（出口 → headwater）
+        if progress_cb is not None and not i % _PROGRESS_EVERY:
+            progress_cb(i / n)
         r, c = int(r_arr[idx]), int(c_arr[idx])
         d = int(flow_dir[r, c])
         if d in DIR_OFFSET:
@@ -469,6 +521,8 @@ def cum_travel_time_to_outlet(dem, flow_dir, local_tt):
             if 0 <= nr < rows and 0 <= nc < cols and valid[nr, nc]:
                 cum_tt[r, c] = local_tt[r, c] + cum_tt[nr, nc]
     cum_tt[~valid] = np.nan
+    if progress_cb is not None:
+        progress_cb(1.0)
     return cum_tt
 
 
@@ -534,7 +588,8 @@ def _downstream_order(dem):
     return r_arr[order], c_arr[order]
 
 
-def _accumulate_downstream(rc_r, rc_c, flow_dir, weight, shape):
+def _accumulate_downstream(rc_r, rc_c, flow_dir, weight, shape,
+                           progress_cb=None):
     """事前ソート済み座標列で D8 下流累積（weight は 2D）。"""
     rows, cols = shape
     accum = weight.astype(np.float64).copy()
@@ -542,7 +597,10 @@ def _accumulate_downstream(rc_r, rc_c, flow_dir, weight, shape):
         1: (0, 1), 2: (1, 1), 4: (1, 0), 8: (1, -1),
         16: (0, -1), 32: (-1, -1), 64: (-1, 0), 128: (-1, 1),
     }
-    for k in range(rc_r.size):
+    n = rc_r.size
+    for k in range(n):
+        if progress_cb is not None and not k % _PROGRESS_EVERY:
+            progress_cb(k / n)
         r, c = int(rc_r[k]), int(rc_c[k])
         d = int(flow_dir[r, c])
         if d in DIR_OFFSET:
@@ -550,10 +608,13 @@ def _accumulate_downstream(rc_r, rc_c, flow_dir, weight, shape):
             nr, nc = r + dr, c + dc
             if 0 <= nr < rows and 0 <= nc < cols and not np.isnan(accum[nr, nc]):
                 accum[nr, nc] += accum[r, c]
+    if progress_cb is not None:
+        progress_cb(1.0)
     return accum
 
 
-def _accumulate_downstream_multi(rc_r, rc_c, flow_dir, wstack, valid):
+def _accumulate_downstream_multi(rc_r, rc_c, flow_dir, wstack, valid,
+                                 progress_cb=None):
     """weight スタック (rows,cols,M) を D8 下流累積（1回のセルループで M 本分）。
 
     valid : 2D bool。無効セルへは伝播させない。
@@ -564,7 +625,10 @@ def _accumulate_downstream_multi(rc_r, rc_c, flow_dir, wstack, valid):
         1: (0, 1), 2: (1, 1), 4: (1, 0), 8: (1, -1),
         16: (0, -1), 32: (-1, -1), 64: (-1, 0), 128: (-1, 1),
     }
-    for k in range(rc_r.size):
+    n = rc_r.size
+    for k in range(n):
+        if progress_cb is not None and not k % _PROGRESS_EVERY:
+            progress_cb(k / n)
         r, c = int(rc_r[k]), int(rc_c[k])
         d = int(flow_dir[r, c])
         if d in DIR_OFFSET:
@@ -572,6 +636,8 @@ def _accumulate_downstream_multi(rc_r, rc_c, flow_dir, wstack, valid):
             nr, nc = r + dr, c + dc
             if 0 <= nr < rows and 0 <= nc < cols and valid[nr, nc]:
                 accum[nr, nc, :] += accum[r, c, :]
+    if progress_cb is not None:
+        progress_cb(1.0)
     return accum
 
 
@@ -591,11 +657,15 @@ def time_area_flow_metrics(dem, flow_dir, local_tt, tc, cell_size,
 
     c_grid : スカラー流出係数 or 2D グリッド（DSM 由来）。
     progress_cb : callable(frac) 省略可。0..1 の進捗を返す。
+                  内訳の割合は 100万セルでの実測時間に合わせている
+                  （累積時間 19% / 重み 12% / 下流累積 31% / 貯留 11% / 体積 27%）。
 
     戻り値: (q_peak, q_mean, tc)  float32 2D / tc は入力そのまま。
     """
     valid = ~np.isnan(dem)
-    cum_tt = cum_travel_time_to_outlet(dem, flow_dir, local_tt)   # [h]
+    cum_tt = cum_travel_time_to_outlet(
+        dem, flow_dir, local_tt,
+        progress_cb=_sub_progress(progress_cb, 0.0, 0.19))       # [h]
     # 到達時間チェーンで NaN になったセル（nodata 隣接など）は解析対象外。
     amask = (valid & np.isfinite(cum_tt) & np.isfinite(tc)
              & np.isfinite(local_tt))
@@ -644,8 +714,10 @@ def time_area_flow_metrics(dem, flow_dir, local_tt, tc, cell_size,
         i_u = intensity_at(u[m] - cum0)                          # [mm/h]
         wstack[:, :, m] = np.where(amask, cfac * i_u, 0.0)
         if progress_cb is not None:
-            progress_cb(0.5 * (m + 1) / n_eval)
-    g = _accumulate_downstream_multi(rc_r, rc_c, flow_dir, wstack, amask)
+            progress_cb(0.19 + 0.12 * (m + 1) / n_eval)
+    g = _accumulate_downstream_multi(
+        rc_r, rc_c, flow_dir, wstack, amask,
+        progress_cb=_sub_progress(progress_cb, 0.31, 0.62))
     del wstack
 
     # Clark 線形貯留（u 軸の離散リザーバ）: R = k·Tc
@@ -657,12 +729,14 @@ def time_area_flow_metrics(dem, flow_dir, local_tt, tc, cell_size,
         S = S + alpha * (np.where(amask, g[:, :, m], 0.0) - S)
         np.maximum(q_peak, S, out=q_peak)
         if progress_cb is not None:
-            progress_cb(0.5 + 0.5 * (m + 1) / n_eval)
+            progress_cb(0.62 + 0.11 * (m + 1) / n_eval)
     del g
 
     # 総体積 V [m³] = C · (total_mm/1000) · セル面積 を下流累積
     v_w = np.where(amask, c_grid * (total_mm / 1000.0) * cell_area_m2, np.nan)
-    V = _accumulate_downstream(rc_r, rc_c, flow_dir, v_w, dem.shape)
+    V = _accumulate_downstream(
+        rc_r, rc_c, flow_dir, v_w, dem.shape,
+        progress_cb=_sub_progress(progress_cb, 0.73, 1.0))
     V = np.where(amask, V, 0.0)
 
     t_base_s = (duration_h + tc_pos) * 3600.0
@@ -680,20 +754,61 @@ def time_area_flow_metrics(dem, flow_dir, local_tt, tc, cell_size,
 def cs_to_flow_coefficients(cs_grid,
                             c_forest=0.15, c_bare=0.55,
                             v_forest=0.30, v_bare=0.60,
-                            cs_forest=10.0, cs_bare=3.0):
+                            cs_forest=10.0, cs_bare=3.0,
+                            fallback_c=0.8, fallback_v=0.3):
     """樹冠高さ（CS = DSM − DEM）から流出係数・流速係数の空間グリッドを生成。
 
     cs_bare  以下: 伐採地・裸地 → C=c_bare,  v=v_bare
     cs_forest以上: 密林         → C=c_forest, v=v_forest
     中間: 線形補間
+    欠損・非有限値: 指定した補完係数
 
     戻り値: (c_grid, v_grid) — いずれも float32 の 2D 配列
     """
-    cs = np.where(np.isnan(cs_grid), cs_forest, cs_grid)  # NaN は密林扱い
+    valid = np.isfinite(cs_grid)
+    cs = np.where(valid, cs_grid, cs_bare)
     cs = np.clip(cs, cs_bare, cs_forest)
     t = (cs - cs_bare) / max(cs_forest - cs_bare, 1e-6)   # 0=裸地, 1=密林
     c_grid = (c_bare  + t * (c_forest - c_bare)).astype(np.float32)
     v_grid = (v_bare  + t * (v_forest - v_bare)).astype(np.float32)
+    c_grid = np.where(valid, c_grid, fallback_c).astype(np.float32)
+    v_grid = np.where(valid, v_grid, fallback_v).astype(np.float32)
     return c_grid, v_grid
+
+
+def prepare_flow_coefficients(dem, dsm_data=None, runoff_coef=0.8,
+                              velocity_coef=0.3):
+    """Build the applied coefficients and their coverage record from the same mask."""
+    dem_valid = np.isfinite(dem)
+    dem_cells = int(np.count_nonzero(dem_valid))
+    dsm_cells = 0
+    c_local, v_local = float(runoff_coef), float(velocity_coef)
+    if dsm_data is not None:
+        if dsm_data.shape != dem.shape:
+            raise ValueError("DSM must be aligned to the analysis DEM grid")
+        cs = dsm_data - dem
+        dsm_valid = dem_valid & np.isfinite(dsm_data) & np.isfinite(cs)
+        dsm_cells = int(np.count_nonzero(dsm_valid))
+        if dsm_cells:
+            cs = np.where(dsm_valid, cs, np.nan)
+            c_local, v_local = cs_to_flow_coefficients(
+                cs, **FLOW_CANOPY_COEFFICIENTS,
+                fallback_c=runoff_coef, fallback_v=velocity_coef)
+    mode = "manual" if not dsm_cells else (
+        "dsm" if dsm_cells == dem_cells else "mixed")
+    conditions = {
+        "schema_version": 1,
+        "model_version": FLOW_MODEL_VERSION,
+        "mode": mode,
+        "dem_valid_cells": dem_cells,
+        "dsm_valid_cells": dsm_cells,
+        "fallback_cells": dem_cells - dsm_cells,
+        "dsm_coverage": dsm_cells / dem_cells if dem_cells else 0.0,
+        "fallback": {"runoff_coef": float(runoff_coef),
+                     "velocity_coef": float(velocity_coef)},
+        "canopy_coefficients": dict(FLOW_CANOPY_COEFFICIENTS),
+        "routing": dict(FLOW_ROUTING_OPTIONS),
+    }
+    return c_local, v_local, conditions
 
 

@@ -72,6 +72,70 @@ class DEMLoader:
         self.read_data()
         return self
 
+    def read_aligned_to(self, reference):
+        """Read onto the exact analysis grid; return (array, resampling method)."""
+        from osgeo import osr
+
+        if self._ds is None:
+            raise RuntimeError("DSM is not loaded")
+        if not self.crs_wkt or not reference.crs_wkt:
+            raise ValueError("DEM and DSM must both have a coordinate reference system")
+        source_srs = osr.SpatialReference(wkt=self.crs_wkt)
+        target_srs = osr.SpatialReference(wkt=reference.crs_wkt)
+        rows, cols = reference.data.shape
+        source_gt = self._ds.GetGeoTransform()
+        target_gt = reference.gt
+        band = self._ds.GetRasterBand(1)
+        nodata = band.GetNoDataValue()
+
+        def clean(data):
+            data = data.astype(np.float64)
+            if nodata is not None:
+                data[data == nodata] = np.nan
+            data[~np.isfinite(data)] = np.nan
+            return data
+
+        # An integer-offset window on the same grid needs no interpolation.
+        basis = (1, 2, 4, 5)
+        if source_srs.IsSame(target_srs) and np.allclose(
+                [source_gt[i] for i in basis], [target_gt[i] for i in basis],
+                rtol=0, atol=1e-10):
+            inv_gt = gdal.InvGeoTransform(source_gt)
+            col, row = gdal.ApplyGeoTransform(inv_gt, target_gt[0], target_gt[3])
+            c0, r0 = round(col), round(row)
+            if (abs(col - c0) < 1e-7 and abs(row - r0) < 1e-7
+                    and 0 <= c0 and 0 <= r0
+                    and c0 + cols <= self._ds.RasterXSize
+                    and r0 + rows <= self._ds.RasterYSize):
+                data = clean(band.ReadAsArray(c0, r0, cols, rows))
+                if band.GetMaskFlags() != gdal.GMF_ALL_VALID:
+                    mask = band.GetMaskBand().ReadAsArray(c0, r0, cols, rows)
+                    data[mask == 0] = np.nan
+                return data, "none"
+
+        # Pre-create the destination so even rotated grids retain the DEM affine.
+        target = gdal.GetDriverByName("MEM").Create(
+            "", cols, rows, 1, gdal.GDT_Float64)
+        target.SetGeoTransform(target_gt)
+        target.SetProjection(reference.crs_wkt)
+        target_band = target.GetRasterBand(1)
+        target_band.SetNoDataValue(float("nan"))
+        target_band.Fill(float("nan"))
+        try:
+            result = gdal.Warp(
+                target, self._ds, dstSRS=reference.crs_wkt,
+                resampleAlg="bilinear", errorThreshold=0,
+                srcNodata=nodata if nodata is not None else float("nan"),
+                dstNodata=float("nan"), warpOptions=["INIT_DEST=NO_DATA"])
+            if not result:
+                raise RuntimeError("DSM alignment failed")
+            data = target_band.ReadAsArray().astype(np.float64)
+            data[~np.isfinite(data)] = np.nan
+            return data, "bilinear"
+        finally:
+            target_band = None
+            target = None
+
     def sample_at_point(self, x, y, src_crs_wkt=None):
         """地理座標 (x, y) でラスタ値をサンプリングして返す。
         src_crs_wkt を指定した場合、DEM CRS へ変換してからサンプリングする。
@@ -280,7 +344,8 @@ class GSITileDEMLoader:
 
     # ── 範囲取得 ──────────────────────────────────────────────────────
 
-    def fetch_for_extent(self, lon_min, lat_min, lon_max, lat_max, sources=None, cancel_cb=None):
+    def fetch_for_extent(self, lon_min, lat_min, lon_max, lat_max, sources=None, cancel_cb=None,
+                         progress_cb=None):
         """WGS84 経緯度範囲のタイルをダウンロードして numpy 配列に組み立てる。
         sources を省略すると TILE_SOURCES（1m→5m→10m）の順で自動フォールバックする。
 
@@ -291,6 +356,8 @@ class GSITileDEMLoader:
             省略時は TILE_SOURCES を使用。ルート計算など特定解像度を指定する場合に渡す。
         cancel_cb : callable | None
             呼び出すと True を返す場合、タイル取得をキャンセルする。
+        progress_cb : callable(done, total) | None
+            タイルを1枚取得するごとに呼ぶ（解像度を切り替えると数え直す）。
         """
         self.last_errors = []
         self._used_source_label = None
@@ -304,7 +371,8 @@ class GSITileDEMLoader:
                 tile_url, tile_zoom, label = item
                 encoding = "gsi"
             result = self._fetch_tiles(lon_min, lat_min, lon_max, lat_max,
-                                       tile_url, tile_zoom, encoding, cancel_cb=cancel_cb)
+                                       tile_url, tile_zoom, encoding, cancel_cb=cancel_cb,
+                                       progress_cb=progress_cb)
             if result is None:  # キャンセルされた
                 self._cancelled = True
                 return self
@@ -351,9 +419,10 @@ class GSITileDEMLoader:
         self.nodata    = None
         return self
 
-    def _fetch_tiles(self, lon_min, lat_min, lon_max, lat_max, tile_url, zoom, encoding="gsi", cancel_cb=None):
+    def _fetch_tiles(self, lon_min, lat_min, lon_max, lat_max, tile_url, zoom, encoding="gsi", cancel_cb=None,
+                     progress_cb=None):
         """指定URLとzoomでタイルを取得し (total_arr, zoom, x0, y0) を返す。
-        キャンセル時は None を返す。"""
+        キャンセル時は None を返す。progress_cb(done, total) はタイル1枚ごとに呼ぶ。"""
         max_tile = 2 ** zoom - 1
         TS = self.TILE_SIZE
 
@@ -377,6 +446,9 @@ class GSITileDEMLoader:
             )
 
         total_arr = np.full((ny * TS, nx * TS), np.nan, dtype=np.float64)
+        n_total = nx * ny
+        if progress_cb is not None:
+            progress_cb(0, n_total)
 
         for iy, ty in enumerate(range(y0, y1 + 1)):
             for ix, tx in enumerate(range(x0, x1 + 1)):
@@ -391,6 +463,8 @@ class GSITileDEMLoader:
                     if not hasattr(self, 'last_errors'):
                         self.last_errors = []
                     self.last_errors.append(f"z={zoom} x={tx} y={ty}: {err}")
+                if progress_cb is not None:
+                    progress_cb(iy * nx + ix + 1, n_total)
 
         return (total_arr, zoom, x0, y0)
 

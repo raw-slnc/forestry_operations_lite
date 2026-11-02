@@ -13,6 +13,7 @@ import glob
 import math
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 
@@ -31,7 +32,7 @@ class RasterData:
     data: np.ndarray
     gt: tuple
     crs_wkt: str
-    nodata: float | None
+    nodata: Optional[float]
 
 
 def _latest_path(out_dir, patterns):
@@ -70,9 +71,13 @@ def build_integrated_index(
     flow_caution=0.5,
     high_risk_threshold=3,
     overwrite=True,
+    progress_cb=None,
 ):
     """
     指標を統合して index ラスタを出力する。
+
+    progress_cb: callable(frac) 省略可。0..1 の進捗を返す。時間の大半は
+                 High Risk Areas のポリゴン化（15%〜100% に割り当て）。
 
     analysis_prefix: 解析番号プレフィクス (例: "0010_")。指定時はそのファイルを使用。
                      空文字の場合は最新ファイルを自動検索（レガシー動作）。
@@ -152,10 +157,16 @@ def build_integrated_index(
         high_mask |= fs_caution_mask
     zone_path = None
     if high_mask.any():
+        if progress_cb is not None:
+            progress_cb(0.15)
         zone_path = rw.mask_to_polygons(
             high_mask, base.gt, base.crs_wkt, out_dir,
-            f"{analysis_prefix}integrated_high_risk", overwrite=True
+            f"{analysis_prefix}integrated_high_risk", overwrite=True,
+            progress_cb=(None if progress_cb is None
+                         else (lambda f: progress_cb(0.15 + 0.85 * f))),
         )
+    if progress_cb is not None:
+        progress_cb(1.0)
 
     return {
         "integrated_risk_index": index_path,

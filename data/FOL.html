@@ -136,12 +136,25 @@ missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin
 <h3>DEM / DSM/DTM Data</h3>
 <ul>
   <li>Select a general-purpose DEM, or one covering the area where you'll run the terrain analysis.</li>
-  <li>Select a DSM covering the same extent as the DEM data.</li>
-  <li>Selecting DSM data lets the runoff and velocity coefficients for flow estimation be calculated automatically from the DSM.</li>
+  <li>Select a DSM covering the same extent as the DEM data. At analysis time it is aligned to the final DEM grid.</li>
+  <li>Valid DSM cells calculate runoff and velocity coefficients from canopy height. Missing DSM cells use the Runoff and Velocity values shown in the panel.</li>
+  <li>If DSM reading or alignment fails, choose Retry, Continue without DSM, or Cancel. Continue uses the manual coefficients for the full area.</li>
   <li>For Virtual Shizuoka data, first set the preview to the intended analysis area, then select VS LP/Grid. The plugin fetches data that covers that area; if a later analysis extent falls outside the fetched data, choose whether to fetch again or cancel.</li>
   <li>VS LP -&gt; DSM downloads LAS files (~237 MB per tile) into <code>vs_lp_ground/</code> under the analysis output folder. There is no time-based expiry: after each successful VS LP -&gt; DSM run only the LAS tiles used by that run are kept and older LAS files are removed. Re-running the same area reuses the cached LAS without re-downloading. Delete <code>vs_lp_ground/</code> manually to reclaim space.</li>
-  <li>VS LP/Grid and other DEM tiles are cached in <code>dem/</code> and <code>vs_lp_grid/</code>, and are removed automatically once no saved analysis run references them as its DEM.</li>
+  <li>Fetched DEM/DSM files are cached in <code>dem/</code>, <code>vs_lp_grid/</code>, and <code>remote_dem/</code>. Files referenced by a saved analysis or currently loaded are kept; cache cleanup removes them after they are no longer referenced.</li>
 </ul>
+
+<h3>Open elevation data outside Japan</h3>
+<table>
+  <tr><th>Source</th><th>Coverage</th><th>Data</th></tr>
+  <tr><td>AHN4 / PDOK</td><td>Netherlands</td><td>0.5 m DTM + DSM (CC0)</td></tr>
+  <tr><td>IGN LiDAR HD / Geoplateforme</td><td>France</td><td>0.5 m MNT + MNS (Etalab 2.0; incomplete coverage)</td></tr>
+  <tr><td>LINZ</td><td>New Zealand</td><td>1 m DEM (CC BY 4.0; GDAL LERC support required)</td></tr>
+</table>
+<p>These sources are shown when the preview overlaps their coverage. AHN and IGN fetch the paired DSM after the DEM. The files are stored in <code>remote_dem/</code>. When a previously fetched file from the same source covers the required extent, it is reused; otherwise the data is fetched after confirmation. They are analysis inputs only and are not included in the Virtual Shizuoka WebODM Importer export.</p>
+
+<h3>Re-fetching before analysis</h3>
+<p>For auto-fetched DEM sources, the analysis uses the DEM already fetched. Only when the analysis area extends beyond it does the plugin ask whether to fetch it again; confirming re-fetches the DEM (and the DSM, if set) and then runs the analysis. Local DEM/DSM files are analysed on the overlapping part without asking.</p>
 
 <h3>TIF / ZIP Layout</h3>
 <table>
@@ -359,8 +372,8 @@ USDA NRCS National Engineering Handbook, Part 630.</p>
     <td><strong>Velocity coefficient</strong></td>
     <td>
       Guideline: forest 0.3 / grassland 0.6 / paved surface 1.5 m/s.<br>
-      When DSM/DTM is set, the runoff and velocity coefficients are computed per
-      cell from canopy height.
+      When DSM/DTM is set, valid cells are computed from canopy height and
+      missing cells use these specified values as fallback.
     </td>
   </tr>
 </table>
@@ -380,9 +393,11 @@ USDA NRCS National Engineering Handbook, Part 630.</p>
   <tr><td><code>flow_peak.tif</code></td><td>Peak load Qp [m³/s] — maximum instantaneous discharge</td></tr>
   <tr><td><code>flow_mean.tif</code></td><td>Mean load Qm [m³/s] — sustained discharge over (duration + Tc)</td></tr>
   <tr><td><code>tc.tif</code></td><td>Time load — time of concentration Tc [h]</td></tr>
+  <tr><td><code>archive/&lt;name&gt;/</code></td><td>Named Exports: the moved run folder with saved <code>.qml</code> styles, <code>fol_archive.json</code> (name, source run, display state), and the analysis DEM (<code>elev_relief.tif</code>, used by the QGIS 4 version)</td></tr>
 </table>
 <div class="note">
-  Analysis runs are saved in numbered subfolders (<code>0001</code>, <code>0002</code>, …) and are never deleted automatically &mdash; an overwrite run replaces its own number, otherwise runs accumulate. The next run number is (highest existing number) + 1: deleting a run in the middle leaves that number unused, while deleting the highest-numbered run frees it for reuse. Deleting a run folder also lets the DEM-tile cleanup free any <code>dem/</code> / <code>vs_lp_grid/</code> tile that no remaining run still references. To keep the output folder and its cache from growing without bound, delete run folders you no longer need directly in the file manager (the plugin does not need to be running).
+  Analysis runs are saved in subfolders whose names combine a three-digit run sequence with the number of output files: for example, <code>0017</code> is sequence 001 with 7 files, and <code>0010+2</code> is sequence 001 with 12 files. Runs are never deleted automatically &mdash; an overwrite run replaces its own sequence, otherwise the sequence increases. Deleting a middle sequence leaves it unused, while deleting the highest sequence frees it for reuse. Deleting a run folder also lets the DEM/DSM cache cleanup free files in <code>dem/</code>, <code>vs_lp_grid/</code>, and <code>remote_dem/</code> that no remaining run references and that are not currently loaded. To keep the output folder and its cache from growing without bound, delete run folders you no longer need directly in the file manager; cleanup runs when the plugin next refreshes the analysis list.
+  <code>params.json</code> and Analysis Conditions record whether flow coefficients were manual, DSM-derived, or mixed, including DSM coverage and the fallback coefficients.
 </div>
 </div>
 
@@ -408,7 +423,9 @@ poor drainage, weak ground, and higher mud risk.</p>
 <strong>Mean load</strong> (sustained), and <strong>Time load</strong> (Tc, response
 speed). Peak and Mean differ by terrain concentration as well as by the storm's
 peakiness. When DSM is set, the runoff and velocity coefficients vary per cell
-from canopy height.</p>
+from canopy height where DSM is valid; missing cells retain the specified manual
+coefficients. This is a scenario indicator for field planning, not a substitute
+for checking vegetation, soil, compaction, and wetness conditions on site.</p>
 
 <h3>Analysis Layer Display (Filter / Buffer)</h3>
 <p>In the Analysis panel, cycling the Flow button switches Peak load → Mean load →
@@ -421,20 +438,22 @@ Peak / Mean only (disabled for Time load).</p>
 <p>An additive risk index (0–6) combining FS, TWI, and peak load.
 Extracts areas where multiple hazard factors overlap as "high-priority" polygons.</p>
 
-<h3>Export Analysis Layers</h3>
-<p>The <strong>Export</strong> button (Analysis panel) writes every output layer of the
-selected analysis run into a standalone group named
-<code>Forestry Operations Lite - &lt;run&gt;</code>, separate from the plugin-managed
-group. These layers persist through run switching and closing the plugin, so they can
-be referenced for reporting without opening the plugin. The current Filter and opacity
-are applied, and the styling is saved as a <code>.qml</code> sidecar next to each data
-file — so the colour scheme follows the raw <code>.tif</code> / <code>.gpkg</code> into
-another project, PC, or GIS. The low-value Filter is part of the renderer and is
-reproduced; the Buffer bleed is a separate layer and is <em>not</em> exported. Which
-layers are checked on mirrors what is currently displayed (for a key with several
-files, only the one currently shown). Re-exporting the same run keeps the previous
-export (duplicates are allowed). An overwrite run replaces the run folder and removes
-the written <code>.qml</code> files — re-export to regenerate them.</p>
+<h3>Background processing (progress / stop)</h3>
+<p>Analysis, DEM/DSM fetching and WebODM Importer export run in the background, so QGIS stays responsive. During analysis, the <strong>Run Analysis</strong> button becomes a progress bar, with the current step and the estimated time remaining below it (the estimate is based on the previous run). <strong>Stop</strong> stops the analysis, and <strong>Cancel</strong> on the DEM / DSM row stops a fetch. Switching projects or closing the plugin window cancels a running task and removes its partial files.</p>
+
+<h3>Named Exports</h3>
+<p>To keep a result under a recognizable name, select its analysis run and click <strong>Export to Project</strong> (first row of <strong>Analysis Layer Display</strong>, next to the run selector). Enter a name: the default is <code>Forestry Operations Lite - &lt;run&gt;</code>, names must be unique, and characters that cannot be used in folder names are rejected with a warning. FOL moves the run folder to <code>archive/&lt;name&gt;/</code>, adds its layers to the project as a group with that name, and saves the current display (colours, Filter, opacity) as <code>.qml</code> files next to the data, so the colour scheme follows the raw <code>.tif</code> / <code>.gpkg</code> into another project, PC, or GIS. Which layers are checked on mirrors what is currently displayed. The Buffer bleed is a separate layer and is <em>not</em> exported.</p>
+<ul>
+  <li>The export keeps the display as it was when exported. To change it later, edit the layers directly in QGIS (Layer Properties).</li>
+  <li>Named Exports are listed below the analysis runs in the run selector, in the order they were created. Long names are shortened in the list; the full name is shown as a tooltip. Selecting one shows it in the preview in the same way as a run. A Named Export always uses its own display settings (the display saved at export): it does not take over the settings of the analysis runs, and switching back to a run restores the run settings used before the Named Export was selected.</li>
+  <li>While a Named Export's group is in the project, <strong>Export to Project</strong> is greyed out. After removing the group from the Layers panel, the button adds it again using the saved <code>.qml</code> files.</li>
+  <li>Named Exports are not touched by overwrite runs. After the export, FOL copies the analysis DEM on the analysis grid into the folder in the background as <code>elev_relief.tif</code>, so a Named Export stays complete after its source run or the DEM cache is deleted, and its folder can be moved to another project or PC. This version does not display it; the QGIS 4 version of FOL uses it for Hillshade and Elevation Background. Until it is copied, DEM cache cleanup keeps the original DEM.</li>
+  <li>Groups exported by earlier versions (named <code>Forestry Operations Lite - &lt;run&gt;</code> and referring to the run folder) are left as they are. When that run is exported with Export to Project, those earlier groups are removed from the project and replaced by the new named group. If the project is then closed without saving, the plugin reconnects those groups to the Named Export the next time its window opens and shows a notice. Save the project to keep the new locations.</li>
+  <li>FOL has no rename or delete function for Named Exports. Delete <code>archive/&lt;name&gt;/</code> in the file manager when it is no longer needed.</li>
+</ul>
+<div class="note">
+  <strong>Renaming a Named Export.</strong> Remove its group from the Layers panel, save the project, and close QGIS. While QGIS is closed, rename the folder <code>archive/&lt;name&gt;/</code>. Then open the project, select the new name in the analysis run selector, and click <strong>Export to Project</strong> to add it again. The folder name is used as the group name.
+</div>
 </div>
 
 <hr>
@@ -478,12 +497,25 @@ the written <code>.qml</code> files — re-export to regenerate them.</p>
 <h3>DEM / DSM/DTM データ</h3>
 <ul>
   <li>DEM は汎用データか、地形解析を行う箇所のデータを選択してください。</li>
-  <li>DSM データは、地表データの DEM データ設定と範囲を同じくするデータを選んでください。</li>
-  <li>DSM データを選択することで流量推測における流出係数・流速係数がDSMを基に自動計算されます。</li>
+  <li>DSM データは、地表データの DEM データ設定と範囲を同じくするデータを選んでください。解析時に最終的なDEMグリッドに整列します。</li>
+  <li>DSMの有効セルは樹冠高から流出係数・流速係数を計算し、DSM欠損セルはパネルのRunoff・Velocity設定値で補完します。</li>
+  <li>DSMの読み込み・整列に失敗した場合は、再試行・DSMなしで続行・中止を選べます。続行時は全域に手動係数を使います。</li>
   <li>Virtual Shizuoka data を使う場合は、先にプレビューを解析予定範囲へ移動してから VS LP/Grid を設定してください。プラグインはその範囲を収めるデータを取得し、後で解析範囲が取得済みデータの外に出た場合は、再取得するかキャンセルするかを確認します。</li>
   <li>VS LP -&gt; DSM は LAS ファイル（1タイル約 237 MB）を解析出力フォルダ内の <code>vs_lp_ground/</code> に保存します。期間による自動削除はなく、VS LP -&gt; DSM の実行が成功するたびに、その実行で使ったタイルの LAS だけを残して古い LAS を削除します。同じ範囲の再実行はキャッシュ済み LAS を再利用します（再ダウンロードなし）。容量を空けたいときは <code>vs_lp_ground/</code> を手動で削除してください。</li>
-  <li>VS LP/Grid やその他の DEM タイルは <code>dem/</code> と <code>vs_lp_grid/</code> にキャッシュされ、どの保存済み解析からも DEM として参照されなくなると自動的に削除されます。</li>
+  <li>取得したDEM/DSMファイルは<code>dem/</code>、<code>vs_lp_grid/</code>、<code>remote_dem/</code>にキャッシュします。保存済み解析から参照されている、または現在読み込み中のファイルは保持し、参照されなくなったファイルはキャッシュ整理で削除します。</li>
 </ul>
+
+<h3>日本国外の公開標高データ</h3>
+<table>
+  <tr><th>取得元</th><th>対象地域</th><th>データ</th></tr>
+  <tr><td>AHN4 / PDOK</td><td>オランダ</td><td>0.5 m DTM + DSM（CC0）</td></tr>
+  <tr><td>IGN LiDAR HD / Geoplateforme</td><td>フランス</td><td>0.5 m MNT + MNS（Etalab 2.0、未整備地域あり）</td></tr>
+  <tr><td>LINZ</td><td>ニュージーランド</td><td>1 m DEM（CC BY 4.0、GDALのLERC対応が必要）</td></tr>
+</table>
+<p>プレビューが対象地域に重なると取得元が表示されます。AHNとIGNはDEMに続けて対応DSMも自動取得します。ファイルは<code>remote_dem/</code>に保存します。同じソースの取得済みファイルが必要な範囲を覆っていれば再利用し、なければ確認後に取得します。これらは解析入力専用で、バーチャル静岡のWebODM Importer向けエクスポートには含まれません。</p>
+
+<h3>解析前の再取得</h3>
+<p>自動取得型の DEM は、取得済みの DEM で解析します。解析範囲がその外に出るときだけ再取得するかを確認し、確認すると DEM（DSM がセットされていれば DSM も）を取り直してから解析します。ローカルの DEM/DSM ファイルは確認なしで重なる部分を解析します。</p>
 
 <h3>TIF / ZIP の配置</h3>
 <table>
@@ -687,7 +719,7 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
     <td><strong>流速係数</strong></td>
     <td>
       林地 0.3 / 草地 0.6 / 舗装面 1.5 m/s が目安。<br>
-      DSM/DTM を設定した場合、流出係数・流速係数は樹冠高さからセルごとに計算されます。
+      DSM/DTM の有効セルは樹冠高から計算し、欠損セルはここで指定した値を補完値として使います。
     </td>
   </tr>
 </table>
@@ -707,9 +739,11 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
   <tr><td><code>flow_peak.tif</code></td><td>Peak load Qp [m³/s] — 最大瞬間流量</td></tr>
   <tr><td><code>flow_mean.tif</code></td><td>Mean load Qm [m³/s] — （継続時間 + Tc）で割った持続的な流量</td></tr>
   <tr><td><code>tc.tif</code></td><td>Time load — 流達時間 Tc [h]</td></tr>
+  <tr><td><code>archive/&lt;名前&gt;/</code></td><td>Named Exports：移した解析フォルダ。保存済み <code>.qml</code> スタイル、解析の DEM（<code>elev_relief.tif</code>、QGIS 4 版が使う）と <code>fol_archive.json</code>（名前・元の解析番号・表示の状態）付き</td></tr>
 </table>
 <div class="note">
-  解析結果は番号付きサブフォルダ（<code>0001</code>, <code>0002</code>, …）に保存され、自動削除は行いません。上書き解析は同じ番号を差し替えるだけで、それ以外は溜まっていきます。次の番号は「既存の最大番号 + 1」です。途中の番号を削除してもその番号は再使用されず、最大番号のフォルダを削除した場合のみ次でその番号が再利用されます。フォルダを削除すると、どの解析からも参照されなくなった <code>dem/</code> / <code>vs_lp_grid/</code> のタイルを DEM キャッシュ整理が解放できるようになります。出力フォルダとキャッシュが際限なく肥大しないよう、不要になった番号フォルダはファイルマネージャで直接削除してください（プラグインの起動は不要です）。
+  解析結果は、3桁の解析シーケンスと出力ファイル数を組み合わせた名前のサブフォルダに保存します。例えば<code>0017</code>はシーケンス001・7ファイル、<code>0010+2</code>はシーケンス001・12ファイルです。解析結果は自動削除せず、上書き解析は同じシーケンスを差し替え、それ以外はシーケンスが増えます。途中のシーケンスを削除しても再使用せず、最大シーケンスを削除した場合は次回その番号を再利用します。解析フォルダを削除すると、残る解析から参照されず、現在読み込み中でもない<code>dem/</code>、<code>vs_lp_grid/</code>、<code>remote_dem/</code>内のファイルをDEM/DSMキャッシュ整理が解放できるようになります。出力フォルダとキャッシュが際限なく肥大しないよう、不要な解析フォルダはファイルマネージャで直接削除してください。キャッシュ整理はプラグインが次に解析一覧を更新したときに実行します。
+  <code>params.json</code>とAnalysis Conditionsに、流出・流速係数が手動、DSM由来、混合のいずれか、DSM適用率と補完係数を記録します。
 </div>
 </div>
 
@@ -733,7 +767,7 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
 <p>時間‐面積法（Clark 単位図法）で、水系に沿った水理的な負荷を推計。
 <strong>Peak load</strong>（急性）・<strong>Mean load</strong>（持続）・<strong>Time load</strong>
 （Tc、応答の速さ）の3レイヤーを出力。Peak と Mean は雨の尖りに加えて地形の集中性で差が出ます。
-DSM 設定時は樹冠高から流出係数・流速係数を地点ごとに可変。</p>
+DSMの有効セルは樹冠高から流出係数・流速係数を地点ごとに可変させ、欠損セルは手動係数で補完します。これは現地作業を検討するためのシナリオ指標であり、植生・土壌・締固め・湿潤状態の現地確認に代わるものではありません。</p>
 
 <h3>解析レイヤー表示（Filter / Buffer）</h3>
 <p>Analysis パネルで Flow ボタンを押すと Peak load → Mean load → Time load と切替わります。
@@ -745,17 +779,22 @@ Peak / Mean のみ有効（Time load では無効）。</p>
 <p>FS・TWI・Peak load を統合した加算型リスク指標（0〜6）。
 複数の危険因子が重なる箇所を「重点箇所」ポリゴンで抽出。</p>
 
-<h3>解析レイヤーのエクスポート</h3>
-<p>Analysis パネルの <strong>Export</strong> ボタンで、選択中の解析番号の全出力レイヤーを
-<code>Forestry Operations Lite - &lt;番号&gt;</code> という独立グループ（プラグイン管理グループ
-とは別）へ書き出します。解析番号の切替やプラグイン終了で消えず、プラグインを開かずに書類作成等
-で参照できます。現在の Filter と不透明度が適用され、スタイルは各データファイルの隣に
-<code>.qml</code> サイドカーとして保存されるため、生の <code>.tif</code> / <code>.gpkg</code>
-を別プロジェクト・別 PC・他 GIS で開いても配色が付いてきます。低値透過 Filter はレンダラーに
-含まれるので再現され、Buffer の滲みは別レイヤーのため<em>エクスポートされません</em>。チェックが
-入るレイヤーは現在表示中のものに一致します（1キーに複数ファイルがある場合は表示中の1件のみ）。
-同じ番号を再エクスポートしても前回分は残ります（重複可）。上書き解析は解析番号フォルダごと
-差し替わるため書き出した <code>.qml</code> も消えます — 再エクスポートで作り直してください。</p>
+<h3>バックグラウンド処理（進捗・中止）</h3>
+<p>解析・DEM/DSM の取得・WebODM Importer 向け書き出しはバックグラウンドで行い、QGIS の操作を止めません。解析中は <strong>Run Analysis</strong> ボタンが進捗バーになり、その下に現在の段階と残り時間の目安を表示します（目安は前回の解析の速さから計算）。<strong>Stop</strong> で解析を、DEM / DSM 行の <strong>Cancel</strong> で取得を中止できます。プロジェクトを切り替えた場合やプラグインの窓を閉じた場合も、実行中の処理を中止して途中のファイルを削除します。</p>
+
+<h3>Named Exports</h3>
+<p>結果を分かりやすい名前で残すときは、解析番号を選んで <strong>Export to Project</strong>（<strong>Analysis Layer Display</strong> の1行目、解析番号の選択欄の隣）を押します。名前を入力します。初めは <code>Forestry Operations Lite - &lt;解析番号&gt;</code> が入っています。名前は重複できず、フォルダ名に使えない文字は注意が出て使えません。FOL は解析番号のフォルダを <code>archive/&lt;名前&gt;/</code> へ移し、そのレイヤーを同じ名前のグループとしてプロジェクトに追加し、今の表示（配色・Filter・不透明度）をデータの隣に <code>.qml</code> として保存します。生の <code>.tif</code> / <code>.gpkg</code> を別プロジェクト・別 PC・他 GIS で開いても配色が付いてきます。チェックが入るレイヤーは現在表示中のものに一致します。Buffer の滲みは別レイヤーのため<em>書き出しません</em>。</p>
+<ul>
+  <li>書き出したときの表示をそのまま残します。あとで変えるときは、QGIS でレイヤーを直接編集してください（レイヤーのプロパティ）。</li>
+  <li>Named Exports は、解析番号の選択欄で解析番号の下に、作った順に並びます。長い名前は一覧では途中を省略し、全体はツールチップに出します。選ぶと、解析番号と同じようにプレビューに表示します。Named Export は常に自分の表示の設定（書き出したときの表示）を使います。解析番号の設定を引き継がず、解析番号に戻ると、Named Export を選ぶ前の解析番号の設定に戻ります。</li>
+  <li>Named Export のグループがプロジェクトにある間は、<strong>Export to Project</strong> はグレーになります。レイヤーパネルからグループを外すと、保存済みの <code>.qml</code> を使ってもう一度追加できます。</li>
+  <li>Named Exports は上書き解析の対象になりません。書き出したあと、FOL は解析の DEM を解析と同じグリッドで、バックグラウンドでフォルダに <code>elev_relief.tif</code> として写します。元の解析や DEM キャッシュを削除しても Named Export はそろったまま使え、フォルダを別のプロジェクトや別の PC へ移せます。この版では表示しません。QGIS 4 版の FOL が Hillshade と Elevation Background に使います。写し終えるまでは、DEM キャッシュの整理で元の DEM を残します。</li>
+  <li>以前の版で書き出したグループ（<code>Forestry Operations Lite - &lt;解析番号&gt;</code> で、解析番号のフォルダを参照しているもの）は、そのまま使えます。その解析番号を Export to Project で書き出すと、以前のグループはプロジェクトから外し、名前を付けたグループに置き換えます。そのあと保存せずにプロジェクトを閉じた場合は、次にプラグインの窓を開いたときに Named Export へ付け直し、お知らせを出します。新しい場所を残すため、プロジェクトを保存してください。</li>
+  <li>FOL には Named Exports の名前の変更・削除の機能はありません。不要になったら、ファイルマネージャで <code>archive/&lt;名前&gt;/</code> を削除してください。</li>
+</ul>
+<div class="note">
+  <strong>Named Export の名前を変えるとき</strong> レイヤーパネルからそのグループを一旦削除し、プロジェクトを保存して QGIS を閉じます。QGIS を閉じている間に <code>archive/&lt;名前&gt;/</code> のフォルダ名を変えます。プロジェクトを開き、解析番号の選択欄で新しい名前を選んで <strong>Export to Project</strong> を押すと、もう一度追加できます。グループ名にはフォルダ名が使われます。
+</div>
 </div>
 
 <hr>

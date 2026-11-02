@@ -8,13 +8,14 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 
 ## Features
 
-- Load DEM from local files or tile services (GSI elevation tiles for Japan; AWS Terrarium for global coverage)
-- Optional DSM — when loaded alongside DEM, canopy height is used to refine flow coefficients automatically
+- Load DEM from local files or public services (Japan, the Netherlands, France, New Zealand, and global sources)
+- Optional DSM — valid DSM cells refine flow coefficients automatically; missing cells use the specified manual coefficients
 - Compute **slope stability** (infinite-slope factor of safety), **TWI** (Topographic Wetness Index), **valley terrain**, and **flow estimation**
 - Preview canvas with bidirectional sync to the QGIS main map window
 - Layer settings (background / tile / GPKG) displayed in the preview independent of analysis data
 - Map lock: fix the preview to the analysis extent while continuing to navigate the main window freely
-- Analysis results are grouped and managed by run number in the QGIS layer panel
+- Analysis results are grouped and managed by run number in the QGIS layer panel; results to keep can be named under **Named Exports**
+- Analysis, DEM/DSM fetching and WebODM Importer export run in the background, so QGIS stays responsive; analysis shows the current step and the estimated time remaining, and switching projects or closing the plugin window cancels a running task and removes its partial files
 - Overall Risk and High Risk are selected with **Risk Type** and shown with the same display button; Slope Stability can be overlaid independently
 - Preview status bar shows centre coordinates, scale, area (ha), and CRS
 
@@ -38,6 +39,19 @@ The Valley Terrain analysis lets you choose how water flow is routed across the 
 | Best for **pinpointing where water concentrates** (danger lines, routing roads to avoid channels). | Best when you want **both a readable line and an artifact-free surface**. | Best for reading the **valley terrain itself** as a faithful area (wetness / disaster-risk surface). |
 
 > **Note:** The TWI threshold that best separates valleys differs by method (the accumulation scale changes). Re-check the *TWI Threshold* after switching methods. In the example above, matching valley density required TWI ≈ 5.2 (D8), 5.4 (D∞), 5.9 (MFD).
+
+---
+
+## Named Exports
+
+To keep a result under a recognizable name, select its analysis run and click **Export to Project** (first row of **Analysis Layer Display**, next to the run selector). Enter a name: the default is `Forestry Operations Lite - <run>`, names must be unique, and characters that cannot be used in folder names are rejected with a warning. FOL moves the run folder to `archive/<name>/`, adds its layers to the project as a group with that name, and saves the current display (colours, Filter, opacity) as `.qml` files next to the data. Flow Buffer is not exported.
+
+- The export keeps the display as it was when exported. To change it later, edit the layers directly in QGIS (Layer Properties).
+- Named Exports are listed below the analysis runs in the run selector, in the order they were created. Selecting one shows it in the preview in the same way as a run. A Named Export always uses its own display settings (the display saved at export): it does not take over the settings of the analysis runs, and switching back to a run restores the run settings used before the Named Export was selected.
+- While a Named Export's group is in the project, **Export to Project** is greyed out. After removing the group from the Layers panel, the button adds it again using the saved `.qml` files.
+- Named Exports are not touched by overwrite runs. After the export, FOL copies the analysis DEM into the folder in the background as `elev_relief.tif`, so a Named Export stays complete after its source run or the DEM cache is deleted. This version does not display it; the QGIS 4 version of FOL uses it for Hillshade and Elevation Background.
+- Groups exported by earlier versions (named `Forestry Operations Lite - <run>` and referring to the run folder) are left as they are. When that run is exported with Export to Project, those earlier groups are removed from the project and replaced by the new named group. If the project is then closed without saving, the plugin reconnects those groups to the Named Export the next time its window opens and shows a notice. Save the project to keep the new locations.
+- FOL has no rename or delete function for Named Exports. Delete `archive/<name>/` in the file manager when it is no longer needed.
 
 ---
 
@@ -70,7 +84,7 @@ The **Export for WebODM Importer** section packages the loaded VS LP terrain dat
 - DTM — VS LP/Grid GeoTIFF (0.5 m)
 - DSM — VS LP/Ground converted from LAS (0.5 m)
 - Ortho — VS LP/Ortho tiles for the same tile range as DEM/DSM (skipped if not available)
-- LAS point cloud — raw LAS files from DSM generation, packed into `odm_georeferencing/`
+- LAS point cloud — not included in the ZIP; `las_sources.json` refers to the LAS files used to create the DSM (`vs_lp_ground/`), and `README_LAS_LINKS.txt` lists their download URLs
 
 All data is fetched for the same tile range (determined at DEM load time), ensuring geographic consistency.
 
@@ -86,9 +100,22 @@ Use the **Open in WODMI** button to open the exported ZIP directly in the WebODM
 | GSI DEM5A | Japan | ~5 m | Auto-fetched from canvas extent |
 | GSI DEM10B | Japan | ~10 m | Auto-fetched from canvas extent |
 | AWS Terrarium | Worldwide | ~2–10 m eq. | Auto-fetched from canvas extent |
+| AHN4 DTM / DSM | Netherlands | 0.5 m | Auto-fetched from PDOK for the canvas extent |
+| IGN LiDAR HD MNT / MNS | France | 0.5 m | Auto-fetched from Geoplateforme; coverage is still incomplete |
+| LINZ DEM | New Zealand | 1 m | Read from public COGs; requires GDAL LERC support |
 | Local file | Any | As-is | GeoTIFF, ZIP, or folder |
 | Copernicus GLO-30 | Worldwide | 30 m | Free account required (OpenTopography) |
 | VS LP/Grid | Shizuoka Pref., Japan | 0.5 m | Auto-fetched from S3 — see Virtual Shizuoka Features |
+
+AHN and IGN automatically fetch their paired DSM after the DEM. DSM values are aligned to the final analysis DEM grid. Cells without valid DSM coverage fall back to the Runoff and Velocity coefficients shown in the panel, and the applied coverage is recorded in `params.json` and Analysis Conditions. If DSM preparation fails, choose Retry, Continue without DSM, or Cancel.
+
+Fetched AHN, IGN, and LINZ files are stored in `remote_dem/`. When a file fetched earlier from the same source already covers the required extent, it is reused without downloading again. Cached DEM/DSM files are kept while a saved analysis references them or they are currently loaded, and cache cleanup removes them after they are no longer referenced.
+
+The WebODM Importer export remains a Virtual Shizuoka-only function. AHN, IGN, and LINZ data are not included in that export.
+
+### Re-fetching before analysis
+
+For auto-fetched DEM sources, the analysis uses the DEM already fetched. Only when the analysis area extends beyond it does the plugin ask whether to fetch it again; confirming re-fetches the DEM (and the DSM, if set) and then runs the analysis. Local DEM files are analysed on the overlapping part without asking.
 
 ### CRS recommendations
 
@@ -152,6 +179,8 @@ forestry_operations_lite/
 │   ├── gsi_dem5a_YYYYMMDD_HHMMSS.tif
 │   └── gsi_dem5a_YYYYMMDD_HHMMSS_utm53.tif   ← reprojected to UTM
 │
+├── remote_dem/                   # AHN / IGN / LINZ DEM and DSM GeoTIFFs
+│
 ├── vs_lp_grid/                   # VS LP/Grid DEM tiles — Shizuoka only (GeoTIFF)
 │   ├── {tile_code}.tif
 │   └── vs_grid_YYYYMMDD_HHMMSS.tif           ← merged (multi-tile)
@@ -164,6 +193,9 @@ forestry_operations_lite/
 ├── zip/                          # Export ZIPs for WebODM Importer — Shizuoka only
 │   ├── FOL_YYYYMMDD-all.zip
 │   └── FOL_YYYYMMDD_2-all.zip                ← sequential if same day
+│
+├── archive/                      # Named Exports
+│   └── {name}/                   ← moved run folder with .qml styles and fol_archive.json
 │
 └── {run_number}/                 # Analysis results (e.g. 0011, 0012, 0010+2)
     ├── params.json               ← analysis parameters
@@ -188,6 +220,8 @@ When more than 9 files: `{seq}0+{n-10}` (e.g. `0010+2` = run 001, 12 files).
 
 This project is licensed under the GNU General Public License v2 or later.
 
+The plugin bundles two third-party libraries in `vendor/`, each under its own license: laspy 2.7.0 (BSD 2-Clause, `vendor/laspy/LICENSE.txt`) and defusedxml 0.7.1 (Python Software Foundation License Version 2, `vendor/defusedxml/LICENSE`). Their sources and the changes made to them are listed in `vendor/README.md`.
+
 ---
 
 ## Support
@@ -207,13 +241,14 @@ https://paypal.me/rawslnc
 
 ## 機能
 
-- ローカルファイルまたはタイルサービス（国土地理院標高タイル・AWS Terrarium全球対応）からDEMを読み込み
-- DSMオプション — DEMと併せて読み込むと、樹冠高から流出係数を自動算出
+- ローカルファイルまたは公開サービス（日本・オランダ・フランス・ニュージーランド・全球ソース）からDEMを読み込み
+- DSMオプション — 有効なDSMセルは流出係数・流速係数に反映し、欠損セルは画面の手動係数で補完
 - **斜面安定性**（無限斜面安全率）・**TWI**（地形湿潤指数）・**沢地形**・**流量推測**を計算
 - QGISメインマップとの双方向同期プレビューキャンバス
 - 解析データの有無に関わらず、レイヤー設定（背景・タイル・GPKG）をプレビューに表示
 - 地図ロック：解析範囲にプレビューを固定しながら、メインウィンドウは自由に操作可能
-- 解析結果はQGISレイヤーパネルに解析番号グループで管理
+- 解析結果はQGISレイヤーパネルに解析番号グループで管理。残したい結果は名前を付けて **Named Exports** で管理
+- 解析・DEM/DSMの取得・WebODM Importer向け書き出しはバックグラウンドで行い、QGISの操作を止めない。解析中は現在の段階と残り時間の目安を表示し、プロジェクトの切り替えやプラグインの窓を閉じると実行中の処理を中止して途中のファイルを削除
 - Overall Risk と High Risk は **Risk Type** で選択し、同じ表示ボタンで切替表示。Slope Stability は独立して重ね表示できます
 - プレビューステータスバーに中心座標・縮尺・面積（ha）・CRSを表示
 
@@ -235,6 +270,19 @@ https://paypal.me/rawslnc
 | **水が集まる危険筋を特定**したいとき（崩れやすい筋・道で避ける筋の把握）に向く。 | **線も残しつつ縞のない面**が欲しいときに向く。 | **沢地形そのものを面として正確に**見たいとき（湿り・災害リスク面）に向く。 |
 
 > **注意：** 沢をうまく分ける最適なTWI閾値は方式ごとにズレます（集水のスケールが変わるため）。方式を切り替えたら *TWI Threshold* を再調整してください。上図では沢の量を揃えるのに TWI ≈ 5.2（D8）・5.4（D∞）・5.9（MFD）が必要でした。
+
+---
+
+## Named Exports
+
+結果を分かりやすい名前で残すときは、解析番号を選んで **Export to Project**（**Analysis Layer Display** の1行目、解析番号の選択欄の隣）を押します。名前を入力します。初めは `Forestry Operations Lite - <解析番号>` が入っています。名前は重複できず、フォルダ名に使えない文字は注意が出て使えません。FOLは解析番号のフォルダを `archive/<名前>/` へ移し、そのレイヤーを同じ名前のグループとしてプロジェクトに追加し、今の表示（配色・Filter・不透明度）をデータの隣に `.qml` として保存します。Flow Buffer は書き出しません。
+
+- 書き出したときの表示をそのまま残します。あとで変えるときは、QGIS でレイヤーを直接編集してください（レイヤーのプロパティ）。
+- Named Exports は、解析番号の選択欄で解析番号の下に、作った順に並びます。選ぶと、解析番号と同じようにプレビューに表示します。Named Export は常に自分の表示の設定（書き出したときの表示）を使います。解析番号の設定を引き継がず、解析番号に戻ると、Named Export を選ぶ前の解析番号の設定に戻ります。
+- Named Export のグループがプロジェクトにある間は、**Export to Project** はグレーになります。レイヤーパネルからグループを外すと、保存済みの `.qml` を使ってもう一度追加できます。
+- Named Exports は上書き解析の対象になりません。書き出したあと、FOL は解析の DEM をバックグラウンドでフォルダに `elev_relief.tif` として写します。元の解析や DEM キャッシュを削除しても Named Export はそろったまま使えます。この版では表示しません。QGIS 4 版の FOL が Hillshade と Elevation Background に使います。
+- 以前の版で書き出したグループ（`Forestry Operations Lite - <解析番号>` で、解析番号のフォルダを参照しているもの）は、そのまま使えます。その解析番号を Export to Project で書き出すと、以前のグループはプロジェクトから外し、名前を付けたグループに置き換えます。そのあと保存せずにプロジェクトを閉じた場合は、次にプラグインの窓を開いたときに Named Export へ付け直し、お知らせを出します。新しい場所を残すため、プロジェクトを保存してください。
+- FOL には Named Exports の名前の変更・削除の機能はありません。不要になったら、ファイルマネージャで `archive/<名前>/` を削除してください。
 
 ---
 
@@ -267,7 +315,7 @@ AWS S3上のバーチャル静岡オープンデータを使用する機能で�
 - DTM — VS LP/Grid GeoTIFF（0.5 m）
 - DSM — VS LP/Ground からLAS変換したGeoTIFF（0.5 m）
 - Ortho — DEM読込時と同じタイル範囲のVS LP/Ortho（対象外エリアはスキップ）
-- LAS点群 — DSM生成時の生LASファイルを `odm_georeferencing/` に格納
+- LAS点群 — ZIPには入れません。DSM作成に使ったLAS（`vs_lp_ground/`）を `las_sources.json` で参照し、`README_LAS_LINKS.txt` にダウンロードURLを記載します
 
 DEM読込時のタイル範囲に基づいて全データが取得されるため、地理的整合性が保たれます。
 
@@ -283,9 +331,22 @@ DEM読込時のタイル範囲に基づいて全データが取得されるた�
 | 国土地理院 DEM5A | 日本 | 約5 m | キャンバス範囲から自動取得 |
 | 国土地理院 DEM10B | 日本 | 約10 m | キャンバス範囲から自動取得 |
 | AWS Terrarium | 全球 | 約2〜10 m相当 | キャンバス範囲から自動取得 |
+| AHN4 DTM / DSM | オランダ | 0.5 m | PDOKからキャンバス範囲を自動取得 |
+| IGN LiDAR HD MNT / MNS | フランス | 0.5 m | Geoplateformeから自動取得。未整備地域あり |
+| LINZ DEM | ニュージーランド | 1 m | 公開COGから読み込み。GDALのLERC対応が必要 |
 | ローカルファイル | 任意 | 元データ準拠 | GeoTIFF・ZIP・フォルダ |
 | Copernicus GLO-30 | 全球 | 30 m | 無料アカウント必要（OpenTopography） |
 | VS LP/Grid | 静岡県 | 0.5 m | S3から自動取得 — バーチャル静岡機能参照 |
+
+AHNとIGNはDEM取得後に対応するDSMも自動取得します。DSMは最終的な解析DEMグリッドに合わせ、有効値のないセルは画面のRunoff・Velocity係数で補完します。適用範囲は`params.json`とAnalysis Conditionsに記録されます。DSM準備に失敗した場合は、再試行・DSMなしで続行・中止を選択できます。
+
+取得したAHN・IGN・LINZのファイルは`remote_dem/`に保存します。同じソースで前に取得したファイルが必要な範囲を覆っていれば、再ダウンロードせずに再利用します。保存済み解析から参照されている、または現在読み込み中のDEM/DSMは保持し、参照されなくなったファイルはキャッシュ整理で削除します。
+
+WebODM Importer向けエクスポートは従来どおりバーチャル静岡専用です。AHN・IGN・LINZのデータはこのエクスポートに含まれません。
+
+### 解析前の再取得
+
+自動取得型の DEM は、取得済みの DEM で解析します。解析範囲がその外に出るときだけ再取得するかを確認し、確認すると DEM（DSM がセットされていれば DSM も）を取り直してから解析します。ローカルの DEM ファイルは確認なしで重なる部分を解析します。
 
 ### CRS推奨
 
@@ -348,6 +409,8 @@ forestry_operations_lite/
 │   ├── gsi_dem5a_YYYYMMDD_HHMMSS.tif
 │   └── gsi_dem5a_YYYYMMDD_HHMMSS_utm53.tif   ← UTMに再投影済み
 │
+├── remote_dem/                   # AHN / IGN / LINZ のDEM・DSM GeoTIFF
+│
 ├── vs_lp_grid/                   # VS LP/Grid DEMタイル（静岡限定・GeoTIFF）
 │   ├── {タイルコード}.tif
 │   └── vs_grid_YYYYMMDD_HHMMSS.tif           ← マージ済み（複数タイル）
@@ -360,6 +423,9 @@ forestry_operations_lite/
 ├── zip/                          # WebODM Importer向けエクスポートZIP（静岡限定）
 │   ├── FOL_YYYYMMDD-all.zip
 │   └── FOL_YYYYMMDD_2-all.zip                ← 同日2回目以降
+│
+├── archive/                      # Named Exports
+│   └── {名前}/                   ← 移した解析フォルダ（.qml スタイルと fol_archive.json 付き）
 │
 └── {解析番号}/                   # 解析結果（例: 0011, 0012, 0010+2）
     ├── params.json               ← 解析パラメータ
@@ -388,6 +454,8 @@ https://paypal.me/rawslnc
 ## ライセンス
 
 GNU General Public License v2 以降
+
+プラグインは `vendor/` に2つの外部ライブラリを同梱しており、それぞれ元のライセンスに従います：laspy 2.7.0（BSD 2-Clause、`vendor/laspy/LICENSE.txt`）、defusedxml 0.7.1（Python Software Foundation License Version 2、`vendor/defusedxml/LICENSE`）。配布元と手を加えた点は `vendor/README.md` に記載しています。
 
 ## 作者
 
