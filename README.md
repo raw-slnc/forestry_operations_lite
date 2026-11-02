@@ -15,7 +15,7 @@ A QGIS plugin for terrain analysis supporting forestry site assessment.
 - Preview canvas with bidirectional sync to the QGIS main map window
 - Layer settings (background / tile / GPKG) displayed in the preview independent of analysis data
 - Map lock: fix the preview to the analysis extent while continuing to navigate the main window freely
-- Analysis results are grouped and managed by run number in the QGIS layer panel
+- Active analysis results are grouped by run number; exported results are named and managed separately under **Named Exports**
 - Preview status bar shows centre coordinates, scale, area (ha), and CRS
 - Analysis, DEM/DSM fetching, CS MAP export and WebODM Importer export run in the background, so QGIS stays responsive; analysis shows the current step and the estimated time remaining
 - Running tasks can be stopped with **Stop** / **Cancel**; switching projects or closing the plugin window cancels a running task and removes its partial files
@@ -33,6 +33,18 @@ Use **Run Export** under **Terrain Data > CS Map Export** to create a CS-style t
 ![CS-style terrain visualization with Valley Terrain and Flow Estimation overlaid](cs_style_map_example.jpg)
 
 The CS立体図 method was proposed by Nagano Prefecture Forestry Research Center. The method is described as open, but exported maps also depend on the license and attribution requirements of the input DEM.
+
+---
+
+## Named Exports
+
+Select an active analysis run and click **Export to Project**, then enter a unique name. FOL moves the run out of the active run sequence into **Named Exports** and adds the analysis display layers found for that run to QGIS as a persistent group with the same name. The current visibility, opacity, Filter, and Flow Buffer settings become the starting display state.
+
+Selecting a Named Export that is already in the Layers panel connects FOL directly to those real project layers; it does not create a temporary `Run <name>` copy. Visibility, opacity, Filter, and Flow Buffer changes made through FOL are applied to the named layers and retained. A Named Export always uses its own display settings: it does not take over the settings of the analysis runs, and switching back to a run restores the run settings used before the Named Export was selected. QGIS styles are saved as adjacent `.qml` files, and enabled Flow Buffers are stored as real GeoTIFFs.
+
+If the named group has been removed from Layers, selecting its name again asks **Load it permanently into Layers?** **Yes** reloads the saved layers and styles; **No** leaves the current selection and display unchanged. Groups exported by earlier versions (named `Forestry Operations Lite - <run>` and referring to the run folder) are left as they are. When that run is exported with Export to Project, those earlier groups are removed from the project and replaced by the new named group. If the project is then closed without saving, the plugin reconnects those groups to the Named Export the next time its window opens and shows a notice. Save the project to keep the new locations.
+
+The internal storage path is `archive/<name>/`; **Named Exports** is the user-facing name.
 
 ---
 
@@ -136,17 +148,18 @@ For auto-fetched DEM sources (GSI, Terrarium, VS LP/Grid, Nagano, the Netherland
 
 ### CRS recommendations
 
-- Set the project CRS to the **UTM zone** covering your analysis area for best accuracy.
-- UTM is valid up to ±84° latitude. Accuracy degrades above ±70° (Arctic/Antarctic regions are outside the intended use range).
-- The plugin automatically corrects cell size for geographic CRS (EPSG:4326) and Web Mercator (EPSG:3857) inputs.
+- Analysis automatically prepares a north-up, square, metre-based DEM grid. Suitable projected CRSs (including Japanese plane rectangular systems) are retained; geographic, Web Mercator and non-metric inputs are converted to local UTM (80°S–84°N).
+- DSM is reprojected and aligned to the **final DEM grid**, including resolution, extent and pixel origin. Missing DSM pixels remain NoData; the existing manual flow-coefficient fallback applies there.
+- Source files are preserved. Changing the project display CRS is not required. The analysis CRS, grid and resampling are recorded in `params.json`. CS Map export uses the same DEM preparation.
+- The source CRS must be defined. Declared elevation scales/offsets and metre/foot units are applied; unspecified elevation units are assumed to be metres. DEM and DSM must share a height datum: unknown datums cannot be inferred, and explicitly incompatible height datums are rejected during alignment.
 
 **UTM zone examples:**
 
 | Region | Recommended CRS |
 |--------|----------------|
-| Japan (126–132°E) | EPSG:32653 |
-| Japan (132–138°E) | EPSG:32654 |
-| Japan (138–144°E) | EPSG:32655 |
+| Japan (126–132°E) | EPSG:32652 |
+| Japan (132–138°E) | EPSG:32653 |
+| Japan (138–144°E) | EPSG:32654 |
 | Peru / Bolivia (66–72°W) | EPSG:32719 |
 | Peru / Bolivia (72–78°W) | EPSG:32718 |
 | Southeast Asia | UTM zone for longitude |
@@ -175,7 +188,8 @@ For auto-fetched DEM sources (GSI, Terrarium, VS LP/Grid, Nagano, the Netherland
 2. Select a DEM source under **Terrain Data**
 3. Set background / tile / GPKG layers under **Layer Settings**
 4. Run terrain analysis — results are added to the QGIS layer panel grouped by run number
-5. Toggle analysis layers on/off using the buttons in the preview panel
+5. To keep a result under a recognizable name, select its run and click **Export to Project**; it moves to **Named Exports**
+6. Toggle and edit active or named analysis layers using the controls in the preview panel
 
 ---
 
@@ -219,7 +233,14 @@ forestry_operations_lite/
 │   ├── cs_map.tif                             ← overwrite mode
 │   └── cs_map_YYYYMMDD_HHMMSS.tif             ← non-overwrite mode
 │
-└── {run_number}/                 # Analysis results (e.g. 0017, 0027, 0030+2)
+├── archive/                      # Internal storage for Named Exports
+│   └── {name}/
+│       ├── fol_archive.json      ← name, source run, saved display state
+│       ├── params.json           ← analysis parameters
+│       ├── *.qml                 ← saved QGIS styles
+│       └── *_buffer_weak.tif / *_buffer_strong.tif  ← saved Flow Buffers when enabled
+│
+└── {run_number}/                 # Active analysis results (e.g. 0017, 0027, 0030+2)
     ├── params.json               ← analysis parameters
     ├── stability_fs.tif          ← slope stability factor of safety
     ├── unstable_zones.gpkg       ← FS < threshold polygons
@@ -235,6 +256,8 @@ forestry_operations_lite/
 
 **Run number format:** `{seq:03d}{n_files:1d}` (e.g. `0017` = sequence 001, 7 files).
 When more than 9 files: `{seq}0+{n-10}` (e.g. `0030+2` = sequence 003, 12 files).
+
+**Export to Project** moves the selected active run directory into `archive/<name>/`. It is then managed under **Named Exports**, is no longer part of the numbered active runs, and is not replaced by later overwrite analyses.
 
 
 ---
@@ -269,7 +292,7 @@ https://paypal.me/rawslnc
 - QGISメインマップとの双方向同期プレビューキャンバス
 - 解析データの有無に関わらず、レイヤー設定（背景・タイル・GPKG）をプレビューに表示
 - 地図ロック：解析範囲にプレビューを固定しながら、メインウィンドウは自由に操作可能
-- 解析結果はQGISレイヤーパネルに解析番号グループで管理
+- 実行中の解析結果は解析番号で管理し、書き出した結果は名前を付けて **Named Exports** で別管理
 - プレビューステータスバーに中心座標・縮尺・面積（ha）・CRSを表示
 - 解析・DEM/DSMの取得・CS MAP出力・WebODM Importer向け書き出しはバックグラウンドで行い、QGISの操作を止めない。解析中は現在の段階と残り時間の目安を表示
 - 実行中の処理は **Stop** / **Cancel** で中止でき、プロジェクトの切り替えやプラグインウィンドウを閉じた場合も中止して途中のファイルを削除
@@ -285,6 +308,18 @@ https://paypal.me/rawslnc
 ![CS系地形表現にValley TerrainとFlow Estimationを重ねた表示例](cs_style_map_example.jpg)
 
 CS立体図は長野県林業総合センターが考案した地形表現図法です。図法自体はオープンと説明されていますが、出力した地図の利用条件は入力DEMのライセンス・出典表示条件にも従います。
+
+---
+
+## Named Exports
+
+実行中の解析番号を選んで **Export to Project** を押し、重複しない名前を付けます。FOLはそのRunを解析番号の一覧から **Named Exports** へ移し、そのRunにある解析表示用レイヤーを同じ名前の永続グループとしてQGISへ追加します。現在の表示状態、不透明度、Filter、Flow Bufferが初期表示として引き継がれます。
+
+レイヤーパネルに存在するNamed Exportを選ぶと、FOLは一時的な `Run <名前>` の複製を作らず、その実レイヤーへ直接接続します。FOLで変更した表示、不透明度、Filter、Flow Bufferは命名レイヤーへ適用され、保持されます。Named Export は常に自分の表示の設定を使います。解析番号の設定を引き継がず、解析番号に戻ると、Named Export を選ぶ前の解析番号の設定に戻ります。QGISスタイルは隣接する`.qml`へ保存し、有効なFlow Bufferは実体のあるGeoTIFFとして保存します。
+
+命名グループをレイヤーパネルから削除した後、その名前を再び選ぶと **Load it permanently into Layers?** と確認します。**Yes** の場合だけ保存済みレイヤーとスタイルを再読み込みし、**No** の場合は現在の選択と表示を変えません。以前の版で書き出したグループ（`Forestry Operations Lite - <解析番号>` で、解析番号のフォルダを参照しているもの）は、そのまま使えます。その解析番号を Export to Project で書き出すと、以前のグループはプロジェクトから外し、名前を付けたグループに置き換えます。そのあと保存せずにプロジェクトを閉じた場合は、次にプラグインの窓を開いたときに Named Export へ付け直し、お知らせを出します。新しい場所を残すため、プロジェクトを保存してください。
+
+内部保存先は `archive/<名前>/` です。ユーザー向けの名称は **Named Exports** です。
 
 ---
 
@@ -388,17 +423,18 @@ AWS S3上のバーチャル静岡オープンデータを使用する機能で�
 
 ### CRS推奨
 
-- 解析精度を高めるため、プロジェクトCRSを対象地域の**UTMゾーン**に設定してください。
-- UTMは緯度±84°まで定義されています。±70°を超える高緯度（北極・南極圏）は想定使用範囲外です。
-- 地理座標系（EPSG:4326）・Web Mercator（EPSG:3857）のDEMを使用する場合、セルサイズは自動補正されます。
+- 解析前にDEMをメートル単位・北向き・正方形セルへ自動調整します。適切な投影座標系（日本の平面直角座標系など）は維持し、緯度経度・Web Mercator・メートル以外のCRSは地域のUTMへ変換します（南緯80度～北緯84度）。
+- DSMは**最終的な解析用DEMの格子**へ再投影・位置合わせします。解像度・範囲・ピクセル原点を一致させ、DSM欠損箇所はNoDataのまま扱い、従来どおり手動指定の流出・流速係数を使用します。
+- 元ファイルは変更しません。プロジェクトの表示CRSを変更する必要はありません。解析CRS・格子・補間方法は `params.json` に記録します。CS Map出力にも同じDEM前処理を適用します。
+- 入力CRSが不明な場合は停止します。標高の倍率・オフセット・メートル／フィート単位の明示情報は反映し、標高単位が未記載ならメートルとみなします。DEMとDSMの高さの基準は揃えてください。不明な高さの基準は推測できず、明示的に異なる高さの基準は位置合わせ時に検出して中止・再試行・DSMなしで続行を選択できます。
 
 **UTMゾーン例：**
 
 | 地域 | 推奨CRS |
 |------|---------|
-| 日本（東経126〜132°） | EPSG:32653 |
-| 日本（東経132〜138°） | EPSG:32654 |
-| 日本（東経138〜144°） | EPSG:32655 |
+| 日本（東経126〜132°） | EPSG:32652 |
+| 日本（東経132〜138°） | EPSG:32653 |
+| 日本（東経138〜144°） | EPSG:32654 |
 | ペルー・ボリビア（西経66〜72°） | EPSG:32719 |
 | ペルー・ボリビア（西経72〜78°） | EPSG:32718 |
 | 東南アジア | 経度に対応するUTMゾーン |
@@ -427,7 +463,8 @@ AWS S3上のバーチャル静岡オープンデータを使用する機能で�
 2. **Terrain Data** でDEMソースを選択
 3. **レイヤー設定** で背景・タイル・GPKGレイヤーを設定
 4. 地形解析を実行 — 解析結果は解析番号グループとしてQGISレイヤーパネルに追加
-5. プレビューパネルのボタンで解析レイヤーの表示/非表示を切替
+5. 結果を識別しやすい名前で残す場合は、解析番号を選んで **Export to Project** を押す — **Named Exports** へ移動
+6. プレビューパネルの操作で、実行中または名前付きの解析レイヤーを表示・編集
 
 ---
 
@@ -471,7 +508,14 @@ forestry_operations_lite/
 │   ├── cs_map.tif                             ← 上書きモード
 │   └── cs_map_YYYYMMDD_HHMMSS.tif             ← 非上書きモード
 │
-└── {解析番号}/                   # 解析結果（例: 0017, 0027, 0030+2）
+├── archive/                      # Named Exportsの内部保存先
+│   └── {名前}/
+│       ├── fol_archive.json      ← 名前、元の解析番号、保存済み表示状態
+│       ├── params.json           ← 解析パラメータ
+│       ├── *.qml                 ← 保存済みQGISスタイル
+│       └── *_buffer_weak.tif / *_buffer_strong.tif  ← 有効時に保存するFlow Buffer
+│
+└── {解析番号}/                   # 実行中の解析結果（例: 0017, 0027, 0030+2）
     ├── params.json               ← 解析パラメータ
     ├── stability_fs.tif          ← 斜面安定性（安全率）
     ├── unstable_zones.gpkg       ← 不安定ゾーンポリゴン（FS < 閾値）
@@ -487,6 +531,8 @@ forestry_operations_lite/
 
 **解析番号フォーマット：** `{連番3桁}{ファイル数1桁}`（例: `0017` = シーケンス001・7ファイル）
 ファイル数が10以上の場合: `{連番}0+{n-10}`（例: `0030+2` = シーケンス003・12ファイル）
+
+**Export to Project** を実行すると、選択した解析Runのフォルダを `archive/<名前>/` へ移します。以後は **Named Exports** で管理され、解析番号の一覧には含まれず、後から行う上書き解析でも置き換わりません。
 
 
 ---

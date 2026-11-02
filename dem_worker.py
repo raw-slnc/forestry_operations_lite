@@ -588,6 +588,8 @@ def cs_map_compute(ctx, src_path, src_loader, resample, resample_threshold, resa
     if np.all(np.isnan(loader.data)):
         raise DemFetchError("DEM has no valid elevation values.")
     ctx.check()
+    ctx.report("Preparing DEM coordinate system and analysis grid...")
+    loader = loader.prepare_for_analysis()
     if loader.cell_size < resample_threshold:
         ctx.report(f"Resampling {loader.cell_size:.3f}m -> {resample_target}m ...")
         loader = resample(loader, resample_target)

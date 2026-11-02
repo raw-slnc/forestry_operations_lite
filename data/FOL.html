@@ -116,9 +116,9 @@
 <div class="sec">
 <h2>Data Setup Hints</h2>
 
-<h3>About scipy (required for Flow Buffer / DEM resampling / SHC computation)</h3>
+<h3>About scipy (required for Flow Buffer / SHC computation)</h3>
 <div class="note">
-  Without scipy, Flow Buffer display, fine-resolution DEM resampling, and SHC computation do not work (other features are unaffected).
+  Without scipy, Flow Buffer display and SHC computation do not work. DEM reprojection and resampling use GDAL.
 </div>
 <p><strong>Windows (standard installer):</strong> scipy is normally already included. If it's genuinely
 missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin</code> folder
@@ -136,6 +136,7 @@ missing, close QGIS and run in Command Prompt from your QGIS install's <code>bin
 </div>
 
 <h3>DEM / DSM/DTM Data</h3>
+<p>The plugin prepares a square, metre-based analysis DEM automatically, then aligns DSM to its final grid. Suitable projected CRSs are retained; geographic and Web Mercator DEMs are converted to local UTM. Keep the source CRS defined and use the same height datum for DEM and DSM. Source files are preserved; changing the project display CRS is not required. Preparation details are recorded in <code>params.json</code>.</p>
 <ul>
   <li>Select a general-purpose DEM, or one covering the area where you'll run the terrain analysis.</li>
   <li>Select a DSM covering the same extent as the DEM data.</li>
@@ -424,9 +425,10 @@ USDA NRCS National Engineering Handbook, Part 630.</p>
   <tr><td><code>tc.tif</code></td><td>Time load — time of concentration Tc [h]</td></tr>
   <tr><td><code>cs_map/cs_map*.tif</code></td><td>Standalone CS MAP export from the selected or fetched DEM raster</td></tr>
   <tr><td><code>zip/FOL_*-all.zip</code></td><td>Export for WebODM Importer (DTM / DSM / Ortho; <code>DATA_SOURCES.txt</code> for Netherlands / France / New Zealand)</td></tr>
+  <tr><td><code>archive/&lt;name&gt;/</code></td><td>Internal storage for Named Exports, including <code>fol_archive.json</code>, saved <code>.qml</code> styles, and enabled Flow Buffer GeoTIFFs</td></tr>
 </table>
 <div class="note">
-  Analysis runs are saved in subfolders whose names combine a three-digit run sequence with the number of output files: for example, <code>0017</code> is sequence 001 with 7 files, and <code>0030+2</code> is sequence 003 with 12 files. Runs are never deleted automatically &mdash; an overwrite run replaces its own sequence, otherwise the sequence increases. Deleting a middle sequence leaves it unused, while deleting the highest sequence frees it for reuse. Deleting a run folder also lets the DEM/DSM cache cleanup free files in <code>dem/</code>, <code>vs_lp_grid/</code>, and <code>remote_dem/</code> that no remaining run references and that are not currently loaded. To keep the output folder and its cache from growing without bound, delete run folders you no longer need directly in the file manager; cleanup runs when the plugin next refreshes the analysis list.
+  Active analysis runs are saved in subfolders whose names combine a three-digit run sequence with the number of output files: for example, <code>0017</code> is sequence 001 with 7 files, and <code>0030+2</code> is sequence 003 with 12 files. Runs are never deleted automatically &mdash; an overwrite run replaces its own sequence, otherwise the sequence increases. Deleting a middle sequence leaves it unused, while deleting the highest sequence frees it for reuse. <strong>Export to Project</strong> moves the selected active run to <code>archive/&lt;name&gt;/</code>; it is then managed under <strong>Named Exports</strong> and is not replaced by later overwrite analyses. Deleting an active run folder also lets the DEM/DSM cache cleanup free files in <code>dem/</code>, <code>vs_lp_grid/</code>, and <code>remote_dem/</code> that no remaining run references and that are not currently loaded. To keep the output folder and its cache from growing without bound, delete active run folders you no longer need directly in the file manager; cleanup runs when the plugin next refreshes the analysis list.
 </div>
 </div>
 
@@ -477,27 +479,32 @@ from canopy height.</p>
 <p>In the Analysis panel, cycling the Flow button switches Peak load → Mean load →
 Time load. <strong>Filter</strong> (Off / Low / Mid) fades out low values to isolate
 the drainage skeleton — Peak and Mean share one filter setting, Time load has its
-own. <strong>Buffer</strong> adds a soft bleed around the flow lines and applies to
-Peak / Mean only (disabled for Time load).</p>
+own. <strong>Buffer</strong> adds a soft bleed around the flow lines. Peak and Mean
+share one buffer setting, while Time load has its own independent buffer setting.
+For an active numbered run the buffer is a temporary display layer. For a Named Export
+it is stored as a GeoTIFF alongside the analysis files and follows the named layer's
+visibility.</p>
 
 <h3>Integrated Risk</h3>
 <p>An additive risk index (0–6) combining FS, TWI, and peak load.
 Extracts areas where multiple hazard factors overlap as "high-priority" polygons.</p>
 
-<h3>Export Analysis Layers</h3>
-<p>The <strong>Export to Project</strong> button (first row of <strong>Analysis Layer Display</strong>, next to the analysis run selector) writes every output layer of the
-selected analysis run into a standalone group named
-<code>Forestry Operations Lite - &lt;run&gt;</code>, separate from the plugin-managed
-group. These layers persist through run switching and closing the plugin, so they can
-be referenced for reporting without opening the plugin. The current Filter, opacity and
-visibility are applied, and the styling is saved as a <code>.qml</code> sidecar next to
-each data file — so the colour scheme follows the raw <code>.tif</code> /
-<code>.gpkg</code> into another project, PC, or GIS. When a Flow layer has an active
-Buffer, its bleed is materialised to a real raster and added in a sub-group. Layers are
-stacked in the same order as the analysis group (Flow in front, background terrain at
-the back). Re-exporting the same run keeps the previous export (duplicates are
-allowed); an overwrite run replaces the run folder and removes the written
-<code>.qml</code> files.</p>
+<h3>Named Exports</h3>
+<p>Select an active numbered run and click <strong>Export to Project</strong> (first row of
+<strong>Analysis Layer Display</strong>, next to the run selector), then enter a unique
+name. FOL moves the run out of the active sequence into <strong>Named Exports</strong> and
+adds the analysis display layers found for that run to QGIS as a persistent group with
+the same name. The current visibility, opacity, Filter, and Flow Buffer settings become
+the starting display state. QGIS styles are saved as adjacent <code>.qml</code> files;
+enabled Flow Buffers are materialised as real GeoTIFFs. The layers keep the same stacking
+order as the analysis display.</p>
+<p>Selecting a Named Export already present in the Layers panel connects FOL directly to
+those real project layers. It does not create a temporary <code>Run &lt;name&gt;</code>
+copy. Visibility, opacity, Filter, and Flow Buffer changes made through FOL are applied
+to the named layers and retained. No second export is needed. A Named Export always uses its own display settings: it does not take over the settings of the analysis runs, and switching back to a run restores the run settings used before the Named Export was selected.</p>
+<div class="note">
+  If the named group has been removed from Layers, selecting its name again asks <strong>Load it permanently into Layers?</strong> <strong>Yes</strong> reloads the saved layers and styles; <strong>No</strong> leaves the current selection and display unchanged. Groups exported by earlier versions (named <code>Forestry Operations Lite - &lt;run&gt;</code> and referring to the run folder) are left as they are. When that run is exported with Export to Project, those earlier groups are removed from the project and replaced by the new named group. If the project is then closed without saving, the plugin reconnects those groups to the Named Export the next time its window opens and shows a notice. Save the project to keep the new locations. The internal storage path is <code>archive/&lt;name&gt;/</code>; <strong>Named Exports</strong> is the user-facing name.
+</div>
 </div>
 
 <!-- ============================================================ -->
@@ -639,9 +646,9 @@ protect.</p>
 <div class="sec">
 <h2>データ設定ヒント</h2>
 
-<h3>scipy について（Flow Buffer / DEM リサンプル / SHC 計算に必須）</h3>
+<h3>scipy について（Flow Buffer / SHC 計算に必須）</h3>
 <div class="note">
-  scipy が無い場合、Flow Buffer 表示・高解像度 DEM のリサンプル・SHC 計算が動作しません（他の機能には影響しません）。
+  scipy が無い場合、Flow Buffer 表示・SHC 計算が動作しません。DEMの再投影・リサンプルにはGDALを使用します。
 </div>
 <p><strong>Windows（標準インストーラー）：</strong>通常はscipyが最初から入っています。本当に無い場合は、QGISを閉じてから、QGISインストール先の<code>bin</code>フォルダ（例：<code>C:\Program Files\QGIS 3.44\bin\</code>）でコマンドプロンプトを開き、以下を実行してください：<br>
    <code>python-qgis-ltr.bat -m pip install --user scipy</code><br>
@@ -656,6 +663,7 @@ protect.</p>
 </div>
 
 <h3>DEM / DSM/DTM データ</h3>
+<p>プラグインがDEMをメートル単位・正方形セルの解析用データへ自動調整し、その最終格子にDSMを合わせます。適切な平面直角座標系などは維持し、緯度経度・Web Mercatorは地域のUTMへ変換します。入力CRSは正しく設定し、DEMとDSMの高さの基準を揃えてください。元ファイルは保持され、プロジェクトの表示CRSを変更する必要はありません。変換条件は <code>params.json</code> に記録します。</p>
 <ul>
   <li>DEM は汎用データか、地形解析を行う箇所のデータを選択してください。</li>
   <li>DSM データは、地表データの DEM データ設定と範囲を同じくするデータを選んでください。</li>
@@ -927,9 +935,10 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
   <tr><td><code>tc.tif</code></td><td>Time load — 流達時間 Tc [h]</td></tr>
   <tr><td><code>cs_map/cs_map*.tif</code></td><td>選択中または取得済みDEMラスタから作成する単独CS MAP出力</td></tr>
   <tr><td><code>zip/FOL_*-all.zip</code></td><td>Export for WebODM Importer の書き出し（DTM / DSM / Ortho。オランダ・フランス・ニュージーランドは <code>DATA_SOURCES.txt</code> 付き）</td></tr>
+  <tr><td><code>archive/&lt;名前&gt;/</code></td><td>Named Exportsの内部保存先。<code>fol_archive.json</code>、保存済み<code>.qml</code>スタイル、有効なFlow BufferのGeoTIFFを含む</td></tr>
 </table>
 <div class="note">
-  解析結果は、3桁の解析シーケンスと出力ファイル数を組み合わせた名前のサブフォルダに保存します。例えば<code>0017</code>はシーケンス001・7ファイル、<code>0030+2</code>はシーケンス003・12ファイルです。解析結果は自動削除せず、上書き解析は同じシーケンスを差し替え、それ以外はシーケンスが増えます。途中のシーケンスを削除しても再使用せず、最大シーケンスを削除した場合は次回その番号を再利用します。解析フォルダを削除すると、残る解析から参照されず、現在読み込み中でもない<code>dem/</code>、<code>vs_lp_grid/</code>、<code>remote_dem/</code>内のファイルをDEM/DSMキャッシュ整理が解放できるようになります。出力フォルダとキャッシュが際限なく肥大しないよう、不要な解析フォルダはファイルマネージャで直接削除してください。キャッシュ整理はプラグインが次に解析一覧を更新したときに実行します。
+  実行中の解析結果は、3桁の解析シーケンスと出力ファイル数を組み合わせた名前のサブフォルダに保存します。例えば<code>0017</code>はシーケンス001・7ファイル、<code>0030+2</code>はシーケンス003・12ファイルです。解析結果は自動削除せず、上書き解析は同じシーケンスを差し替え、それ以外はシーケンスが増えます。途中のシーケンスを削除しても再使用せず、最大シーケンスを削除した場合は次回その番号を再利用します。<strong>Export to Project</strong> は選択した解析Runを <code>archive/&lt;名前&gt;/</code> へ移し、以後は <strong>Named Exports</strong> で管理します。後から行う上書き解析では置き換わりません。実行中の解析フォルダを削除すると、残る解析から参照されず、現在読み込み中でもない<code>dem/</code>、<code>vs_lp_grid/</code>、<code>remote_dem/</code>内のファイルをDEM/DSMキャッシュ整理が解放できるようになります。出力フォルダとキャッシュが際限なく肥大しないよう、不要な解析フォルダはファイルマネージャで直接削除してください。キャッシュ整理はプラグインが次に解析一覧を更新したときに実行します。
 </div>
 </div>
 
@@ -977,23 +986,27 @@ DSM 設定時は樹冠高から流出係数・流速係数を地点ごとに可�
 <h3>解析レイヤー表示（Filter / Buffer）</h3>
 <p>Analysis パネルで Flow ボタンを押すと Peak load → Mean load → Time load と切替わります。
 <strong>Filter</strong>（Off / Low / Mid）は低値を透過させて水系の骨格を抽出 — Peak と Mean は
-フィルタ設定を共有し、Time load は独立。<strong>Buffer</strong> は流線まわりの滲みで、
-Peak / Mean のみ有効（Time load では無効）。</p>
+フィルタ設定を共有し、Time load は独立。<strong>Buffer</strong> は流線まわりの滲みで、Peak と Mean は
+設定を共有し、Time load は独立したBuffer設定を持ちます。解析番号のRunでは一時表示レイヤーですが、
+Named Exportでは解析ファイルと同じ場所にGeoTIFFとして保存し、命名レイヤーの表示状態に追従します。</p>
 
 <h3>総合リスク</h3>
 <p>FS・TWI・Peak load を統合した加算型リスク指標（0〜6）。
 複数の危険因子が重なる箇所を「重点箇所」ポリゴンで抽出。</p>
 
-<h3>解析レイヤーのエクスポート</h3>
-<p><strong>Analysis Layer Display</strong> の1行目（解析番号の選択欄の隣）にある <strong>Export to Project</strong> ボタンで、選択中の解析番号の全出力レイヤーを
-<code>Forestry Operations Lite - &lt;番号&gt;</code> という独立グループ（プラグイン管理グループ
-とは別）へ書き出します。解析番号の切替やプラグイン終了で消えず、プラグインを開かずに書類作成等
-で参照できます。現在の Filter・不透明度・表示状態が適用され、スタイルは各データファイルの隣に
-<code>.qml</code> サイドカーとして保存されるため、生の <code>.tif</code> / <code>.gpkg</code>
-を別プロジェクト・別 PC・他 GIS で開いても配色が付いてきます。Flow レイヤーに Buffer がかかって
-いる場合は、その滲みを実ラスタとして書き出しサブグループに追加します。積み順は解析グループと
-同じ（Flow が前面、背景地形が最背面）。同じ番号を再エクスポートしても前回分は残ります（重複可）。
-上書き解析は解析番号フォルダごと差し替わるため書き出した <code>.qml</code> も消えます。</p>
+<h3>Named Exports</h3>
+<p>実行中の解析番号を選び、<strong>Analysis Layer Display</strong> の1行目（解析番号の選択欄の隣）にある
+<strong>Export to Project</strong> を押して、重複しない名前を入力します。FOLはそのRunを解析番号の一覧から
+<strong>Named Exports</strong> へ移し、そのRunにある解析表示用レイヤーを同じ名前の永続グループとして
+QGISへ追加します。現在の表示状態、不透明度、Filter、Flow Bufferが初期表示として引き継がれます。
+QGISスタイルは隣接する<code>.qml</code>へ保存し、有効なFlow Bufferは実体のあるGeoTIFFとして保存します。
+積み順は解析表示と同じです。</p>
+<p>レイヤーパネルに存在するNamed Exportを選ぶと、FOLは一時的な<code>Run &lt;名前&gt;</code>の複製を作らず、
+その実レイヤーへ直接接続します。FOLで変更した表示、不透明度、Filter、Flow Bufferは命名レイヤーへ
+適用され、保持されます。再度書き出す必要はありません。Named Export は常に自分の表示の設定を使います。解析番号の設定を引き継がず、解析番号に戻ると、Named Export を選ぶ前の解析番号の設定に戻ります。</p>
+<div class="note">
+  命名グループをレイヤーパネルから削除した後、その名前を再び選ぶと <strong>Load it permanently into Layers?</strong> と確認します。<strong>Yes</strong> の場合だけ保存済みレイヤーとスタイルを再読み込みし、<strong>No</strong> の場合は現在の選択と表示を変えません。以前の版で書き出したグループ（<code>Forestry Operations Lite - &lt;解析番号&gt;</code> で、解析番号のフォルダを参照しているもの）は、そのまま使えます。その解析番号を Export to Project で書き出すと、以前のグループはプロジェクトから外し、名前を付けたグループに置き換えます。そのあと保存せずにプロジェクトを閉じた場合は、次にプラグインの窓を開いたときに Named Export へ付け直し、お知らせを出します。新しい場所を残すため、プロジェクトを保存してください。内部保存先は <code>archive/&lt;名前&gt;/</code> で、ユーザー向けの名称は <strong>Named Exports</strong> です。
+</div>
 </div>
 
 <!-- ============================================================ -->

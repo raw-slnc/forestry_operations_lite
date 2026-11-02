@@ -19,6 +19,136 @@ class DEMLoader:
         self.cell_size = None
         self.nodata = None
         self._ds = None
+        self.preparation = {}
+
+    def _clean_elevations(self, data, band):
+        """Apply the declared elevation scale/unit, never invent a height datum."""
+        data = data.astype(np.float64)
+        nodata = band.GetNoDataValue()
+        if nodata is not None:
+            data[data == nodata] = np.nan
+        unit = (band.GetUnitType() or "").strip().lower()
+        factors = {"": 1.0, "m": 1.0, "metre": 1.0, "meter": 1.0,
+                   "metres": 1.0, "meters": 1.0, "ft": 0.3048,
+                   "foot": 0.3048, "feet": 0.3048,
+                   "us survey foot": 1200.0 / 3937.0}
+        if unit not in factors:
+            raise ValueError(f"Unsupported elevation unit: {unit}. Supply elevations in metres.")
+        scale = band.GetScale()
+        offset = band.GetOffset()
+        data = (data * (1.0 if scale is None else scale)
+                + (0.0 if offset is None else offset)) * factors[unit]
+        data[~np.isfinite(data)] = np.nan
+        return data
+
+    @staticmethod
+    def _horizontal_srs(wkt):
+        from osgeo import osr
+        if not wkt:
+            raise ValueError("DEM/DSM CRS is unknown. Assign the correct source CRS before analysis.")
+        srs = osr.SpatialReference()
+        if srs.ImportFromWkt(wkt) != 0 or srs.Validate() != 0:
+            raise ValueError("DEM/DSM CRS is invalid. Check the source CRS before analysis.")
+        srs.StripVertical()
+        srs.DemoteTo2D()
+        if not (srs.IsProjected() or srs.IsGeographic()):
+            raise ValueError("DEM/DSM requires a projected or geographic horizontal CRS.")
+        srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        return srs
+
+    def prepare_for_analysis(self, target_cell_size=None):
+        """Return a north-up square metric grid, preserving the source file.
+
+        Suitable projected CRSs are retained. Geographic, Web Mercator and
+        non-metric CRSs use the local UTM zone. Heights are already in metres
+        after read_data/clip_to_extent; only horizontal coordinates are warped.
+        """
+        from osgeo import osr
+        if self.data is None:
+            self.read_data()
+        source_srs = self._horizontal_srs(self.crs_wkt)
+        mercator = osr.SpatialReference()
+        mercator.ImportFromEPSG(3857)
+        target_srs = source_srs.Clone()
+        metric = (source_srs.IsProjected()
+                  and abs(source_srs.GetLinearUnits() - 1.0) < 1e-9
+                  and not source_srs.IsSame(mercator))
+        rows, cols = self.data.shape
+        if not rows or not cols or not np.isfinite(self.data).any():
+            raise ValueError("DEM has no valid elevation values in the analysis range.")
+        if not metric:
+            wgs84 = osr.SpatialReference()
+            wgs84.ImportFromEPSG(4326)
+            wgs84.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+            x, y = gdal.ApplyGeoTransform(self.gt, cols / 2, rows / 2)
+            lon, lat, _ = osr.CoordinateTransformation(source_srs, wgs84).TransformPoint(x, y)
+            if not (math.isfinite(lon) and math.isfinite(lat) and -80 <= lat <= 84):
+                raise ValueError("Automatic UTM conversion supports 80 S to 84 N. Supply a local metric projected DEM.")
+            zone = min(60, max(1, int((lon + 180) / 6) + 1))
+            target_srs = osr.SpatialReference()
+            target_srs.ImportFromEPSG((32600 if lat >= 0 else 32700) + zone)
+            target_srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        gt = self.gt
+        regular = (gt[1] > 0 and gt[5] < 0 and gt[2] == 0 and gt[4] == 0
+                   and math.isclose(gt[1], -gt[5], rel_tol=1e-9))
+        if target_cell_size is not None and (
+                not math.isfinite(target_cell_size) or target_cell_size <= 0):
+            raise ValueError("Analysis cell size must be positive and finite.")
+        record = dict(self.preparation) or {
+            "source_crs_wkt": self.crs_wkt,
+            "source_geotransform": list(gt),
+            "elevation_unit": "metres (assumed when source unit is unspecified)",
+        }
+        if metric and regular and (target_cell_size is None or
+                math.isclose(gt[1], target_cell_size, rel_tol=1e-9)):
+            self.cell_size = gt[1]
+            record.update({"analysis_crs_wkt": self.crs_wkt,
+                           "analysis_geotransform": list(gt),
+                           "cell_size_m": self.cell_size,
+                           "resampling": record.get("resampling", "none")})
+            self.preparation = record
+            return self
+
+        source = gdal.GetDriverByName("MEM").Create("", cols, rows, 1, gdal.GDT_Float64)
+        source.SetGeoTransform(gt)
+        source.SetProjection(source_srs.ExportToWkt())
+        band = source.GetRasterBand(1)
+        band.SetNoDataValue(float("nan"))
+        band.WriteArray(np.where(np.isfinite(self.data), self.data, np.nan))
+        # A VRT determines the grid without allocating the output pixel array.
+        suggested = gdal.Warp("", source, format="VRT", dstSRS=target_srs.ExportToWkt())
+        if suggested is None:
+            raise RuntimeError("Could not determine the analysis DEM grid.")
+        suggested_gt = suggested.GetGeoTransform()
+        cell = target_cell_size or max(abs(suggested_gt[1]), abs(suggested_gt[5]))
+        suggested = None
+        method = "average" if metric and regular and cell > gt[1] else "bilinear"
+        options = dict(dstSRS=target_srs.ExportToWkt(), xRes=cell, yRes=cell,
+                       resampleAlg=method, outputType=gdal.GDT_Float64,
+                       srcNodata=float("nan"), dstNodata=float("nan"), errorThreshold=0)
+        preview = gdal.Warp("", source, format="VRT", **options)
+        if preview.RasterXSize * preview.RasterYSize > 100_000_000:
+            raise ValueError("Analysis DEM exceeds 100 million cells. Reduce the analysis extent.")
+        preview = None
+        warped = gdal.Warp("", source, format="MEM", **options)
+        if warped is None:
+            raise RuntimeError("DEM conversion failed.")
+        result = DEMLoader()
+        result.path = self.path
+        result._ds = warped
+        result.gt = warped.GetGeoTransform()
+        result.crs_wkt = warped.GetProjection()
+        result.cell_size = result.gt[1]
+        result.nodata = float("nan")
+        result.data = warped.GetRasterBand(1).ReadAsArray().astype(np.float64)
+        result.data[~np.isfinite(result.data)] = np.nan
+        if not np.isfinite(result.data).any():
+            raise ValueError("DEM conversion produced no valid elevation values.")
+        record.update({"analysis_crs_wkt": result.crs_wkt,
+                       "analysis_geotransform": list(result.gt),
+                       "cell_size_m": result.cell_size, "resampling": method})
+        result.preparation = record
+        return result
 
     def open_metadata(self, path):
         """ファイルを開いてメタデータのみ読み込む（ピクセルデータは読まない）。
@@ -51,6 +181,7 @@ class DEMLoader:
             pass
 
         self.data = None
+        self.preparation = {}
         return self
 
     def read_data(self):
@@ -61,9 +192,9 @@ class DEMLoader:
         if self._ds is None:
             raise RuntimeError("File not open. Call open_metadata first.")
         band = self._ds.GetRasterBand(1)
-        self.data = band.ReadAsArray().astype(np.float64)
-        if self.nodata is not None:
-            self.data[self.data == self.nodata] = np.nan
+        self.data = self._clean_elevations(band.ReadAsArray(), band)
+        if band.GetMaskFlags() != gdal.GMF_ALL_VALID:
+            self.data[band.GetMaskBand().ReadAsArray() == 0] = np.nan
         return self
 
     def load(self, path):
@@ -80,8 +211,20 @@ class DEMLoader:
             raise RuntimeError("DSM is not loaded")
         if not self.crs_wkt or not reference.crs_wkt:
             raise ValueError("DEM and DSM must both have a coordinate reference system")
-        source_srs = osr.SpatialReference(wkt=self.crs_wkt)
-        target_srs = osr.SpatialReference(wkt=reference.crs_wkt)
+        # Reject explicitly different height datums; horizontal alignment cannot fix them.
+        source_full = osr.SpatialReference(wkt=self.crs_wkt)
+        dem_wkt = reference.preparation.get("source_crs_wkt", reference.crs_wkt)
+        dem_full = osr.SpatialReference(wkt=dem_wkt)
+        source_vertical = source_full.GetAttrValue("VERT_CS|VERT_DATUM")
+        dem_vertical = dem_full.GetAttrValue("VERT_CS|VERT_DATUM")
+        source_ellipsoidal = source_full.IsGeographic() and source_full.GetAxesCount() == 3
+        dem_ellipsoidal = dem_full.IsGeographic() and dem_full.GetAxesCount() == 3
+        if ((source_vertical and dem_vertical and source_vertical != dem_vertical)
+                or (source_vertical and dem_ellipsoidal)
+                or (dem_vertical and source_ellipsoidal)):
+            raise ValueError("DEM and DSM have different vertical datums. Convert heights to the same datum first.")
+        source_srs = self._horizontal_srs(self.crs_wkt)
+        target_srs = self._horizontal_srs(reference.crs_wkt)
         rows, cols = reference.data.shape
         source_gt = self._ds.GetGeoTransform()
         target_gt = reference.gt
@@ -89,11 +232,7 @@ class DEMLoader:
         nodata = band.GetNoDataValue()
 
         def clean(data):
-            data = data.astype(np.float64)
-            if nodata is not None:
-                data[data == nodata] = np.nan
-            data[~np.isfinite(data)] = np.nan
-            return data
+            return self._clean_elevations(data, band)
 
         # An integer-offset window on the same grid needs no interpolation.
         basis = (1, 2, 4, 5)
@@ -111,6 +250,7 @@ class DEMLoader:
                 if band.GetMaskFlags() != gdal.GMF_ALL_VALID:
                     mask = band.GetMaskBand().ReadAsArray(c0, r0, cols, rows)
                     data[mask == 0] = np.nan
+                data[~np.isfinite(reference.data)] = np.nan
                 return data, "none"
 
         # Pre-create the destination so even rotated grids retain the DEM affine.
@@ -123,7 +263,8 @@ class DEMLoader:
         target_band.Fill(float("nan"))
         try:
             result = gdal.Warp(
-                target, self._ds, dstSRS=reference.crs_wkt,
+                target, self._ds, srcSRS=source_srs.ExportToWkt(),
+                dstSRS=target_srs.ExportToWkt(),
                 resampleAlg="bilinear", errorThreshold=0,
                 srcNodata=nodata if nodata is not None else float("nan"),
                 dstNodata=float("nan"), warpOptions=["INIT_DEST=NO_DATA"])
@@ -131,6 +272,8 @@ class DEMLoader:
                 raise RuntimeError("DSM alignment failed")
             data = target_band.ReadAsArray().astype(np.float64)
             data[~np.isfinite(data)] = np.nan
+            data = self._clean_elevations(data, band)
+            data[~np.isfinite(reference.data)] = np.nan
             return data, "bilinear"
         finally:
             target_band = None
@@ -163,10 +306,9 @@ class DEMLoader:
             except Exception:
                 return None
         gt = self.gt
-        col_f = (x - gt[0]) / gt[1]
-        row_f = (y - gt[3]) / gt[5]
-        col_i = int(col_f)
-        row_i = int(row_f)
+        col_f, row_f = gdal.ApplyGeoTransform(gdal.InvGeoTransform(gt), x, y)
+        col_i = math.floor(col_f)
+        row_i = math.floor(row_f)
         if col_i < 0 or row_i < 0 or col_i >= self.data.shape[1] or row_i >= self.data.shape[0]:
             return None
         val = self.data[row_i, col_i]
@@ -194,16 +336,12 @@ class DEMLoader:
 
         inv_gt = gdal.InvGeoTransform(self.gt)
 
-        def to_pixel(x, y):
-            return (
-                int(gdal.ApplyGeoTransform(inv_gt, x, y)[0]),
-                int(gdal.ApplyGeoTransform(inv_gt, x, y)[1]),
-            )
-
-        c0, r0 = to_pixel(xmin, ymax)
-        c1, r1 = to_pixel(xmax, ymin)
-        c0, c1 = sorted([c0, c1])
-        r0, r1 = sorted([r0, r1])
+        pixels = [gdal.ApplyGeoTransform(inv_gt, x, y)
+                  for x in (xmin, xmax) for y in (ymin, ymax)]
+        c0 = math.floor(min(p[0] for p in pixels))
+        c1 = math.ceil(max(p[0] for p in pixels))
+        r0 = math.floor(min(p[1] for p in pixels))
+        r1 = math.ceil(max(p[1] for p in pixels))
         c0 = max(0, c0)
         r0 = max(0, r0)
         c1 = min(self._ds.RasterXSize, c1)
@@ -213,12 +351,11 @@ class DEMLoader:
             raise ValueError("Clip extent is outside DEM bounds")
 
         band = self._ds.GetRasterBand(1)
-        data = band.ReadAsArray(c0, r0, c1 - c0, r1 - r0).astype(np.float64)
-        if self.nodata is not None:
-            data[data == self.nodata] = np.nan
+        data = self._clean_elevations(band.ReadAsArray(c0, r0, c1 - c0, r1 - r0), band)
+        if band.GetMaskFlags() != gdal.GMF_ALL_VALID:
+            data[band.GetMaskBand().ReadAsArray(c0, r0, c1 - c0, r1 - r0) == 0] = np.nan
 
-        x0 = self.gt[0] + c0 * self.gt[1]
-        y0 = self.gt[3] + r0 * self.gt[5]
+        x0, y0 = gdal.ApplyGeoTransform(self.gt, c0, r0)
         clipped_gt = (x0, self.gt[1], self.gt[2], y0, self.gt[4], self.gt[5])
 
         result = DEMLoader()

@@ -171,49 +171,8 @@ _CS_MAP_VECTOR_ANCHOR_EXTS = (".gpkg", ".shp")
 
 
 def _resample_dem(src, target_cell_size=_RESAMPLE_TARGET):
-    """DEMを指定解像度にダウンサンプルして新しい DEMLoader を返す。
-    整数倍の場合はブロック平均（NaN 対応）、非整数倍は scipy.ndimage.zoom を使用。"""
-    import numpy as np
-    from .terrain.dem_loader import DEMLoader
-
-    factor = target_cell_size / src.cell_size
-    int_factor = round(factor)
-    data = src.data
-    rows, cols = data.shape
-
-    if abs(factor - int_factor) < 0.05 and int_factor > 1:
-        # 整数倍：ブロック平均（高精度・NaN 対応）
-        r_trim = (rows // int_factor) * int_factor
-        c_trim = (cols // int_factor) * int_factor
-        d = data[:r_trim, :c_trim]
-        d_out = np.nanmean(
-            d.reshape(r_trim // int_factor, int_factor,
-                      c_trim // int_factor, int_factor),
-            axis=(1, 3),
-        )
-    else:
-        # 非整数倍：scipy zoom（NaN をノーデータ値で一時代替）
-        from scipy.ndimage import zoom as _zoom
-        d = data.copy()
-        nan_mask = np.isnan(d)
-        d[nan_mask] = 0.0
-        scale = 1.0 / factor
-        d_out = _zoom(d, scale, order=1)
-        nan_out = _zoom(nan_mask.astype(np.float32), scale, order=1)
-        d_out[nan_out > 0.5] = np.nan
-
-    actual_cell = src.cell_size * (cols / d_out.shape[1])
-    new_gt = (src.gt[0], actual_cell, 0.0, src.gt[3], 0.0, -actual_cell)
-
-    result = DEMLoader()
-    result.data = d_out
-    result.gt = new_gt
-    result.crs_wkt = src.crs_wkt
-    result.cell_size = actual_cell
-    result.nodata = src.nodata
-    result._ds = src._ds
-    result.path = src.path
-    return result
+    """Resample with GDAL, keeping the array and its affine grid consistent."""
+    return src.prepare_for_analysis(target_cell_size=target_cell_size)
 
 
 class _ElidedPathLabel(QtWidgets.QLabel):
@@ -1529,6 +1488,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # 起動時点で既存の解析結果を選択可能にする（呼ばないと解析番号コンボが
         # 空のままで、読込ボタンもグレーアウトしたまま = 起動直後は選択できない）
         self._refresh_analysis_combo(select_latest=False)
+        # Named Export から解析番号へ戻るときの、解析番号の表示の設定（初めは開いたときのもの）
+        self._run_display_snapshot = self._run_display_snapshot_data()
         self._update_cs_map_export_state()
 
     def changeEvent(self, event):
@@ -2042,14 +2003,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         ds_layout.addWidget(self.grpCsMapExport)
 
         self.grpScipy = QtWidgets.QGroupBox(
-            "scipy required (Flow Buffer / DEM resampling / SHC)"
+            "scipy required (Flow Buffer / SHC)"
         )
         scipy_lay = QtWidgets.QVBoxLayout(self.grpScipy)
         scipy_lay.setSpacing(4)
         for text, style in (
-            ("- Without scipy, Flow Buffer display, fine-resolution DEM "
-             "resampling, and SHC computation do not work. Other features "
-             "are unaffected.", "font-size: 8pt; color: #cc6600;"),
+            ("- Without scipy, Flow Buffer display and SHC computation do not work. "
+             "DEM reprojection and resampling use GDAL.", "font-size: 8pt; color: #cc6600;"),
             ("- Windows (standard installer): scipy is normally already "
              "included. If it's genuinely missing, close QGIS and run in "
              "Command Prompt from your QGIS install's bin folder:",
@@ -2100,8 +2060,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         hint_lay = QtWidgets.QVBoxLayout(grpHint)
         hint_lay.setSpacing(4)
         _warn = QtWidgets.QLabel(
-            "⚠ DEM must be in a projected CRS (metres), not geographic (degrees).\n"
-            "  Using EPSG:4326 (lat/lon) will produce incorrect slope, area and flow values."
+            "DEM is automatically prepared on a square, metre-based analysis grid.\n"
+            "DSM is aligned to that grid. Source CRS must be defined; heights must share the same datum."
         )
         _warn.setWordWrap(True)
         _warn.setStyleSheet("color: #cc0000; font-size: 8pt;")
@@ -2147,15 +2107,15 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         for _t in (
             "DEM source selection",
             "  • GSI tiles (Japan): auto-fetched from canvas extent. No download needed.",
-            "  • Local file: must be in a projected CRS (metres). Reproject if in EPSG:4326.",
+            "  • Local file: geographic/Web Mercator DEMs are converted to local UTM for analysis.",
             "  • Copernicus GLO-30: free account required at OpenTopography to download.",
             "",
             "Reproject in QGIS (if needed)",
             "  1. Raster → Projections → Warp (Reproject)",
             "  2. Target CRS — UTM zone for your area:",
-            "     lon 126–132° → EPSG:32653",
-            "     lon 132–138° → EPSG:32654",
-            "     lon 138–144° → EPSG:32655",
+            "     lon 126–132° → EPSG:32652",
+            "     lon 132–138° → EPSG:32653",
+            "     lon 138–144° → EPSG:32654",
             "  3. Resampling: Bilinear  →  Save & use the output file",
             "",
             "Multiple ZIPs (same region)",
@@ -2164,7 +2124,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             "  • To reuse: select the generated merged_*.tif directly.",
             "",
             "Global analysis — CRS recommendations",
-            "  • Set project CRS to the UTM zone covering your area.",
+            "  • Analysis uses the prepared DEM CRS, independently of the project display CRS.",
             "  • UTM is defined up to ±84° latitude. Beyond ±70° accuracy degrades.",
             "  • Areas above ±70° (Arctic/Antarctic) are outside the intended use range.",
             "  • South America example: EPSG:32718 (Zone 18S) or EPSG:32719 (Zone 19S).",
@@ -2324,6 +2284,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._flow_buffer_mem_paths = []  # vsimem パス（解放用）
         self._loaded_terrain_basenames = {}  # key → base_name（フィルタ再適用用）
         self._terrain_layer_group = None   # QgsLayerTreeGroup or None
+        self._editing_named_export = False
+        self._named_export_key = None
+        self._named_export_layers = {}
+        self._active_analysis_key = None
         self._orig_base_opacity = {}       # layer_id → 元 opacity（Layer Settings 選択レイヤーの復元用）
 
         # --- 解析種別 ---
@@ -2603,9 +2567,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # （_build_extended_ui で配置）。ここでは作るだけ。
         self.btnExport = QtWidgets.QPushButton("Export to Project")
         self.btnExport.setToolTip(
-            "Add all layers of the selected analysis run to the project as a\n"
-            "separate group, with the current display settings. The group stays\n"
-            "after switching runs or closing the plugin.")
+            "Name the selected run and add its real output layers to the project.\n"
+            "The current display is the starting state; later FOL edits apply\n"
+            "directly to the named layers.")
         lay.addStretch(1)
 
         # チェックボックス連動でパラメータタブを更新
@@ -2692,6 +2656,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 lambda val, k=_key: self._on_key_opacity_changed(k, val)
             )
         self.cmbAnalysisNumber.currentIndexChanged.connect(self._on_analysis_number_changed)
+        self.cmbAnalysisNumber.activated.connect(self._on_analysis_combo_activated)
         self.btnRefreshAnalysis.clicked.connect(self._refresh_analysis_combo)
         self.btnFilterWetland.clicked.connect(lambda: self._toggle_filter("wetland"))
         self.btnFilterFlow.clicked.connect(lambda: self._toggle_filter("flow"))
@@ -3858,6 +3823,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
     def _on_key_opacity_changed(self, key, value):
         opacity = value / 100.0
         proj = QgsProject.instance()
+        changed_ids = []
         for lid in self._loaded_terrain_layers.get(key, []):
             lyr = proj.mapLayer(lid)
             if lyr is None:
@@ -3868,6 +3834,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             else:
                 lyr.setOpacity(opacity)
             lyr.triggerRepaint()
+            changed_ids.append(lid)
+        self._save_named_export_styles(changed_ids)
+        self._persist_named_export_display_state()
         if self.preview_canvas is not None:
             self.preview_canvas.refresh()
 
@@ -3936,6 +3905,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self._set_flow_filter_state(base_name, next_state)
         else:
             self._filter_state[key] = next_state
+        if self._editing_named_export and self._terrain_layer_group is not None:
+            prop = ("fop_filter_tc" if key == "flow" and base_name == "tc"
+                    else "fop_filter_flow" if key == "flow"
+                    else "fop_filter_wetland")
+            self._terrain_layer_group.setCustomProperty(prop, next_state)
 
         btn = self.btnFilterWetland if key == "wetland" else self.btnFilterFlow
         btn.setText(next_state)
@@ -3966,8 +3940,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             lyr.setOpacity(opacity)
             lyr.triggerRepaint()
             reapplied.append(self._preview_debug_layer_info(lyr))
+        self._save_named_export_styles(
+            self._loaded_terrain_layers.get(key, []))
         if key == "flow" and self._flow_buffer_state_for_base(base_name) != "off":
             self._apply_flow_buffer()
+        self._persist_named_export_display_state()
         if self.preview_canvas is not None:
             self.preview_canvas.refresh()
         self._preview_debug_log(
@@ -4071,9 +4048,98 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._set_flow_buffer_button_state(nxt)
         self._apply_flow_buffer()
 
+    def _apply_named_export_flow_buffer(self):
+        """Named Export内の永続Flow Bufferを直接追加・更新・非表示化する。"""
+        group = self._terrain_layer_group
+        base_name = self._loaded_terrain_basenames.get("flow")
+        if group is None or base_name is None:
+            return
+        state = self._flow_buffer_state_for_base(base_name)
+        target_bases = ["tc"] if base_name == "tc" else ["flow_peak", "flow_mean"]
+        project = QgsProject.instance()
+
+        remove_ids = []
+        for node in group.findLayers():
+            layer = node.layer()
+            if layer is None:
+                continue
+            buffer_base, _old_state, is_buffer = self._named_export_base_name(layer)
+            if is_buffer and buffer_base in target_bases:
+                remove_ids.append(layer.id())
+        if remove_ids:
+            project.removeMapLayers(remove_ids)
+
+        self._flow_buffer_layer_ids = []
+        created_ids = []
+        errors = []
+        if state != "off":
+            for target_base in target_bases:
+                layer_id = self._named_export_layers.get(target_base)
+                source_layer = project.mapLayer(layer_id) if layer_id else None
+                if source_layer is None or not source_layer.isValid():
+                    continue
+                source_path = str(source_layer.source() or "").split("|", 1)[0]
+                buffer_path = os.path.join(
+                    os.path.dirname(source_path),
+                    f"{target_base}_buffer_{state}.tif",
+                )
+                try:
+                    ok = self._write_flow_buffer_raster(
+                        source_path, buffer_path,
+                        self._flow_buffer_sigma(target_base, state))
+                except Exception as exc:
+                    ok = False
+                    errors.append(f"{source_layer.name()}: {exc}")
+                if not ok:
+                    if not errors or not errors[-1].startswith(source_layer.name()):
+                        errors.append(source_layer.name())
+                    continue
+                buffer_layer = QgsRasterLayer(
+                    buffer_path, f"{source_layer.name()} buffer")
+                if not buffer_layer.isValid():
+                    errors.append(f"{source_layer.name()}: invalid buffer")
+                    continue
+                self._apply_raster_color(
+                    buffer_layer, target_base,
+                    self._flow_filter_state(target_base))
+                opacity = self._FLOW_BUFFER_OPACITY[state]
+                buffer_layer.renderer().setOpacity(opacity)
+                buffer_layer.setOpacity(opacity)
+                buffer_layer.triggerRepaint()
+                project.addMapLayer(buffer_layer, False)
+                source_node = group.findLayer(source_layer.id())
+                parent = source_node.parent() if source_node is not None else group
+                if not isinstance(parent, QgsLayerTreeGroup):
+                    parent = group
+                buffer_node = parent.addLayer(buffer_layer)
+                if buffer_node is not None:
+                    buffer_node.setExpanded(False)
+                    buffer_node.setItemVisibilityChecked(
+                        source_node is not None
+                        and self._tree_node_effectively_visible(source_node, group)
+                    )
+                buffer_layer.saveNamedStyle(
+                    os.path.splitext(buffer_path)[0] + ".qml")
+                created_ids.append(buffer_layer.id())
+                if target_base == base_name:
+                    self._flow_buffer_layer_ids.append(buffer_layer.id())
+
+        if base_name == "tc":
+            group.setCustomProperty("fop_buffer_tc", state)
+        else:
+            group.setCustomProperty("fop_buffer_flow", state)
+        self._persist_named_export_display_state()
+        project.setDirty(True)
+        self._refresh_preview_canvas()
+        if self.iface is not None:
+            self.iface.mapCanvas().refresh()
+
     def _apply_flow_buffer(self):
         """Gaussian blur した滲みレイヤーを /vsimem/ 経由で追加/削除する。
         ラスターレイヤーは setPaintEffect 非対応のため、scipy でデータを直接ぼかす。"""
+        if self._editing_named_export:
+            self._apply_named_export_flow_buffer()
+            return
         import numpy as np
         from scipy.ndimage import gaussian_filter
         from osgeo import gdal
@@ -4630,8 +4696,125 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 f"High Risk dissolve failed; showing original: {exc}")
         return "integrated_high_risk"
 
+    def _named_export_candidates(self, key):
+        """編集中Named Exportにあるkeyのベースレイヤーをパターン順で返す。"""
+        group = self._terrain_layer_group
+        if not self._editing_named_export or group is None:
+            return []
+        by_base = {}
+        for node in group.findLayers():
+            layer = node.layer()
+            if layer is None:
+                continue
+            base_name, _state, is_buffer = self._named_export_base_name(layer)
+            if not is_buffer:
+                by_base[base_name] = (node, layer)
+        result = []
+        for state_index, pattern in enumerate(self._TERRAIN_PATTERNS[key]):
+            base_name = pattern[0]
+            if base_name in by_base:
+                node, layer = by_base[base_name]
+                result.append((state_index, base_name, node, layer))
+        return result
+
+    def _set_named_export_node_visible(self, node, visible):
+        """Named Exportのベースレイヤーと、その直近サブグループを切り替える。"""
+        group = self._terrain_layer_group
+        parent = node.parent()
+        node.setItemVisibilityChecked(bool(visible))
+        if parent is not None and parent is not group and isinstance(parent, QgsLayerTreeGroup):
+            parent.setItemVisibilityChecked(bool(visible))
+
+    def _set_named_export_base_visible(self, base_name, node, visible):
+        """ベースレイヤーと対応する永続バッファを同じ表示状態にする。"""
+        self._set_named_export_node_visible(node, visible)
+        group = self._terrain_layer_group
+        if group is None:
+            return
+        for candidate in group.findLayers():
+            layer = candidate.layer()
+            if layer is None:
+                continue
+            buffer_base, _buffer_state, is_buffer = \
+                self._named_export_base_name(layer)
+            if is_buffer and buffer_base == base_name:
+                self._set_named_export_node_visible(candidate, visible)
+
+    def _cycle_named_export_layer(self, key, desired_state=None):
+        """実レイヤーを削除せず、Named Export内の表示対象だけを切り替える。"""
+        candidates = self._named_export_candidates(key)
+        button = self._btn(key)
+        if not candidates:
+            self._set_load_status("No file")
+            with QSignalBlocker(button):
+                button.setChecked(False)
+            return False
+
+        states = [item[0] for item in candidates]
+        current = self._terrain_cycle_state.get(key, -1)
+        if desired_state is not None:
+            next_state = desired_state if desired_state in states else -1
+        elif current not in states:
+            next_state = states[0]
+        else:
+            position = states.index(current) + 1
+            next_state = states[position] if position < len(states) else -1
+
+        for _state, base_name, node, _layer in candidates:
+            self._set_named_export_base_visible(base_name, node, False)
+
+        self._loaded_terrain_layers.pop(key, None)
+        self._loaded_terrain_basenames.pop(key, None)
+        self._terrain_cycle_state[key] = next_state
+        selected = next((item for item in candidates if item[0] == next_state), None)
+        if selected is not None:
+            _state, base_name, node, layer = selected
+            self._set_named_export_base_visible(base_name, node, True)
+            self._loaded_terrain_layers[key] = [layer.id()]
+            self._loaded_terrain_basenames[key] = base_name
+            with QSignalBlocker(self._opacity_spinbox(key)):
+                self._opacity_spinbox(key).setValue(round(layer.opacity() * 100))
+
+        if key == "flow":
+            self._flow_buffer_layer_ids = []
+            if selected is not None:
+                base_name = selected[1]
+                for node in self._terrain_layer_group.findLayers():
+                    layer = node.layer()
+                    if layer is None:
+                        continue
+                    buffer_base, _buffer_state, is_buffer = \
+                        self._named_export_base_name(layer)
+                    if (is_buffer and buffer_base == base_name
+                            and self._tree_node_effectively_visible(
+                                node, self._terrain_layer_group)):
+                        self._flow_buffer_layer_ids.append(layer.id())
+            self._sync_flow_aux_controls()
+
+        with QSignalBlocker(button):
+            button.setChecked(next_state >= 0)
+            button.setText(self._terrain_button_label(key))
+            button.setStyleSheet(self._BTN_STYLE_NORMAL)
+        QgsProject.instance().setDirty(True)
+        self._persist_named_export_display_state()
+        self._refresh_preview_canvas()
+        if self.iface is not None:
+            self.iface.mapCanvas().refresh()
+        if selected is None:
+            self._set_load_status("")
+        else:
+            label = selected[3].name()
+            count = len(candidates)
+            position = states.index(next_state) + 1
+            status = (f"Showing {label} ({position}/{count})."
+                      if count > 1 else f"Showing {label}.")
+            self._set_load_status(status)
+        return True
+
     def _cycle_terrain_layer(self, key, desired_state=None):
         """クリック毎に 非表示→ファイル1→ファイル2→...→非表示 と循環する。"""
+        if self._editing_named_export:
+            return self._cycle_named_export_layer(key, desired_state)
         analysis_number = self.cmbAnalysisNumber.currentData()
         btn = self._btn(key)
         base_label = self._terrain_button_label(key)
@@ -6130,8 +6313,45 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     # ── 解析番号ユーティリティ ──────────────────────────────────────
 
-    def _scan_analysis_numbers(self):
-        """出力ディレクトリから解析番号サブフォルダの一覧を返す"""
+    _MOVED_MARK = ".fol_moved_to_archive"
+
+    def _remove_moved_run_folder(self, analysis_number, key):
+        """Named Export へコピーし終えた元の解析番号のフォルダを消す。
+
+        消せなければ（Windows でファイルが掴まれているなど）印を付けて一覧から外し、
+        次に一覧を更新したときにもう一度消す（待たない）。
+        """
+        folder = os.path.join(self._terrain_output_dir(), analysis_number)
+        try:
+            shutil.rmtree(folder)
+        except OSError:
+            try:
+                with open(os.path.join(folder, self._MOVED_MARK), "w", encoding="utf-8") as f:
+                    f.write(key)
+            except OSError:
+                pass
+        # 一覧から元の解析番号を外す（選択は書き出した Named Export のまま）
+        idx = self.cmbAnalysisNumber.findData(analysis_number)
+        if idx >= 0:
+            with QSignalBlocker(self.cmbAnalysisNumber):
+                self.cmbAnalysisNumber.removeItem(idx)
+
+    def _purge_moved_run_folders(self):
+        """印の付いた（Named Export へコピー済みの）解析番号のフォルダを、もう一度消してみる。"""
+        out_dir = self._terrain_output_dir()
+        if not os.path.isdir(out_dir):
+            return
+        for name in os.listdir(out_dir):
+            folder = os.path.join(out_dir, name)
+            if os.path.isfile(os.path.join(folder, self._MOVED_MARK)):
+                shutil.rmtree(folder, ignore_errors=True)
+
+    def _scan_analysis_numbers(self, include_moved=False):
+        """出力ディレクトリから解析番号サブフォルダの一覧を返す。
+
+        Named Export へコピー済みで消しきれていないフォルダ（印付き）は、
+        include_moved=True のときだけ含める（新しい番号が重ならないようにするため）。
+        """
         import re as _re
         out_dir = self._terrain_output_dir()
         if not os.path.isdir(out_dir):
@@ -6140,6 +6360,8 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             name for name in os.listdir(out_dir)
             if os.path.isdir(os.path.join(out_dir, name))
             and _re.fullmatch(r'\d{4}(\+\d+)?', name)
+            and (include_moved
+                 or not os.path.isfile(os.path.join(out_dir, name, self._MOVED_MARK)))
         ]
         return sorted(numbers, key=self._analysis_number_sort_key)
 
@@ -6165,33 +6387,78 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         既存フォルダの削除は解析実行前に行う。
         """
         numbers = self._scan_analysis_numbers()
-        if not numbers:
+        if overwrite and numbers:
+            return f"{max(int(n[:3]) for n in numbers):03d}"
+        # 新しい番号は、消しきれていないコピー済みのフォルダとも重ならないようにする
+        all_numbers = self._scan_analysis_numbers(include_moved=True)
+        if not all_numbers:
             return "001"
-        max_seq = max(int(n[:3]) for n in numbers)
+        max_seq = max(int(n[:3]) for n in all_numbers)
         if overwrite:
             return f"{max_seq:03d}"
         return f"{max_seq + 1:03d}"
 
-    def _refresh_analysis_combo(self, select_latest=True, gc_cache=True):
+    def _refresh_analysis_combo(self, select_latest=True, gc_cache=True,
+                                select_data=None):
         """解析番号コンボを出力ディレクトリの内容で更新する。
         select_latest=True（デフォルト）: 最新番号を自動選択して表示待機状態にする。
         select_latest=False: 現在の選択を維持する（解析完了後の更新など）。
         gc_cache=False: DEM キャッシュの掃除をしない（プロジェクト切り替えの途中など）。
+        select_data: 更新後に選ぶ項目（archive へ移した直後など）。
+        解析番号の下に「── archive ──」の区切りを入れ、archive を作った順に並べる。
+        長い名前は途中を省略して表示し、ツールチップに全体を出す。
         """
+        try:
+            migrated, migration_errors = self._reconnect_moved_exports()
+        except Exception:  # 移行で思わぬエラーが出ても、一覧とパネルは開く
+            import traceback as _tb
+            from qgis.core import Qgis, QgsMessageLog
+            QgsMessageLog.logMessage(
+                "Named Exports reconnect failed:\n" + _tb.format_exc(),
+                "Forestry Operations Lite", Qgis.MessageLevel.Warning)
+            migrated, migration_errors = [], ["see Log Messages (Forestry Operations Lite)"]
+        self._purge_moved_run_folders()
         current = self.cmbAnalysisNumber.currentData()
+        if select_data is not None:
+            current = select_data
+        archive_keys_in_project = self._archive_keys_in_project()
         with QSignalBlocker(self.cmbAnalysisNumber):
             self.cmbAnalysisNumber.clear()
             self.cmbAnalysisNumber.addItem("Select run", None)
             numbers = self._scan_analysis_numbers()
             for num in reversed(numbers):
                 self.cmbAnalysisNumber.addItem(num, num)
+            archives = self._scan_archives()
+            if archives:
+                self.cmbAnalysisNumber.addItem("── Named Exports ──", None)
+                separator = self.cmbAnalysisNumber.model().item(
+                    self.cmbAnalysisNumber.count() - 1)
+                if separator is not None:
+                    separator.setEnabled(False)
+                font_metrics = self.cmbAnalysisNumber.fontMetrics()
+                width = max(60, self.cmbAnalysisNumber.width() - 40)
+                for name in archives:
+                    archive_key = self._archive_key(name)
+                    self.cmbAnalysisNumber.addItem(
+                        font_metrics.elidedText(
+                            name, Qt.TextElideMode.ElideMiddle, width),
+                        archive_key,
+                    )
+                    item_index = self.cmbAnalysisNumber.count() - 1
+                    tooltip = name
+                    if archive_key in archive_keys_in_project:
+                        tooltip += "\nLoaded in the project; select to edit"
+                    self.cmbAnalysisNumber.setItemData(
+                        item_index, tooltip, Qt.ItemDataRole.ToolTipRole)
             if select_latest and numbers:
                 # 最新番号（降順先頭 = インデックス1）を選択して表示待機状態にする
                 self.cmbAnalysisNumber.setCurrentIndex(1)
             else:
                 # 以前の選択を復元
                 idx = self.cmbAnalysisNumber.findData(current)
-                self.cmbAnalysisNumber.setCurrentIndex(idx if idx >= 0 else 0)
+                item = self.cmbAnalysisNumber.model().item(idx) if idx >= 0 else None
+                self.cmbAnalysisNumber.setCurrentIndex(
+                    idx if item is not None and item.isEnabled() else 0)
         # 選択変更を手動で通知（QSignalBlocker スコープ内に setCurrentIndex したため）
         self._on_analysis_number_changed(self.cmbAnalysisNumber.currentIndex())
         # トグルボタンの有効/無効を更新
@@ -6203,6 +6470,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # 解析番号に紐づかない DEM キャッシュを削除
         if gc_cache:
             self._gc_dem_cache()
+        if migrated:
+            self._set_load_status(
+                f"Reconnected {len(migrated)} earlier export(s) to Named Exports. "
+                "Save the project to keep the new locations.")
+        if migrated or migration_errors:
+            # パネルを作っている途中（描く前）に窓を出すとパネルが白いまま止まるので、
+            # 表示して描き終わってから知らせる
+            from qgis.PyQt.QtCore import QTimer as _QTimer
+            _QTimer.singleShot(
+                500, lambda: self._notify_legacy_export_migration(migrated, migration_errors))
 
     def _gc_dem_cache(self):
         """解析番号に紐づかない DEM キャッシュファイルを削除する。
@@ -6259,6 +6536,734 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     _GROUP_PROP = "fop_managed"  # プラグイン管理グループ識別用プロパティ
 
+    # ── archive（Export to Project で名前を付けて移した解析）─────────────
+    # 出力フォルダの archive/<名前>/ に解析番号のフォルダを移したもの。一覧での
+    # キーは "archive/<名前>"（os.path.join(out_dir, key) でそのままフォルダになる）。
+    # 上書き解析・DEM キャッシュの掃除の対象にはしない（解析番号として数えない）。
+    _ARCHIVE_DIR = "archive"
+    _ARCHIVE_INFO = "fol_archive.json"
+    _ARCHIVE_GROUP_PROP = "fop_archive_key"
+    _INVALID_NAME_CHARS = '\\/:*?"<>|'
+
+    @classmethod
+    def _archive_key(cls, name):
+        return f"{cls._ARCHIVE_DIR}/{name}"
+
+    @classmethod
+    def _archive_name(cls, key):
+        """archive のキーなら名前、解析番号なら None。"""
+        prefix = cls._ARCHIVE_DIR + "/"
+        if key and str(key).startswith(prefix):
+            return str(key)[len(prefix):]
+        return None
+
+    def _run_label(self, key):
+        name = self._archive_name(key)
+        return name if name is not None else key
+
+    @staticmethod
+    def _source_path(source):
+        """QGIS のデータソース文字列からローカルファイル部分を返す。"""
+        path = str(source or "").split("|", 1)[0]
+        return os.path.normcase(os.path.abspath(path)) if path else ""
+
+    @classmethod
+    def _source_relative_to(cls, source, folder):
+        """source が folder 内なら相対パス、そうでなければ None。"""
+        path = cls._source_path(source)
+        root = os.path.normcase(os.path.abspath(folder))
+        if not path:
+            return None
+        try:
+            if os.path.commonpath((path, root)) != root:
+                return None
+        except ValueError:
+            return None
+        return os.path.relpath(path, root)
+
+    def _project_export_groups(self):
+        """プラグインの一時表示グループを除く、プロジェクト内の全グループ。"""
+        root = QgsProject.instance().layerTreeRoot()
+        groups = []
+        for group in root.findGroups(True):
+            node = group
+            managed = False
+            while node is not None:
+                if (hasattr(node, "customProperty")
+                        and node.customProperty(self._GROUP_PROP) == "1"):
+                    managed = True
+                    break
+                node = node.parent()
+            if not managed:
+                groups.append(group)
+        return groups
+
+    def _archive_key_from_group_sources(self, group):
+        """グループ内レイヤーが archive を参照していればそのキーを返す。"""
+        archive_root = os.path.join(self._terrain_output_dir(), self._ARCHIVE_DIR)
+        for layer_node in group.findLayers():
+            layer = layer_node.layer()
+            if layer is None:
+                continue
+            relative = self._source_relative_to(layer.source(), archive_root)
+            if relative is None:
+                continue
+            parts = relative.split(os.sep, 1)
+            if len(parts) == 2 and parts[0]:
+                return self._archive_key(parts[0])
+        return None
+
+    def _archive_keys_in_project(self):
+        """既にレイヤーツリーへ書き出されている archive キーの集合。"""
+        keys = set()
+        for group in self._project_export_groups():
+            key = str(group.customProperty(self._ARCHIVE_GROUP_PROP, "") or "")
+            if not self._archive_name(key):
+                key = self._archive_key_from_group_sources(group) or ""
+                if key:
+                    group.setCustomProperty(self._ARCHIVE_GROUP_PROP, key)
+            if self._archive_name(key):
+                keys.add(key)
+        return keys
+
+    def _named_export_group(self, key):
+        """key に対応する命名済み書き出しグループを返す。"""
+        name = self._archive_name(key)
+        fallback = None
+        for group in self._project_export_groups():
+            stored = str(group.customProperty(self._ARCHIVE_GROUP_PROP, "") or "")
+            if stored == key:
+                if group.name() == name:
+                    return group
+                fallback = fallback or group
+            elif not stored and self._archive_key_from_group_sources(group) == key:
+                group.setCustomProperty(self._ARCHIVE_GROUP_PROP, key)
+                if group.name() == name:
+                    return group
+                fallback = fallback or group
+        return fallback
+
+    def _confirm_named_export_load(self, name):
+        """レイヤーパネルから削除済みのNamed Exportを再読込するか確認する。"""
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Load Named Export",
+            f"'{name}' is not currently in the Layers panel.\n\n"
+            "Load it permanently into Layers?",
+            (QtWidgets.QMessageBox.StandardButton.Yes
+             | QtWidgets.QMessageBox.StandardButton.No),
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        return reply == QtWidgets.QMessageBox.StandardButton.Yes
+
+    def _named_export_info(self, key):
+        """Named Export の保存情報を読む。旧形式や欠損時は空dict。"""
+        import json as _json
+
+        path = os.path.join(
+            self._terrain_output_dir(), key, self._ARCHIVE_INFO)
+        try:
+            with open(path, "r", encoding="utf-8") as file_obj:
+                value = _json.load(file_obj)
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _update_named_export_info(self, key, **updates):
+        """既存の保存情報を保ったままNamed Exportの状態を書き込む。"""
+        import json as _json
+
+        path = os.path.join(
+            self._terrain_output_dir(), key, self._ARCHIVE_INFO)
+        info = self._named_export_info(key)
+        info.update(updates)
+        try:
+            with open(path, "w", encoding="utf-8") as file_obj:
+                _json.dump(info, file_obj, ensure_ascii=False, indent=2)
+            return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def _tree_node_effectively_visible(node, stop_group=None):
+        """node自身と親グループのチェック状態を確認する。"""
+        current = node
+        while current is not None and current is not stop_group:
+            if (hasattr(current, "itemVisibilityChecked")
+                    and not current.itemVisibilityChecked()):
+                return False
+            current = current.parent()
+        return True
+
+    @staticmethod
+    def _named_export_base_name(layer):
+        """書き出しレイヤーのファイル名からFOLのbase_nameを得る。"""
+        import re as _re
+
+        source = str(layer.source() or "").split("|", 1)[0]
+        stem = os.path.splitext(os.path.basename(source))[0]
+        match = _re.fullmatch(r"(.+)_buffer_(weak|strong)", stem)
+        if match:
+            return match.group(1), match.group(2), True
+        aliases = {
+            "integrated_high_risk_dissolved": "integrated_high_risk",
+            "integrated_high_risk_mask": "integrated_high_risk",
+        }
+        return aliases.get(stem, stem), None, False
+
+    def _save_named_export_styles(self, layer_ids):
+        """編集した命名レイヤーの現在スタイルを隣接QMLへ保存する。"""
+        if not self._editing_named_export:
+            return
+        project = QgsProject.instance()
+        for layer_id in layer_ids:
+            layer = project.mapLayer(layer_id)
+            if layer is None:
+                continue
+            source = str(layer.source() or "").split("|", 1)[0]
+            if not source:
+                continue
+            try:
+                layer.saveNamedStyle(os.path.splitext(source)[0] + ".qml")
+            except Exception:  # nosec B110
+                pass
+        QgsProject.instance().setDirty(True)
+
+    def _persist_named_export_display_state(self):
+        """FOLで編集したNamed Exportの表示状態を再読込用に保存する。"""
+        if not self._editing_named_export or not self._named_export_key:
+            return
+        display = self._current_display_state_data()
+        group = self._terrain_layer_group
+        if group is not None:
+            group.setCustomProperty("fop_filter_wetland", display["filter_wetland"])
+            group.setCustomProperty("fop_filter_flow", display["filter_flow"])
+            group.setCustomProperty("fop_filter_tc", display["filter_tc"])
+            group.setCustomProperty("fop_buffer_flow", display["buffer_flow"])
+            group.setCustomProperty("fop_buffer_tc", display["buffer_tc"])
+        self._update_named_export_info(
+            self._named_export_key, display=display)
+
+    def _current_display_state_data(self):
+        """現在のFOL表示コントロールを保存可能なdictにする。"""
+        return {
+            "filter_wetland": self._filter_state.get("wetland", "off"),
+            "filter_flow": self._filter_state.get("flow", "off"),
+            "filter_tc": getattr(self, "_filter_state_tc", "off"),
+            "buffer_flow": self._flow_buffer_state,
+            "buffer_tc": self._flow_buffer_state_tc,
+            "cycle_state": dict(self._terrain_cycle_state),
+            "opacity": {
+                key: self._opacity_spinbox(key).value()
+                for key in self._BTN_LABELS
+            },
+        }
+
+    def _bind_named_export_group(self, key, group):
+        """既存の命名グループをFOL表示編集コントロールへ接続する。"""
+        self._editing_named_export = True
+        self._named_export_key = key
+        self._active_analysis_key = key
+        self._terrain_layer_group = group
+        self._named_export_layers = {}
+        self._loaded_terrain_layers = {}
+        self._loaded_terrain_basenames = {}
+        self._flow_buffer_layer_ids = []
+        self._terrain_cycle_state.clear()
+
+        nodes_by_base = {}
+        buffer_nodes = {}
+        for node in group.findLayers():
+            layer = node.layer()
+            if layer is None:
+                continue
+            base_name, buffer_state, is_buffer = self._named_export_base_name(layer)
+            if is_buffer:
+                buffer_nodes.setdefault(base_name, []).append(
+                    (buffer_state, node, layer))
+            else:
+                nodes_by_base[base_name] = (node, layer)
+                self._named_export_layers[base_name] = layer.id()
+
+        info = self._named_export_info(key)
+        display = info.get("display", {}) if isinstance(info.get("display"), dict) else {}
+        group_filter_flow = str(group.customProperty(
+            "fop_filter_flow", display.get("filter_flow", "off")) or "off")
+        group_filter_tc = str(group.customProperty(
+            "fop_filter_tc", display.get("filter_tc", "off")) or "off")
+        group_filter_wetland = str(group.customProperty(
+            "fop_filter_wetland", display.get("filter_wetland", "off")) or "off")
+        if group_filter_flow in ("off", "low", "mid"):
+            self._filter_state["flow"] = group_filter_flow
+        if group_filter_tc in ("off", "low", "mid"):
+            self._filter_state_tc = group_filter_tc
+        if group_filter_wetland in ("off", "low", "mid"):
+            self._filter_state["wetland"] = group_filter_wetland
+
+        for terrain_key, patterns in self._TERRAIN_PATTERNS.items():
+            available = []
+            for index, pattern in enumerate(patterns):
+                base_name = pattern[0]
+                item = nodes_by_base.get(base_name)
+                if item is not None:
+                    available.append((index, base_name, item[0], item[1]))
+            visible = [item for item in available
+                       if self._tree_node_effectively_visible(item[2], group)]
+            active = visible[0] if visible else None
+            if active is None:
+                self._terrain_cycle_state[terrain_key] = -1
+                continue
+            state_index, base_name, _node, layer = active
+            self._terrain_cycle_state[terrain_key] = state_index
+            self._loaded_terrain_layers[terrain_key] = [layer.id()]
+            self._loaded_terrain_basenames[terrain_key] = base_name
+            spin = self._opacity_spinbox(terrain_key)
+            with QSignalBlocker(spin):
+                spin.setValue(round(layer.opacity() * 100))
+
+        flow_base = self._loaded_terrain_basenames.get("flow")
+        active_buffers = buffer_nodes.get(flow_base, []) if flow_base else []
+        visible_buffers = [item for item in active_buffers
+                           if self._tree_node_effectively_visible(item[1], group)]
+        self._flow_buffer_layer_ids = [item[2].id() for item in visible_buffers]
+        inferred = visible_buffers[0][0] if visible_buffers else "off"
+        saved_flow = str(group.customProperty(
+            "fop_buffer_flow",
+            display.get("buffer_flow", inferred if flow_base != "tc" else "off")) or "off")
+        saved_tc = str(group.customProperty(
+            "fop_buffer_tc",
+            display.get("buffer_tc", inferred if flow_base == "tc" else "off")) or "off")
+        self._flow_buffer_state = (
+            saved_flow if saved_flow in ("off", "weak", "strong") else "off")
+        self._flow_buffer_state_tc = (
+            saved_tc if saved_tc in ("off", "weak", "strong") else "off")
+
+        for terrain_key in self._BTN_LABELS:
+            button = self._btn(terrain_key)
+            state = self._terrain_cycle_state.get(terrain_key, -1)
+            with QSignalBlocker(button):
+                button.setChecked(state >= 0)
+                button.setText(self._terrain_button_label(terrain_key))
+                button.setStyleSheet(self._BTN_STYLE_NORMAL)
+        self._sync_flow_aux_controls()
+        self.btnExport.setEnabled(False)
+        self.btnExport.setToolTip(
+            "Named Export is edited directly; no second export is needed")
+        self._refresh_preview_canvas()
+        self._zoom_preview_to_analysis_extent_if_available()
+
+    def _update_archive_combo_availability(self, clear_current=False):
+        """Named Export の読込状態を表示する（項目は常に選択可能）。"""
+        del clear_current
+        existing = self._archive_keys_in_project()
+        for index in range(self.cmbAnalysisNumber.count()):
+            key = self.cmbAnalysisNumber.itemData(index)
+            name = self._archive_name(key)
+            if name is None:
+                continue
+            loaded = key in existing
+            item = self.cmbAnalysisNumber.model().item(index)
+            if item is not None:
+                item.setEnabled(True)
+            tooltip = name + ("\nLoaded in the project; select to edit" if loaded
+                              else "\nSelect to load and edit")
+            self.cmbAnalysisNumber.setItemData(
+                index, tooltip, Qt.ItemDataRole.ToolTipRole)
+
+    def _legacy_export_groups(self):
+        """旧方式の書き出しグループを解析番号ごとに返す。"""
+        import re as _re
+
+        out_dir = self._terrain_output_dir()
+        result = {}
+        pattern = _re.compile(r"Forestry Operations Lite - (\d{4}(?:\+\d+)?)$")
+        for group in self._project_export_groups():
+            if group.customProperty(self._ARCHIVE_GROUP_PROP, ""):
+                continue
+            match = pattern.fullmatch(group.name())
+            if match is None:
+                continue
+            analysis_number = match.group(1)
+            run_dir = os.path.join(out_dir, analysis_number)
+            if not os.path.isdir(run_dir):
+                continue
+            if any(
+                node.layer() is not None
+                and self._source_relative_to(node.layer().source(), run_dir) is not None
+                for node in group.findLayers()
+            ):
+                result.setdefault(analysis_number, []).append(group)
+        return result
+
+    def _broken_legacy_export_groups(self):
+        """移したあと保存されずに閉じたため、無くなった解析番号のフォルダを見ている
+        以前の書き出しのグループ {解析番号: ([グループ], archive のキー)}。
+
+        元の解析番号が fol_archive.json の source_run に記録された Named Export が
+        あるときだけ対象にする（同じ名前のものを優先、無ければ1件だけのとき）。
+        """
+        import json as _json
+        import re as _re
+        out_dir = self._terrain_output_dir()
+        by_run = {}
+        for archive_name in self._scan_archives():
+            try:
+                with open(os.path.join(out_dir, self._ARCHIVE_DIR, archive_name, self._ARCHIVE_INFO),
+                          "r", encoding="utf-8") as f:
+                    run = str(_json.load(f).get("source_run", "") or "")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if run:
+                by_run.setdefault(run, []).append(archive_name)
+        pattern = _re.compile(r"Forestry Operations Lite - (\d{4}(?:\+\d+)?)$")
+        result = {}
+        for group in self._project_export_groups():
+            if group.customProperty(self._ARCHIVE_GROUP_PROP, ""):
+                continue
+            match = pattern.fullmatch(group.name())
+            if match is None:
+                continue
+            run = match.group(1)
+            run_dir = os.path.normcase(os.path.abspath(os.path.join(out_dir, run)))
+            if os.path.isdir(run_dir) and not os.path.isfile(os.path.join(run_dir, self._MOVED_MARK)):
+                continue  # まだ書き出していない以前の書き出し（そのまま使える）
+            names = by_run.get(run, [])
+            chosen = group.name() if group.name() in names else (names[0] if len(names) == 1 else None)
+            if chosen is None:
+                continue
+            pointing = False
+            for lnode in group.findLayers():
+                lyr = lnode.layer()
+                if lyr is None:
+                    continue
+                path = os.path.normcase(os.path.abspath(str(lyr.source() or "").split("|", 1)[0]))
+                try:
+                    pointing = os.path.commonpath((path, run_dir)) == run_dir
+                except ValueError:
+                    pointing = False
+                if pointing:
+                    break
+            if pointing:
+                entry = result.setdefault(run, ([], self._archive_key(chosen)))
+                entry[0].append(group)
+        return result
+
+    def _repair_legacy_export_run(self, analysis_number, groups, key):
+        """以前の書き出しのレイヤーを、移し済みの Named Export（archive）へ付け直す。
+
+        フォルダは移さない（もう archive にある）。見つからないレイヤーもスタイルを
+        保っているので、参照先だけ切り替える。
+        """
+        out_dir = self._terrain_output_dir()
+        src_abs = os.path.abspath(os.path.join(out_dir, analysis_number))
+        src_norm = os.path.normcase(src_abs)
+        dst = os.path.join(out_dir, key)
+        invalid = []
+        changed = 0
+        for group in groups:
+            for lnode in group.findLayers():
+                lyr = lnode.layer()
+                if lyr is None:
+                    continue
+                path, sep, suffix = str(lyr.source() or "").partition("|")
+                norm = os.path.normcase(os.path.abspath(path))
+                try:
+                    if os.path.commonpath((norm, src_norm)) != src_norm:
+                        continue
+                except ValueError:
+                    continue
+                new_path = os.path.join(dst, os.path.relpath(os.path.abspath(path), src_abs))
+                if not os.path.exists(new_path):
+                    invalid.append(lyr.name())
+                    continue
+                name = lyr.name()
+                lyr.setDataSource(new_path + (sep + suffix if sep else ""), name,
+                                  lyr.providerType(), False)
+                lyr.setName(name)
+                changed += 1
+                if not lyr.isValid():
+                    invalid.append(name)
+        if invalid:
+            return False, "could not reconnect: " + ", ".join(invalid)
+        if not changed:
+            return False, "no matching exported layers were found"
+        for group in groups:
+            group.setCustomProperty(self._ARCHIVE_GROUP_PROP, key)
+        QgsProject.instance().setDirty(True)
+        return True, ""
+
+    def _reconnect_moved_exports(self):
+        """移したあと保存せずに閉じたプロジェクトで、以前の書き出しのグループを
+        archive へ付け直す（フォルダは動かさない）。(付け直した名前の一覧, エラーの一覧)"""
+        fixed, errors = [], []
+        for run, (groups, key) in self._broken_legacy_export_groups().items():
+            name = groups[0].name()
+            try:
+                ok, detail = self._repair_legacy_export_run(run, groups, key)
+            except Exception as exc:  # 思わぬエラーでもパネルを止めず、知らせる
+                ok, detail = False, f"{type(exc).__name__}: {exc}"
+            if ok:
+                fixed.append(name)
+            else:
+                errors.append(f"{name}: {detail}")
+        return fixed, errors
+
+    def _notify_legacy_export_migration(self, moved, errors):
+        """旧方式の書き出しを Named Export へ移したことを知らせる（保存を促す）。"""
+        if not moved and not errors:
+            return
+        lines = []
+        if moved:
+            lines.append("Earlier exports in this project were reconnected to Named Exports:\n\n"
+                         + "\n".join(f"• {name}" for name in moved)
+                         + "\n\nTheir run folders had already been moved to the archive "
+                           "folder, so the layers now point there. Save the project to keep "
+                           "the new locations.")
+        if errors:
+            lines.append("These earlier exports could not be reconnected:\n\n"
+                         + "\n".join(f"• {error}" for error in errors))
+        QtWidgets.QMessageBox.information(self, "Named Exports", "\n\n".join(lines))
+
+    def _remove_legacy_export_groups(self, analysis_number):
+        """解析番号を見ている以前の書き出しのグループを、レイヤーごと外す。
+
+        戻り値: 戻すための記録 [(記録, 親, 位置)]。編集中のレイヤーがあれば None（外さない）。
+        """
+        groups = self._legacy_export_groups().get(analysis_number, [])
+        for group in groups:
+            for lnode in group.findLayers():
+                lyr = lnode.layer()
+                if isinstance(lyr, QgsVectorLayer) and lyr.isEditable():
+                    return None
+        removed = []
+        for group in groups:
+            parent = group.parent()
+            removed.append((self._snapshot_tree_node(group), parent, parent.children().index(group)))
+        project = QgsProject.instance()
+        for group in groups:
+            ids = [n.layerId() for n in group.findLayers()]
+            group.parent().removeChildNode(group)
+            project.removeMapLayers(ids)
+        return removed
+
+    def _restore_legacy_export_groups(self, removed):
+        """_remove_legacy_export_groups で外したグループを、元の場所・並び・スタイルで戻す。"""
+        invalid = []
+        for snap, parent, index in sorted(removed or [], key=lambda r: r[2]):
+            self._rebuild_tree_node(snap, parent, index, None, invalid)
+
+    def _snapshot_tree_node(self, node):
+        """レイヤーツリーのグループ（中のサブグループ・レイヤーごと）を記録する。"""
+        from qgis.core import QgsLayerTreeGroup, QgsMapLayerStyle
+        if isinstance(node, QgsLayerTreeGroup):
+            return {
+                "kind": "group", "name": node.name(),
+                "visible": node.itemVisibilityChecked(), "expanded": node.isExpanded(),
+                "props": {k: node.customProperty(k) for k in node.customProperties()},
+                "children": [c for c in (self._snapshot_tree_node(ch) for ch in node.children())
+                             if c is not None],
+            }
+        lyr = node.layer() if hasattr(node, "layer") else None
+        if lyr is None:
+            return None
+        style = QgsMapLayerStyle()
+        style.readFromLayer(lyr)
+        return {
+            "kind": "raster" if isinstance(lyr, QgsRasterLayer) else "vector",
+            "name": lyr.name(), "provider": lyr.providerType(), "source": lyr.source(),
+            "style": style, "visible": node.itemVisibilityChecked(), "expanded": node.isExpanded(),
+        }
+
+    def _rebuild_tree_node(self, snap, parent, index, map_source, invalid):
+        """_snapshot_tree_node の記録から開き直す。map_source(旧ソース) が新ソース（None なら旧のまま）。"""
+        project = QgsProject.instance()
+        if snap["kind"] == "group":
+            group = parent.insertGroup(index, snap["name"])
+            for key, value in snap["props"].items():
+                group.setCustomProperty(key, value)
+            for child in snap["children"]:
+                self._rebuild_tree_node(child, group, len(group.children()), map_source, invalid)
+            group.setItemVisibilityChecked(snap["visible"])
+            group.setExpanded(snap["expanded"])
+            return group
+        source = snap["source"]
+        if map_source is not None:
+            source = map_source(source) or source
+        cls = QgsRasterLayer if snap["kind"] == "raster" else QgsVectorLayer
+        lyr = cls(source, snap["name"], snap["provider"])
+        snap["style"].writeToLayer(lyr)
+        lyr.setName(snap["name"])
+        if not lyr.isValid():
+            invalid.append(snap["name"])
+        project.addMapLayer(lyr, False)
+        node = parent.insertLayer(index, lyr)
+        if node is not None:
+            node.setItemVisibilityChecked(snap["visible"])
+            node.setExpanded(snap["expanded"])
+        return node
+
+    def _scan_archives(self):
+        """archive の名前の一覧（作った順）。"""
+        import datetime as _dt
+        import json as _json
+
+        base = os.path.join(self._terrain_output_dir(), self._ARCHIVE_DIR)
+        if not os.path.isdir(base):
+            return []
+        items = []
+        for name in os.listdir(base):
+            folder = os.path.join(base, name)
+            if not os.path.isdir(folder) or name.startswith("."):
+                continue
+            created = ""
+            try:
+                with open(os.path.join(folder, self._ARCHIVE_INFO),
+                          "r", encoding="utf-8") as file_obj:
+                    created = str(_json.load(file_obj).get("archived_at", ""))
+            except (OSError, ValueError):
+                pass
+            if not created:
+                try:
+                    created = _dt.datetime.fromtimestamp(
+                        os.path.getmtime(folder)).isoformat()
+                except OSError:
+                    created = ""
+            items.append((created, name))
+        return [name for _created, name in sorted(items)]
+
+    def _archive_name_problem(self, name):
+        """名前が使えなければ理由、使えれば空文字列を返す。"""
+        if not name:
+            return "Enter a name."
+        if any(char in self._INVALID_NAME_CHARS for char in name) or name.endswith("."):
+            return ("The name contains characters that cannot be used in a folder name "
+                    "(\\ / : * ? \" < > |, or a trailing period).")
+        folder = os.path.join(self._terrain_output_dir(), self._ARCHIVE_DIR, name)
+        if os.path.exists(folder):
+            return "A Named Export with this name already exists. Choose another name."
+        return ""
+
+    def _ask_archive_name(self, default, legacy_names=None):
+        """書き出す名前（レイヤーグループ名・archive フォルダ名）を尋ねる。"""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Export to Project")
+        layout = QtWidgets.QVBoxLayout(dialog)
+        message = QtWidgets.QLabel(
+            "Name this export. Its real QGIS layers remain editable from FOL "
+            "under this name:"
+        )
+        message.setWordWrap(True)
+        layout.addWidget(message)
+        if legacy_names:
+            # 以前の書き出しは外して置き換えるので、前もって知らせる
+            legacy_label = QtWidgets.QLabel(
+                "This run has an earlier export in the project (" + ", ".join(legacy_names)
+                + "). It will be removed from the project and replaced by this export.")
+            legacy_label.setWordWrap(True)
+            legacy_label.setStyleSheet("color:#b05a00;")
+            layout.addWidget(legacy_label)
+        edit = QtWidgets.QLineEdit(default)
+        edit.selectAll()
+        layout.addWidget(edit)
+        warning = QtWidgets.QLabel("")
+        warning.setStyleSheet("color:#c0392b;")
+        warning.setWordWrap(True)
+        layout.addWidget(warning)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        ok_button = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+
+        def _check(_text=None):
+            problem = self._archive_name_problem(edit.text().strip())
+            warning.setText(problem)
+            ok_button.setEnabled(not problem)
+
+        edit.textChanged.connect(_check)
+        _check()
+        dialog.setMinimumWidth(420)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return None
+        name = edit.text().strip()
+        return name if not self._archive_name_problem(name) else None
+
+    def _archive_run(self, analysis_number, name):
+        """解析番号フォルダを archive/<name>/ へコピーし、一覧で選択する。
+
+        元のフォルダは、書き出しのレイヤーを作ったあとで消す（_remove_moved_run_folder）。
+        """
+        import datetime as _dt
+        import gc as _gc
+        import json as _json
+        from qgis.PyQt.QtCore import QCoreApplication as _QCA
+
+        out_dir = self._terrain_output_dir()
+        src = os.path.join(out_dir, analysis_number)
+        base = os.path.join(out_dir, self._ARCHIVE_DIR)
+        dst = os.path.join(base, name)
+        if not os.path.isdir(src) or os.path.exists(dst):
+            return False
+        os.makedirs(base, exist_ok=True)
+        # この解析番号を見ている以前の書き出し（0.3.0 / 1.3.0 より前の Export to Project）の
+        # グループは、レイヤーごとプロジェクトから外してからコピーする（名前を付けたグループに
+        # 置き換わる）。コピーできなかったときは元に戻す。
+        removed = self._remove_legacy_export_groups(analysis_number)
+        if removed is None:
+            QtWidgets.QMessageBox.warning(
+                self, "Export to Project",
+                f"Could not create the Named Export from {analysis_number} because a layer "
+                "of an earlier export of this run is being edited. Stop editing and try again.")
+            return False
+        # 表示中のプラグイン管理レイヤーを外し、Windows のファイルロックを解放する。
+        # 利用者が自分で追加したレイヤーは触らない。
+        self._unload_terrain_group(reset_controls=False)
+        _gc.collect()
+        _QCA.processEvents()
+        # 1. レイヤーを外した → 2. ファイルをコピーする（元のフォルダは、書き出しの
+        # レイヤーを作ったあとで消す: _remove_moved_run_folder）。コピーは、Windows で
+        # ファイルが掴まれていてもできる。
+        try:
+            shutil.copytree(src, dst)
+            error = None
+        except (OSError, shutil.Error) as exc:
+            error = exc
+            shutil.rmtree(dst, ignore_errors=True)
+        if error is not None:
+            self._restore_legacy_export_groups(removed)
+            QtWidgets.QMessageBox.warning(
+                self, "Export to Project",
+                f"Could not create the Named Export from {analysis_number} because the run "
+                f"could not be copied to the archive folder.\n\n{error}")
+            self._on_analysis_number_changed(self.cmbAnalysisNumber.currentIndex())
+            return False
+        try:
+            with open(os.path.join(dst, self._ARCHIVE_INFO),
+                      "w", encoding="utf-8") as file_obj:
+                _json.dump(
+                    {
+                        "name": name,
+                        "source_run": analysis_number,
+                        "archived_at": _dt.datetime.now().isoformat(
+                            timespec="seconds"),
+                    },
+                    file_obj,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+        except OSError:
+            pass
+        self._creating_named_export = True
+        try:
+            self._refresh_analysis_combo(
+                select_data=self._archive_key(name))
+        finally:
+            self._creating_named_export = False
+        return True
+
     def _ensure_terrain_group(self, analysis_number: str):
         """グループが None またはC++オブジェクト削除済みであれば再作成する。"""
         try:
@@ -6272,7 +7277,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
     def _create_terrain_group(self, analysis_number: str):
         """QGIS レイヤパネルに解析グループを作成する（折り畳み状態）"""
         root = QgsProject.instance().layerTreeRoot()
-        group = root.insertGroup(0, f"Run {analysis_number}")
+        group = root.insertGroup(0, f"Run {self._run_label(analysis_number)}")
         group.setExpanded(False)
         group.setCustomProperty(self._GROUP_PROP, "1")
         self._terrain_layer_group = group
@@ -6323,6 +7328,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         except Exception:  # nosec B110
             pass
         self._terrain_layer_group = None
+        self._editing_named_export = False
+        self._named_export_key = None
+        self._named_export_layers = {}
         proj = QgsProject.instance()
         for lid in layer_ids:
             try:
@@ -6373,6 +7381,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             _ctx["project_changed"] = True
             _ctx["worker"].cancel()
         self._terrain_layer_group = None
+        self._editing_named_export = False
+        self._named_export_key = None
+        self._named_export_layers = {}
+        self._active_analysis_key = None
         self._loaded_terrain_layers = {}
         self._orig_base_opacity.clear()
         self._reset_load_buttons()
@@ -6390,16 +7402,116 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.cmbAnalysisNumber.setCurrentIndex(0)
         self._refresh_analysis_combo(select_latest=False, gc_cache=False)
 
+    def _on_analysis_combo_activated(self, index):
+        """同じNamed Exportを再選択した場合も、削除済みなら再読込を確認する。"""
+        del index
+        key = self.cmbAnalysisNumber.currentData()
+        if (self._archive_name(key) is not None
+                and not getattr(self, "_creating_named_export", False)
+                and self._named_export_group(key) is None):
+            self._on_analysis_number_changed(
+                self.cmbAnalysisNumber.currentIndex())
+
+    def _run_display_snapshot_data(self):
+        """解析番号を見ているときの表示の設定（Named Export へ切り替える前に控える）。"""
+        return {
+            "filter_wetland": self._filter_state.get("wetland", "off"),
+            "filter_flow": self._filter_state.get("flow", "off"),
+            "filter_tc": getattr(self, "_filter_state_tc", "off"),
+            "buffer_flow": self._flow_buffer_state,
+            "buffer_tc": self._flow_buffer_state_tc,
+            "cycle_state": self._capture_terrain_display_state(),
+            "opacity": {key: self._opacity_spinbox(key).value() for key in self._BTN_LABELS},
+        }
+
+    def _apply_display_controls(self, data):
+        """表示の設定（Filter・Buffer・不透明度）をボタンに戻し、表示するファイルの状態を返す。"""
+        data = data or {}
+        for key in ("wetland", "flow"):
+            value = data.get(f"filter_{key}")
+            if value in ("off", "low", "mid"):
+                self._filter_state[key] = value
+        if data.get("filter_tc") in ("off", "low", "mid"):
+            self._filter_state_tc = data["filter_tc"]
+        if data.get("buffer_flow") in ("off", "weak", "strong"):
+            self._flow_buffer_state = data["buffer_flow"]
+        if data.get("buffer_tc") in ("off", "weak", "strong"):
+            self._flow_buffer_state_tc = data["buffer_tc"]
+        for key, value in (data.get("opacity") or {}).items():
+            if key in self._BTN_LABELS:
+                spin = self._opacity_spinbox(key)
+                with QSignalBlocker(spin):
+                    spin.setValue(int(value))
+        self.btnFilterWetland.setText(self._filter_state.get("wetland", "off"))
+        self._sync_flow_aux_controls()
+        state = {}
+        for key, value in (data.get("cycle_state") or {}).items():
+            try:
+                if key in self._BTN_LABELS and int(value) >= 0:
+                    state[key] = int(value)
+            except (TypeError, ValueError):
+                continue
+        return state
+
     def _on_analysis_number_changed(self, _index):
-        """解析番号コンボ変更時: 現在の表示状態を保ったまま対象解析へ切り替える。"""
-        display_state = self._capture_terrain_display_state()
-        self._unload_terrain_group(reset_controls=False)
+        """解析RunまたはNamed Exportへ表示・編集対象を切り替える。"""
         analysis_number = self.cmbAnalysisNumber.currentData()
-        if analysis_number:
+        export_name = self._archive_name(analysis_number)
+        group = None
+        if (export_name is not None
+                and not getattr(self, "_creating_named_export", False)):
+            group = self._named_export_group(analysis_number)
+            if group is None and not self._confirm_named_export_load(export_name):
+                previous = getattr(self, "_active_analysis_key", None)
+                with QSignalBlocker(self.cmbAnalysisNumber):
+                    previous_index = self.cmbAnalysisNumber.findData(previous)
+                    self.cmbAnalysisNumber.setCurrentIndex(
+                        previous_index if previous_index >= 0 else 0)
+                return
+
+        # Named Export は自分の設定だけで見せ、解析番号の設定を引き継がない・引き継がせない。
+        # 解析番号から Named Export へ移る前に、解析番号の設定を控えておく。
+        previous = getattr(self, "_active_analysis_key", None)
+        previous_named = self._archive_name(previous) is not None
+        display_state = self._capture_terrain_display_state()
+        if previous and not previous_named and export_name is not None:
+            self._run_display_snapshot = self._run_display_snapshot_data()
+        self._unload_terrain_group(reset_controls=False)
+        if export_name is not None:
+            if getattr(self, "_creating_named_export", False):
+                self._reset_load_buttons()
+                return
+            if group is None:
+                group = self._export_run_group(
+                    analysis_number, export_name, write_styles=False)
+            if group is not None:
+                self._bind_named_export_group(analysis_number, group)
+            else:
+                self._reset_load_buttons()
+                self._active_analysis_key = None
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Load Named Export",
+                    f"Could not load '{export_name}' into Layers.",
+                )
+        elif analysis_number:
+            self.btnExport.setEnabled(True)
+            self.btnExport.setToolTip(
+                "Move this run to a named export and add it to the project")
+            if previous_named:
+                # Named Export から戻った: Named Export を選ぶ前の解析番号の設定に戻す。
+                # Named Export のボタンのオン・オフを残さないよう、いったん全部切る
+                self._reset_load_buttons()
+                display_state = self._apply_display_controls(
+                    getattr(self, "_run_display_snapshot", None))
             self._create_terrain_group(analysis_number)
             self._restore_terrain_display_state(display_state)
+            self._active_analysis_key = analysis_number
         else:
+            self.btnExport.setEnabled(True)
+            self.btnExport.setToolTip("Select an analysis run to export")
             self._reset_load_buttons()
+            self._active_analysis_key = None
         self._update_analysis_condition_label(analysis_number)
         # ロック中は新しい解析範囲へ更新し、現在の表示が範囲外なら移動
         if self._map_locked:
@@ -7504,17 +8616,52 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self._end_cs_map_export()
 
     def _on_export_clicked(self):
-        """選択中の解析番号の全レイヤー（現在表示中かどうかを問わない）を、
-        プラグイン管理下（_GROUP_PROP付きグループ）から独立した永続グループ
-        として書き出す。解析の切替やプラグイン終了で消えない、プラグインを
-        開かずに書類作成等で参照できる実レイヤーにするためのもの。"""
-        analysis_number = self.cmbAnalysisNumber.currentData()
-        if not analysis_number:
+        """Export to Project。
+
+        解析番号を選んでいるときは名前を付け、解析フォルダを
+        archive/<名前>/ へ移してから、その名前のグループとして書き出す。
+        archive を選んでいるときは移動せず、保存済みスタイルを変えずに
+        同じグループをもう一度プロジェクトへ追加する。
+        """
+        key = self.cmbAnalysisNumber.currentData()
+        if not key:
             self._set_load_status("Select an analysis run to export.")
             return
+        name = self._archive_name(key)
+        if name is None:
+            _legacy_names = [g.name() for g in self._legacy_export_groups().get(key, [])]
+            name = self._ask_archive_name(f"Forestry Operations Lite - {key}", _legacy_names)
+            if not name:
+                return
+            self._pending_named_export_display = self._current_display_state_data()
+            if not self._archive_run(key, name):
+                self._pending_named_export_display = None
+                return
+            group = self._export_run_group(
+                self._archive_key(name), name, write_styles=True)
+            if group is not None:
+                self._bind_named_export_group(self._archive_key(name), group)
+            self._pending_named_export_display = None
+            self._remove_moved_run_folder(key, self._archive_key(name))
+            return
+        return
+
+    def _export_run_group(self, analysis_number, group_name, write_styles=True):
+        """解析結果を、プラグイン管理外の永続グループとして書き出す。
+
+        analysis_number は通常の解析番号または archive/<名前>。
+        write_styles=False では archive 内の QML と既存バッファを変更しない。
+        """
         out_dir = self._terrain_output_dir()
         proj = QgsProject.instance()
         root = proj.layerTreeRoot()
+        info = self._named_export_info(analysis_number)
+        saved_display = (info.get("display", {})
+                         if isinstance(info.get("display"), dict) else {})
+        display = (getattr(self, "_pending_named_export_display", None)
+                   if write_styles else saved_display)
+        if not isinstance(display, dict):
+            display = self._current_display_state_data()
         # キーごとに現在表示中のレイヤー名を集めておき、エクスポート先の
         # 表示ON/OFFへ引き継ぐ（flow/integrated等、キー内に複数ファイルが
         # あるものは「今表示中の1件」だけがONの対象になる）。
@@ -7524,10 +8671,19 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 lyr0 = proj.mapLayer(lid)
                 if lyr0 is not None:
                     visible_labels.setdefault(key, set()).add(lyr0.name())
-        group_name = f"Forestry Operations Lite - {analysis_number}"
-        # 同じ解析番号を再エクスポートしても前回分は消さない（重複エクスポートは許容する）。
         group = root.insertGroup(0, group_name)
         group.setExpanded(False)
+        group.setCustomProperty(self._ARCHIVE_GROUP_PROP, analysis_number)
+        group.setCustomProperty(
+            "fop_filter_wetland", display.get("filter_wetland", "off"))
+        group.setCustomProperty(
+            "fop_filter_flow", display.get("filter_flow", "off"))
+        group.setCustomProperty(
+            "fop_filter_tc", display.get("filter_tc", "off"))
+        group.setCustomProperty(
+            "fop_buffer_flow", display.get("buffer_flow", "off"))
+        group.setCustomProperty(
+            "fop_buffer_tc", display.get("buffer_tc", "off"))
         added = 0
         style_fail = 0
         buffer_errors = []
@@ -7537,7 +8693,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         for key in sorted(self._TERRAIN_PATTERNS,
                           key=lambda k: self._KEY_RANK.get(k, 0), reverse=True):
             patterns = self._TERRAIN_PATTERNS[key]
-            for pat in patterns:
+            for pattern_index, pat in enumerate(patterns):
                 color_name, label, kind, ext = pat[0], pat[1], pat[2], pat[3]
                 file_base = pat[4] if len(pat) > 4 else color_name
                 path = os.path.join(out_dir, analysis_number, f"{file_base}{ext}")
@@ -7548,7 +8704,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 if not lyr.isValid():
                     continue
                 opacity = self._opacity_spinbox(key).value() / 100.0
-                if kind == "raster":
+                if not write_styles:
+                    # archive の再追加では隣の QML を QGIS に読み込ませ、
+                    # 利用者が保存したスタイルと不透明度をそのまま使う。
+                    pass
+                elif kind == "raster":
                     if color_name == "hillshade":
                         self._apply_hillshade_style(lyr)
                     else:
@@ -7566,19 +8726,30 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 lyr.emitStyleChanged()
                 # 適用済みスタイルを .qml サイドカーへ保存。プロジェクトを
                 # またいでも（他PC・他ソフト）生ファイルに配色が付いてくる。
-                try:
-                    _qml = os.path.splitext(path)[0] + ".qml"
-                    _msg, _ok = lyr.saveNamedStyle(_qml)
-                    if not _ok:
+                if write_styles:
+                    try:
+                        qml_path = os.path.splitext(path)[0] + ".qml"
+                        _message, ok = lyr.saveNamedStyle(qml_path)
+                        if not ok:
+                            style_fail += 1
+                    except Exception:
                         style_fail += 1
-                except Exception:
-                    style_fail += 1
                 proj.addMapLayer(lyr, False)
-                is_visible = label in visible_labels.get(key, set())
-                flow_buffer_state = (
-                    self._flow_buffer_state_for_base(color_name)
-                    if key == "flow" and kind == "raster" else "off"
+                saved_cycle = display.get("cycle_state", {})
+                is_visible = (
+                    saved_cycle.get(key, -1) == pattern_index
+                    if isinstance(saved_cycle, dict)
+                    else label in visible_labels.get(key, set())
                 )
+                if key == "flow" and kind == "raster":
+                    flow_buffer_state = (
+                        display.get("buffer_tc", "off") if color_name == "tc"
+                        else display.get("buffer_flow", "off")
+                    )
+                    if flow_buffer_state not in ("off", "weak", "strong"):
+                        flow_buffer_state = "off"
+                else:
+                    flow_buffer_state = "off"
                 parent_group = group
                 if key == "flow" and kind == "raster" and flow_buffer_state != "off":
                     parent_group = group.addGroup(label)
@@ -7600,38 +8771,45 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                         analysis_number,
                         f"{file_base}_buffer_{buffer_state}.tif",
                     )
-                    try:
-                        buffer_sigma = self._flow_buffer_sigma(color_name, buffer_state)
-                        ok = self._write_flow_buffer_raster(
-                            path, buffer_path, buffer_sigma
-                        )
-                    except Exception as e:
-                        ok = False
-                        buffer_errors.append(f"{label}: {e}")
-                    if not ok:
-                        if not buffer_errors or not buffer_errors[-1].startswith(label):
-                            buffer_errors.append(label)
+                    if write_styles:
+                        try:
+                            buffer_sigma = self._flow_buffer_sigma(
+                                color_name, buffer_state)
+                            ok = self._write_flow_buffer_raster(
+                                path, buffer_path, buffer_sigma)
+                        except Exception as exc:
+                            ok = False
+                            buffer_errors.append(f"{label}: {exc}")
+                        if not ok:
+                            if (not buffer_errors
+                                    or not buffer_errors[-1].startswith(label)):
+                                buffer_errors.append(label)
+                            continue
+                    elif not os.path.exists(buffer_path):
                         continue
 
                     buffer_lyr = QgsRasterLayer(buffer_path, f"{label} buffer")
                     if not buffer_lyr.isValid():
                         buffer_errors.append(f"{label}: invalid buffer layer")
                         continue
-                    self._apply_raster_color(
-                        buffer_lyr, color_name, self._flow_filter_state(color_name)
-                    )
-                    buffer_opacity = self._FLOW_BUFFER_OPACITY[buffer_state]
-                    buffer_lyr.renderer().setOpacity(buffer_opacity)
-                    buffer_lyr.setOpacity(buffer_opacity)
-                    buffer_lyr.triggerRepaint()
-                    buffer_lyr.emitStyleChanged()
-                    try:
-                        _bqml = os.path.splitext(buffer_path)[0] + ".qml"
-                        _bmsg, _bok = buffer_lyr.saveNamedStyle(_bqml)
-                        if not _bok:
+                    if write_styles:
+                        self._apply_raster_color(
+                            buffer_lyr,
+                            color_name,
+                            self._flow_filter_state(color_name),
+                        )
+                        buffer_opacity = self._FLOW_BUFFER_OPACITY[buffer_state]
+                        buffer_lyr.renderer().setOpacity(buffer_opacity)
+                        buffer_lyr.setOpacity(buffer_opacity)
+                        buffer_lyr.triggerRepaint()
+                        buffer_lyr.emitStyleChanged()
+                        try:
+                            buffer_qml = os.path.splitext(buffer_path)[0] + ".qml"
+                            _message, ok = buffer_lyr.saveNamedStyle(buffer_qml)
+                            if not ok:
+                                style_fail += 1
+                        except Exception:
                             style_fail += 1
-                    except Exception:
-                        style_fail += 1
                     proj.addMapLayer(buffer_lyr, False)
                     buffer_node = parent_group.addLayer(buffer_lyr)
                     if buffer_node:
@@ -7640,14 +8818,22 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     added += 1
         if added == 0:
             root.removeChildNode(group)
-            self._set_load_status(f"No output files found for {analysis_number}.")
+            if write_styles:
+                self._set_load_status(
+                    f"No output files found for {analysis_number}.")
+            return None
         else:
             msg = f"Exported {added} layer(s) to '{group.name()}'."
             if buffer_errors:
                 msg += f" Buffer skipped: {len(buffer_errors)}."
             if style_fail:
                 msg += f" ({style_fail} style file(s) not written.)"
-            self._set_load_status(msg)
+            if write_styles:
+                self._set_load_status(msg)
+            self._update_named_export_info(
+                analysis_number, name=group_name, display=display)
+            self._update_archive_combo_availability(clear_current=True)
+            return group
 
     def _set_load_status(self, text):
         """1行目の状態の欄に出す（長い文は端が切れるので、全文はツールチップに）。"""
@@ -7981,6 +9167,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             _flush_provider_connections()
             QtWidgets.QApplication.processEvents()
 
+        try:
+            loader._horizontal_srs(loader.crs_wkt)
+        except Exception as e:
+            self.lblAnalysisStatus.setVisible(True)
+            self.lblAnalysisStatus.setText(f"DEM CRS error: {e}")
+            return
+
         # プレビュー可視範囲でクリップ（キャンバスCRS → DEM CRS に変換してから渡す）
         try:
             ext = self.preview_canvas.extent()
@@ -7999,12 +9192,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             )
             dem = loader.clip_to_extent(ext.xMinimum(), ext.yMinimum(),
                                         ext.xMaximum(), ext.yMaximum())
-        except ValueError:
-            # キャンバスがDEMと完全に重ならない
+        except ValueError as e:
             self.lblAnalysisStatus.setVisible(True)
-            self.lblAnalysisStatus.setText(
-                "No DEM data in the analysis range. Adjust the view."
-            )
+            self.lblAnalysisStatus.setText(f"DEM preparation error: {e}")
             return
         except Exception as e:
             self.lblAnalysisStatus.setText(f"Clip failed: {e}")
@@ -8022,14 +9212,21 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 return
             self._partial_outside_warned = True
 
-        # 解像度チェック：閾値より細かければ自動リサンプル（解除不可）
-        if dem.cell_size < _RESAMPLE_THRESHOLD:
-            self.lblAnalysisStatus.setVisible(True)
-            self.lblAnalysisStatus.setText(
-                f"Resampling {dem.cell_size:.3f}m → {_RESAMPLE_TARGET}m ..."
-            )
-            QtWidgets.QApplication.processEvents()
-            dem = _resample_dem(dem, _RESAMPLE_TARGET)
+        # Finalise the DEM grid before aligning DSM or removing previous runs.
+        self.lblAnalysisStatus.setVisible(True)
+        self.lblAnalysisStatus.setText("Preparing DEM coordinate system and analysis grid...")
+        QtWidgets.QApplication.processEvents()
+        try:
+            dem = dem.prepare_for_analysis()
+            if dem.cell_size < _RESAMPLE_THRESHOLD:
+                dem = _resample_dem(dem, _RESAMPLE_TARGET)
+        except Exception as e:
+            self.lblAnalysisStatus.setText(f"DEM preparation error: {e}")
+            return
+        _analysis_crs = _QgsCRS()
+        _analysis_crs.createFromWkt(dem.crs_wkt)
+        self.lblAnalysisStatus.setText(
+            f"Analysis DEM: {_analysis_crs.authid()} / {dem.cell_size:.3f} m")
 
         # Resolve DSM errors before overwrite cleanup so Cancel preserves existing runs.
         _dsm_data, _dsm_info = None, {}
@@ -8192,6 +9389,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             "velocity_coef": self.spinVelocityCoef.value(),
             "plugin_version": self._plugin_version(),
             "dsm_info": _dsm_info,
+            "dem_preparation": dem.preparation,
         }
         _dem_path_for_params = (
             getattr(self, "_dem_actual_path", None) or getattr(self, "_dem_path", ""))
@@ -8282,6 +9480,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 info.update({
                     "status": "aligned",
                     "resampling": resampling,
+                    "target_grid": {
+                        "geotransform": list(dem.gt),
+                        "crs_wkt": dem.crs_wkt,
+                        "shape": list(dem.data.shape),
+                    },
                     "source_grid": {
                         "geotransform": list(dsm_loader.gt),
                         "crs_wkt": dsm_loader.crs_wkt,
@@ -8403,6 +9606,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         _params = {
             "dem_path": ctx["dem_path"],
             "analyses": [k for k in ("stability", "valley", "flow") if _p[k]],
+            "dem_preparation": _p.get("dem_preparation", {}),
         }
         if _p["flow"]:
             _params.update({k: _p[k] for k in (
