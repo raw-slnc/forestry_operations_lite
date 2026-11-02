@@ -44,6 +44,8 @@ Selecting a Named Export that is already in the Layers panel connects FOL direct
 
 If the named group has been removed from Layers, selecting its name again asks **Load it permanently into Layers?** **Yes** reloads the saved layers and styles; **No** leaves the current selection and display unchanged. Groups exported by earlier versions (named `Forestry Operations Lite - <run>` and referring to the run folder) are left as they are. When that run is exported with Export to Project, those earlier groups are removed from the project and replaced by the new named group. If the project is then closed without saving, the plugin reconnects those groups to the Named Export the next time its window opens and shows a notice. Save the project to keep the new locations.
 
+The folder also holds the analysis DEM (`elev_relief.tif`, shown as Elevation Background), so a Named Export stays complete after its source run or the DEM cache is deleted, and its folder can be moved to another project or PC. Runs and Named Exports made with the QGIS 3 version of FOL have no Hillshade or Elevation Background; FOL creates them in the background from the analysis DEM.
+
 The internal storage path is `archive/<name>/`; **Named Exports** is the user-facing name.
 
 ---
@@ -318,6 +320,8 @@ CS立体図は長野県林業総合センターが考案した地形表現図法
 レイヤーパネルに存在するNamed Exportを選ぶと、FOLは一時的な `Run <名前>` の複製を作らず、その実レイヤーへ直接接続します。FOLで変更した表示、不透明度、Filter、Flow Bufferは命名レイヤーへ適用され、保持されます。Named Export は常に自分の表示の設定を使います。解析番号の設定を引き継がず、解析番号に戻ると、Named Export を選ぶ前の解析番号の設定に戻ります。QGISスタイルは隣接する`.qml`へ保存し、有効なFlow Bufferは実体のあるGeoTIFFとして保存します。
 
 命名グループをレイヤーパネルから削除した後、その名前を再び選ぶと **Load it permanently into Layers?** と確認します。**Yes** の場合だけ保存済みレイヤーとスタイルを再読み込みし、**No** の場合は現在の選択と表示を変えません。以前の版で書き出したグループ（`Forestry Operations Lite - <解析番号>` で、解析番号のフォルダを参照しているもの）は、そのまま使えます。その解析番号を Export to Project で書き出すと、以前のグループはプロジェクトから外し、名前を付けたグループに置き換えます。そのあと保存せずにプロジェクトを閉じた場合は、次にプラグインの窓を開いたときに Named Export へ付け直し、お知らせを出します。新しい場所を残すため、プロジェクトを保存してください。
+
+フォルダには解析のDEM（`elev_relief.tif`、Elevation Backgroundとして表示）も入るので、元の解析やDEMキャッシュを削除してもNamed Exportはそろったまま使え、フォルダを別のプロジェクトや別のPCへ移せます。QGIS 3 版の FOL で作った解析番号と Named Export には Hillshade と Elevation Background がないので、FOL が解析のDEMからバックグラウンドで作ります。
 
 内部保存先は `archive/<名前>/` です。ユーザー向けの名称は **Named Exports** です。
 

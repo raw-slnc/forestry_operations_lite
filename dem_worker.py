@@ -561,6 +561,43 @@ def fetch_nagano_dchm_dsm(ctx, codes, dchm_out_dir, dsm_out_dir, dem_tif_path):
             "n_dchm": len(dchm_paths)}
 
 
+# ── 背景地形の作り直し（3.x の解析に無い Hillshade / Elevation Background）──
+
+def create_background_terrain(ctx, folder, reference_path, dem_path, missing):
+    """解析の DEM を reference_path（解析のグリッド）に合わせて読み、
+    missing（"hillshade" / "elev_relief"）を folder に作る。戻り値: folder"""
+    from .terrain import analysis as ta
+    from .terrain import result_writer as rw
+    from .terrain.dem_loader import DEMLoader
+
+    ctx.report("Reading the DEM for Hillshade / Elevation Background...")
+    try:
+        reference = DEMLoader().load(reference_path)
+        source = DEMLoader().open_metadata(dem_path)
+        ctx.check()
+        elevation, _method = source.read_aligned_to(reference)
+    except DemFetchCancelled:
+        raise
+    except Exception as exc:
+        raise DemFetchError(
+            f"Hillshade / Elevation Background could not be created: {exc}")
+    ctx.check()
+    if "hillshade" in missing:
+        ctx.report("Creating Hillshade...")
+        hillshade = ta.compute_hillshade(elevation, reference.cell_size)
+        ctx.check()
+        ctx.created_files.append(os.path.join(folder, "hillshade.tif"))
+        rw.save_raster(hillshade, reference.gt, reference.crs_wkt, folder,
+                       "hillshade", overwrite=True)
+    if "elev_relief" in missing:
+        ctx.check()
+        ctx.report("Creating Elevation Background...")
+        ctx.created_files.append(os.path.join(folder, "elev_relief.tif"))
+        rw.save_raster(elevation.astype(np.float32), reference.gt,
+                       reference.crs_wkt, folder, "elev_relief", overwrite=True)
+    return folder
+
+
 # ── 書き出し（CS Map / VS → WODMI ZIP）──────────────────────────────────────
 
 def cs_map_compute(ctx, src_path, src_loader, resample, resample_threshold, resample_target):

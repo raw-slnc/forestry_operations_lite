@@ -425,7 +425,7 @@ USDA NRCS National Engineering Handbook, Part 630.</p>
   <tr><td><code>tc.tif</code></td><td>Time load — time of concentration Tc [h]</td></tr>
   <tr><td><code>cs_map/cs_map*.tif</code></td><td>Standalone CS MAP export from the selected or fetched DEM raster</td></tr>
   <tr><td><code>zip/FOL_*-all.zip</code></td><td>Export for WebODM Importer (DTM / DSM / Ortho; <code>DATA_SOURCES.txt</code> for Netherlands / France / New Zealand)</td></tr>
-  <tr><td><code>archive/&lt;name&gt;/</code></td><td>Internal storage for Named Exports, including <code>fol_archive.json</code>, saved <code>.qml</code> styles, and enabled Flow Buffer GeoTIFFs</td></tr>
+  <tr><td><code>archive/&lt;name&gt;/</code></td><td>Internal storage for Named Exports, including <code>fol_archive.json</code>, saved <code>.qml</code> styles, enabled Flow Buffer GeoTIFFs, and the analysis DEM (<code>elev_relief.tif</code>)</td></tr>
 </table>
 <div class="note">
   Active analysis runs are saved in subfolders whose names combine a three-digit run sequence with the number of output files: for example, <code>0017</code> is sequence 001 with 7 files, and <code>0030+2</code> is sequence 003 with 12 files. Runs are never deleted automatically &mdash; an overwrite run replaces its own sequence, otherwise the sequence increases. Deleting a middle sequence leaves it unused, while deleting the highest sequence frees it for reuse. <strong>Export to Project</strong> moves the selected active run to <code>archive/&lt;name&gt;/</code>; it is then managed under <strong>Named Exports</strong> and is not replaced by later overwrite analyses. Deleting an active run folder also lets the DEM/DSM cache cleanup free files in <code>dem/</code>, <code>vs_lp_grid/</code>, and <code>remote_dem/</code> that no remaining run references and that are not currently loaded. To keep the output folder and its cache from growing without bound, delete active run folders you no longer need directly in the file manager; cleanup runs when the plugin next refreshes the analysis list.
@@ -497,13 +497,22 @@ adds the analysis display layers found for that run to QGIS as a persistent grou
 the same name. The current visibility, opacity, Filter, and Flow Buffer settings become
 the starting display state. QGIS styles are saved as adjacent <code>.qml</code> files;
 enabled Flow Buffers are materialised as real GeoTIFFs. The layers keep the same stacking
-order as the analysis display.</p>
+order as the analysis display. The folder also holds the analysis DEM
+(<code>elev_relief.tif</code>, shown as Elevation Background), so a Named Export stays complete
+after its source run or the DEM cache is deleted, and its folder can be moved to another
+project or PC.</p>
 <p>Selecting a Named Export already present in the Layers panel connects FOL directly to
 those real project layers. It does not create a temporary <code>Run &lt;name&gt;</code>
 copy. Visibility, opacity, Filter, and Flow Buffer changes made through FOL are applied
 to the named layers and retained. No second export is needed. A Named Export always uses its own display settings: it does not take over the settings of the analysis runs, and switching back to a run restores the run settings used before the Named Export was selected.</p>
 <div class="note">
   If the named group has been removed from Layers, selecting its name again asks <strong>Load it permanently into Layers?</strong> <strong>Yes</strong> reloads the saved layers and styles; <strong>No</strong> leaves the current selection and display unchanged. Groups exported by earlier versions (named <code>Forestry Operations Lite - &lt;run&gt;</code> and referring to the run folder) are left as they are. When that run is exported with Export to Project, those earlier groups are removed from the project and replaced by the new named group. If the project is then closed without saving, the plugin reconnects those groups to the Named Export the next time its window opens and shows a notice. Save the project to keep the new locations. The internal storage path is <code>archive/&lt;name&gt;/</code>; <strong>Named Exports</strong> is the user-facing name.
+</div>
+<div class="note">
+  Runs and Named Exports made with the QGIS 3 version of FOL have no Hillshade or Elevation Background. FOL creates them in the background when you show them for a run or select the Named Export, from the analysis DEM on the analysis grid, and adds them to the named group with the plugin's colours. A Named Export uses its own <code>elev_relief.tif</code>; one exported before it held a DEM uses the DEM recorded for the analysis, and if that file is no longer found, the two layers cannot be created and a message says so.
+</div>
+<div class="note">
+  <strong>Renaming a Named Export.</strong> Remove its group from the Layers panel, save the project, and close QGIS. While QGIS is closed, rename the folder <code>archive/&lt;name&gt;/</code>. Then open the project, select the new name in the analysis run selector, and answer <strong>Yes</strong> to <strong>Load it permanently into Layers?</strong> to load it again. The folder name is used as the group name.
 </div>
 </div>
 
@@ -935,7 +944,7 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
   <tr><td><code>tc.tif</code></td><td>Time load — 流達時間 Tc [h]</td></tr>
   <tr><td><code>cs_map/cs_map*.tif</code></td><td>選択中または取得済みDEMラスタから作成する単独CS MAP出力</td></tr>
   <tr><td><code>zip/FOL_*-all.zip</code></td><td>Export for WebODM Importer の書き出し（DTM / DSM / Ortho。オランダ・フランス・ニュージーランドは <code>DATA_SOURCES.txt</code> 付き）</td></tr>
-  <tr><td><code>archive/&lt;名前&gt;/</code></td><td>Named Exportsの内部保存先。<code>fol_archive.json</code>、保存済み<code>.qml</code>スタイル、有効なFlow BufferのGeoTIFFを含む</td></tr>
+  <tr><td><code>archive/&lt;名前&gt;/</code></td><td>Named Exportsの内部保存先。<code>fol_archive.json</code>、保存済み<code>.qml</code>スタイル、有効なFlow BufferのGeoTIFF、解析のDEM（<code>elev_relief.tif</code>）を含む</td></tr>
 </table>
 <div class="note">
   実行中の解析結果は、3桁の解析シーケンスと出力ファイル数を組み合わせた名前のサブフォルダに保存します。例えば<code>0017</code>はシーケンス001・7ファイル、<code>0030+2</code>はシーケンス003・12ファイルです。解析結果は自動削除せず、上書き解析は同じシーケンスを差し替え、それ以外はシーケンスが増えます。途中のシーケンスを削除しても再使用せず、最大シーケンスを削除した場合は次回その番号を再利用します。<strong>Export to Project</strong> は選択した解析Runを <code>archive/&lt;名前&gt;/</code> へ移し、以後は <strong>Named Exports</strong> で管理します。後から行う上書き解析では置き換わりません。実行中の解析フォルダを削除すると、残る解析から参照されず、現在読み込み中でもない<code>dem/</code>、<code>vs_lp_grid/</code>、<code>remote_dem/</code>内のファイルをDEM/DSMキャッシュ整理が解放できるようになります。出力フォルダとキャッシュが際限なく肥大しないよう、不要な解析フォルダはファイルマネージャで直接削除してください。キャッシュ整理はプラグインが次に解析一覧を更新したときに実行します。
@@ -1000,12 +1009,19 @@ Named Exportでは解析ファイルと同じ場所にGeoTIFFとして保存し�
 <strong>Named Exports</strong> へ移し、そのRunにある解析表示用レイヤーを同じ名前の永続グループとして
 QGISへ追加します。現在の表示状態、不透明度、Filter、Flow Bufferが初期表示として引き継がれます。
 QGISスタイルは隣接する<code>.qml</code>へ保存し、有効なFlow Bufferは実体のあるGeoTIFFとして保存します。
-積み順は解析表示と同じです。</p>
+積み順は解析表示と同じです。フォルダには解析のDEM（<code>elev_relief.tif</code>、Elevation Backgroundとして表示）も入るので、
+元の解析やDEMキャッシュを削除してもNamed Exportはそろったまま使え、フォルダを別のプロジェクトや別のPCへ移せます。</p>
 <p>レイヤーパネルに存在するNamed Exportを選ぶと、FOLは一時的な<code>Run &lt;名前&gt;</code>の複製を作らず、
 その実レイヤーへ直接接続します。FOLで変更した表示、不透明度、Filter、Flow Bufferは命名レイヤーへ
 適用され、保持されます。再度書き出す必要はありません。Named Export は常に自分の表示の設定を使います。解析番号の設定を引き継がず、解析番号に戻ると、Named Export を選ぶ前の解析番号の設定に戻ります。</p>
 <div class="note">
   命名グループをレイヤーパネルから削除した後、その名前を再び選ぶと <strong>Load it permanently into Layers?</strong> と確認します。<strong>Yes</strong> の場合だけ保存済みレイヤーとスタイルを再読み込みし、<strong>No</strong> の場合は現在の選択と表示を変えません。以前の版で書き出したグループ（<code>Forestry Operations Lite - &lt;解析番号&gt;</code> で、解析番号のフォルダを参照しているもの）は、そのまま使えます。その解析番号を Export to Project で書き出すと、以前のグループはプロジェクトから外し、名前を付けたグループに置き換えます。そのあと保存せずにプロジェクトを閉じた場合は、次にプラグインの窓を開いたときに Named Export へ付け直し、お知らせを出します。新しい場所を残すため、プロジェクトを保存してください。内部保存先は <code>archive/&lt;名前&gt;/</code> で、ユーザー向けの名称は <strong>Named Exports</strong> です。
+</div>
+<div class="note">
+  QGIS 3 版の FOL で作った解析番号と Named Export には、Hillshade と Elevation Background がありません。解析番号でこの2つを表示するとき、または Named Export を選んだときに、解析のDEMから解析と同じグリッドでバックグラウンドで作り、命名グループにはプラグインの配色で加えます。Named Export は自分の <code>elev_relief.tif</code> を使います。DEM を持つ前に書き出した Named Export は、解析の記録にある DEM を使い、そのファイルが見つからないときは2つのレイヤーを作れないことを知らせます。
+</div>
+<div class="note">
+  <strong>Named Export の名前を変えるとき</strong> レイヤーパネルからそのグループを一旦削除し、プロジェクトを保存して QGIS を閉じます。QGIS を閉じている間に <code>archive/&lt;名前&gt;/</code> のフォルダ名を変えます。プロジェクトを開き、解析番号の選択欄で新しい名前を選んで、<strong>Load it permanently into Layers?</strong> に <strong>Yes</strong> と答えると読み直せます。グループ名にはフォルダ名が使われます。
 </div>
 </div>
 

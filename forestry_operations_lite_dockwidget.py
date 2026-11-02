@@ -1461,7 +1461,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._analysis_ctx = None     # その実行の後処理に要る値（dict）
         self._dem_worker = None       # 実行中の DemJobWorker（DEM 取得）
         self._dem_job_ctx = None      # その取得の後処理に要る値（dict）
-        self._side_jobs = {}          # 書き出しのワーカー {name: ctx}（CS Map / VS）
+        self._side_jobs = {}          # 書き出し等のワーカー {name: ctx}（CS Map / VS / 背景地形）
 
         self._syncing = False
         self._initializing = True     # 起動完了まで preview→main 同期をブロック
@@ -3156,8 +3156,47 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             "terrain_project_update_depth": getattr(self, "_terrain_project_update_depth", None),
         }
 
+    # 診断ログは止めている（1.2.0〜1.3.0 では出力フォルダへ上限なく書き足していた）。
+    _PREVIEW_DEBUG_LOG_ENABLED = False
+
+    def _remove_preview_debug_logs(self):
+        """以前の版が出力フォルダに残した preview_debug.log を消す（そのとき開いている
+        プロジェクトの出力フォルダと、未保存時に使うフォルダ）。
+
+        QGIS を開いたまま更新すると、QGIS を閉じるまで古い版のパネルが書き続ける
+        ことがある。消したら済みにせず、ログが無いと確かめられたときだけ済みにする。"""
+        settings = QSettings()
+        flag = "ForestryOperationsLite/preview_debug_log_removed"
+        if settings.value(flag, False, type=bool):
+            return
+        found = False
+        folders = [os.path.join(os.path.expanduser("~"), ".qgis",
+                                "forestry_operations_lite")]
+        home = QgsProject.instance().homePath()
+        if home:
+            folders.append(os.path.join(home, "forestry_operations_lite"))
+        for folder in folders:
+            path = os.path.join(folder, "preview_debug.log")
+            if not os.path.isfile(path):
+                continue
+            found = True
+            try:
+                os.remove(path)
+            except OSError:  # nosec B110
+                pass
+        if found:
+            # この起動中は古いパネルがまだ書くかもしれないので、済みにしない
+            type(self)._preview_debug_log_removed_this_session = True
+        elif home and not type(self)._preview_debug_log_removed_this_session:
+            # 消したのとは別の起動で、プロジェクトのフォルダにも無いと確かめられた
+            settings.setValue(flag, True)
+
+    _preview_debug_log_removed_this_session = False
+
     def _preview_debug_log(self, event, **payload):
         """Append preview diagnostics as JSONL; diagnostics must never affect UI."""
+        if not self._PREVIEW_DEBUG_LOG_ENABLED:
+            return
         try:
             import json
             from datetime import datetime
@@ -4852,6 +4891,17 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     key, out_dir, analysis_number, next_state)
             )
         else:
+            if key in self._BACKGROUND_BASES:
+                def resume(_key=key, _state=desired_state, _run=analysis_number):
+                    if (not self._editing_named_export
+                            and self.cmbAnalysisNumber.currentData() == _run):
+                        self._cycle_terrain_layer(_key, _state)
+
+                if not self._ensure_background_terrain(
+                        os.path.join(out_dir, analysis_number), resume):
+                    with QSignalBlocker(btn):
+                        btn.setChecked(False)
+                    return False
             patterns = self._terrain_display_patterns(key, out_dir, analysis_number)
             next_state = None
 
@@ -6292,6 +6342,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     def _update_out_dir_label(self):
         """出力セクションのパス表示ラベルを更新する。"""
+        self._remove_preview_debug_logs()
         if not hasattr(self, "lblOutDir"):
             return
         home = QgsProject.instance().homePath()
@@ -6481,6 +6532,30 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             _QTimer.singleShot(
                 500, lambda: self._notify_legacy_export_migration(migrated, migration_errors))
 
+    def _archive_dems_not_yet_copied(self, out_dir):
+        """elev_relief.tif がまだ無い Named Export の params.json の DEM（正規化したパス）。"""
+        import json as _json
+
+        paths = set()
+        base = os.path.join(out_dir, self._ARCHIVE_DIR)
+        try:
+            names = os.listdir(base)
+        except OSError:
+            return paths
+        for name in names:
+            folder = os.path.join(base, name)
+            if (not os.path.isdir(folder)
+                    or os.path.exists(os.path.join(folder, "elev_relief.tif"))):
+                continue
+            try:
+                with open(os.path.join(folder, "params.json"), encoding="utf-8") as f:
+                    dem_path = _json.load(f).get("dem_path", "")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if dem_path:
+                paths.add(os.path.normpath(dem_path))
+        return paths
+
     def _gc_dem_cache(self):
         """解析番号に紐づかない DEM キャッシュファイルを削除する。
         dem/、vs_lp_grid/、remote_dem/ 内のファイルのうち、いずれかの解析
@@ -6508,6 +6583,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                     referenced.add(os.path.normpath(dsm_path))
             except Exception:  # nosec B110
                 pass
+        # Named Export は自分の DEM（elev_relief.tif）を持つ。まだ写していない
+        # （3.x で解析したものの書き出し直後など）間は、元の DEM を消さない。
+        referenced.update(self._archive_dems_not_yet_copied(out_dir))
 
         # 現在ロード中のファイルも保持
         cur = getattr(self, "_dem_actual_path", None)
@@ -6759,8 +6837,191 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             },
         }
 
+    _BACKGROUND_BASES = ("hillshade", "elev_relief")
+
+    def _analysis_dem_path(self, folder):
+        """解析フォルダの params.json に残る DEM を探す。別のPCへ移したデータでも、
+        出力フォルダ内の DEM（取得したタイル等）なら今の出力フォルダから探す。"""
+        import json
+
+        try:
+            with open(os.path.join(folder, "params.json"), encoding="utf-8") as f:
+                dem_path = str(json.load(f).get("dem_path") or "")
+        except (OSError, ValueError, AttributeError):
+            return None
+        if not dem_path:
+            return None
+        if os.path.isfile(dem_path):
+            return dem_path
+        parts = dem_path.replace("\\", "/").split("/")
+        if "forestry_operations_lite" in parts:
+            tail = parts[len(parts) - parts[::-1].index("forestry_operations_lite"):]
+            candidate = os.path.join(self._terrain_output_dir(), *tail)
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
+    @staticmethod
+    def _analysis_grid_reference(folder):
+        """解析のグリッドを持つ出力（3.x でも必ず作る slope.tif を優先）。"""
+        for base in ("slope", "shc", "stability_fs", "twi", "flow_peak",
+                     "tc", "integrated_risk_index"):
+            path = os.path.join(folder, f"{base}.tif")
+            if os.path.exists(path):
+                return path
+        return None
+
+    def _ensure_background_terrain(self, folder, on_ready):
+        """3.x の解析には背景地形（Hillshade / Elevation Background）が無いので、
+        ワーカーで作り直す。
+
+        Elevation Background（elev_relief.tif）は解析のグリッドの DEM そのもの。
+        フォルダにあればヒルシェードはそこから作り、外の DEM は見ない（Named Export は
+        自分の DEM を持ち、元の解析や DEM キャッシュが消えても使える）。無いときだけ
+        params.json の DEM を解析のグリッドに合わせて読む。
+
+        揃っていれば True。作り始めたら False を返し、作り終えたら on_ready() を
+        メインスレッドで呼ぶ（呼ばれた側で、まだ同じ対象を開いているか確かめる）。"""
+        missing = [base for base in self._BACKGROUND_BASES
+                   if not os.path.exists(os.path.join(folder, f"{base}.tif"))]
+        if not missing:
+            return True
+        waiters = getattr(self, "_background_waiters", None)
+        if waiters is None:
+            waiters = self._background_waiters = []
+        if "background" in self._side_jobs:
+            # 作っている途中: 終わったら呼ぶ（別の解析なら呼ばれた側で作り直す）
+            waiters.append(on_ready)
+            self._set_load_status("Creating Hillshade / Elevation Background…")
+            return False
+        own_dem = os.path.join(folder, "elev_relief.tif")
+        if os.path.exists(own_dem):
+            reference_path = dem_path = own_dem
+        else:
+            reference_path = self._analysis_grid_reference(folder)
+            dem_path = self._analysis_dem_path(folder)
+        if reference_path is None or dem_path is None:
+            self._set_load_status(
+                "Hillshade / Elevation Background could not be created: "
+                "the DEM used for this analysis was not found.")
+            return False
+        from .dem_worker import create_background_terrain
+
+        waiters.append(on_ready)
+
+        def finish(_result, cancelled, error):
+            callbacks = list(self._background_waiters)
+            self._background_waiters.clear()
+            if cancelled:
+                self._set_load_status("")
+                return
+            if error:
+                self._set_load_status(error)
+                return
+            self._set_load_status("")
+            for callback in callbacks:
+                callback()
+
+        self._set_load_status("Creating Hillshade / Elevation Background…")
+        self._start_side_job(
+            "background",
+            lambda ctx: create_background_terrain(
+                ctx, folder, reference_path, dem_path, missing),
+            self._set_load_status,
+            finish,
+            on_abort=lambda: self._background_waiters.clear())
+        return False
+
+    def _style_background_layer(self, layer, base_name, opacity_percent):
+        """背景地形に FOL の配色・不透明度を付け、隣の QML へ保存する。"""
+        if base_name == "hillshade":
+            self._apply_hillshade_style(layer)
+        else:
+            self._apply_raster_color(layer, base_name, "off")
+        opacity = opacity_percent / 100.0
+        layer.renderer().setOpacity(opacity)
+        layer.setOpacity(opacity)
+        source = str(layer.source() or "").split("|", 1)[0]
+        try:
+            layer.saveNamedStyle(os.path.splitext(source)[0] + ".qml")
+        except Exception:  # nosec B110
+            pass
+        layer.triggerRepaint()
+        layer.emitStyleChanged()
+
+    def _ensure_named_export_background(self, key, group):
+        """3.x で書き出した Named Export の背景地形を作り直してグループへ入れる。
+        3.x はこの2層を扱わないので、ファイルか QML が無ければ 3.x 由来とみなす。"""
+        folder = os.path.join(self._terrain_output_dir(), key)
+
+        def resume():
+            # 作り終えたとき、まだ同じ Named Export を開いていればグループへ入れる
+            if self._editing_named_export and self._named_export_key == key:
+                group_now = self._terrain_layer_group
+                if group_now is not None:
+                    self._ensure_named_export_background(key, group_now)
+                    self._refresh_preview_canvas()
+
+        if not self._ensure_background_terrain(folder, resume):
+            return
+        # 不透明度は Named Export 自身の保存値（解析番号の設定は引き継がない）。
+        # 無ければ FOL の既定値。
+        info = self._named_export_info(key)
+        display = info.get("display") if isinstance(info.get("display"), dict) else {}
+        saved_opacity = (display.get("opacity")
+                         if isinstance(display.get("opacity"), dict) else {})
+        project = QgsProject.instance()
+        nodes = {}
+        for node in group.findLayers():
+            layer = node.layer()
+            if layer is None:
+                continue
+            base_name, _state, is_buffer = self._named_export_base_name(layer)
+            if is_buffer or base_name not in self._BACKGROUND_BASES:
+                continue
+            if not layer.isValid():
+                # ファイルが無くなっていた層などは外して、作り直したファイルで入れ直す
+                node.parent().removeChildNode(node)
+                project.removeMapLayer(layer.id())
+                continue
+            nodes[base_name] = node
+        changed = False
+        for base_name in self._BACKGROUND_BASES:
+            path = os.path.join(folder, f"{base_name}.tif")
+            has_qml = os.path.exists(os.path.splitext(path)[0] + ".qml")
+            try:
+                opacity_percent = int(saved_opacity.get(base_name, 60))
+            except (TypeError, ValueError):
+                opacity_percent = 60
+            node = nodes.get(base_name)
+            if node is not None:
+                if not has_qml:
+                    self._style_background_layer(node.layer(), base_name, opacity_percent)
+                    changed = True
+                continue
+            label = self._TERRAIN_PATTERNS[base_name][0][1]
+            layer = QgsRasterLayer(path, label)
+            if not layer.isValid():
+                continue
+            self._style_background_layer(layer, base_name, opacity_percent)
+            QgsProject.instance().addMapLayer(layer, False)
+            # 背景地形はグループの一番下（Elevation Background が最下位）
+            index = len(group.children())
+            relief = nodes.get("elev_relief")
+            if (base_name == "hillshade" and relief is not None
+                    and relief.parent() is group):
+                index = group.children().index(relief)
+            node = group.insertLayer(index, layer)
+            node.setExpanded(False)
+            node.setItemVisibilityChecked(False)
+            nodes[base_name] = node
+            changed = True
+        if changed:
+            QgsProject.instance().setDirty(True)
+
     def _bind_named_export_group(self, key, group):
         """既存の命名グループをFOL表示編集コントロールへ接続する。"""
+        self._ensure_named_export_background(key, group)
         self._editing_named_export = True
         self._named_export_key = key
         self._active_analysis_key = key
