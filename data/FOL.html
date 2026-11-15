@@ -89,6 +89,46 @@
   .lang-opt { cursor: pointer; color: #999; padding: 2px 3px; }
   .lang-opt.active { color: #2d5a30; font-weight: bold; }
   .lang-sep { color: #ccc; margin: 0 1px; }
+  .title-right { position: relative; display: flex; align-items: baseline; gap: 12px; white-space: nowrap; }
+  .toc-toggle {
+    font: inherit; font-size: 0.85em; color: #2d5a30; cursor: pointer;
+    background: #fff; border: 1px solid #b9d0bb; border-radius: 3px; padding: 1px 8px;
+  }
+  .toc-toggle:hover, .toc-toggle[aria-expanded="true"] { background: #eef6f0; }
+  .toc-panel {
+    position: absolute; right: 0; top: calc(100% + 8px); z-index: 500;
+    width: 360px; max-width: calc(100vw - 32px); max-height: 70vh; overflow-y: auto;
+    background: #fff; border: 1px solid #b9d0bb; border-radius: 4px;
+    box-shadow: 0 8px 24px rgba(45, 90, 48, 0.18);
+    padding: 6px 0; font-size: 0.88em; line-height: 1.5; white-space: normal;
+  }
+  .toc-panel[hidden] { display: none; }
+  .toc-panel ul { list-style: none; margin: 0; padding: 0; }
+  .toc-panel li { margin: 0; }
+  .toc-row { display: flex; align-items: flex-start; }
+  .toc-expander {
+    flex: 0 0 24px; width: 24px; padding: 3px 0; border: 0; background: none;
+    color: #4a7c4e; cursor: pointer; font-size: 0.8em; line-height: 1.9;
+  }
+  .toc-expander[aria-expanded="true"] { transform: rotate(90deg); }
+  .toc-spacer { flex: 0 0 24px; }
+  .toc-link { flex: 1; display: block; padding: 3px 12px 3px 0; color: #2d5a30; text-decoration: none; font-weight: bold; }
+  .toc-sub .toc-link { padding-left: 24px; font-weight: normal; color: #444; }
+  .toc-link:hover { background: #eef6f0; }
+  .toc-sub[hidden] { display: none; }
+  .to-top {
+    position: fixed; top: 40px; transform: translateY(-50%); z-index: 400;
+    /* 右端は EN/JP の左端、上下は目次ボタンの高さにそろえる（placeToTop で測って
+       上書き）。これは測る前の仮の位置 */
+    right: max(32px, calc(50% - 430px));
+    display: flex; align-items: center; gap: 6px;
+    font: inherit; font-size: 1em; font-weight: bold; line-height: 1.2; color: #fff; cursor: pointer;
+    background: rgba(45, 90, 48, 0.88); border: 0; border-radius: 22px; padding: 9px 22px;
+    box-shadow: 0 4px 14px rgba(45, 90, 48, 0.30);
+  }
+  .to-top .to-top-arrow { font-size: 1.1em; line-height: 1; }
+  .to-top:hover { background: #214824; }
+  .to-top[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -96,8 +136,12 @@
 <div class="title-row">
   <h1 class="lang-en">Forestry Operations Lite — Manual</h1>
   <h1 class="lang-ja">Forestry Operations Lite — マニュアル</h1>
-  <div class="lang-switch">
-    <span id="optEn" class="lang-opt active" onclick="setLang('en')">EN</span><span class="lang-sep">/</span><span id="optJp" class="lang-opt" onclick="setLang('jp')">JP</span>
+  <div class="title-right">
+    <button id="tocToggle" class="toc-toggle" type="button" aria-expanded="false" aria-controls="tocPanel">Contents ▾</button>
+    <div class="lang-switch">
+      <span id="optEn" class="lang-opt active" onclick="setLang('en')">EN</span><span class="lang-sep">/</span><span id="optJp" class="lang-opt" onclick="setLang('jp')">JP</span>
+    </div>
+    <nav id="tocPanel" class="toc-panel" hidden></nav>
   </div>
 </div>
 
@@ -368,6 +412,20 @@ convolved with a design-storm hyetograph, then routed through one linear reservo
       <td>Time of concentration — how fast the upstream area responds. Near zero on
       hillslopes and headwaters, largest toward the basin outlet.</td></tr>
 </table>
+<p><strong>Why D8, and why depressions are not filled:</strong> Following the same idea as
+the Flow Direction Method section above, where D8 is suited to locating the lines where water
+concentrates, Flow Load is always computed with D8. On fine LiDAR DEMs of around 0.5 m, valleys
+are recorded in detail; spreading water across many cells as MFD does makes the flow merge with
+the valleys, and overlaying it on Valley Terrain loses its meaning.
+Standard hydrological workflows fill DEM depressions before deriving flow directions;
+FOL deliberately does not. Flow is interrupted at micro-depressions, so accumulation is divided
+into short reaches, which makes it easier to read which gully the rain gathers in when overlaid
+on Valley Terrain. Infiltration into the soil is not modelled, so the result does not look like
+water flow itself, but read together with Valley Terrain it works as an effective indicator.</p>
+<p>Flow Load is an indicator for comparing how water gathers at different places within the same
+analysis. How depressions and flats appear depends not only on DEM resolution but also on how the
+DEM was produced (such as the vertical step of recorded elevations and the interpolation method),
+so comparing values between analyses made from different data is not appropriate.</p>
 <p>This is a planning guideline, not an exact hydraulic solution. It assumes a
 linear, time-invariant response, overland flow on small-to-medium catchments
 (order of a few km² or less), a single triangular design storm, and D8 flow routing.
@@ -509,7 +567,7 @@ to the named layers and retained. No second export is needed. A Named Export alw
   If the named group has been removed from Layers, selecting its name again asks <strong>Load it permanently into Layers?</strong> <strong>Yes</strong> reloads the saved layers and styles; <strong>No</strong> leaves the current selection and display unchanged. Groups exported by earlier versions (named <code>Forestry Operations Lite - &lt;run&gt;</code> and referring to the run folder) are left as they are. When that run is exported with Export to Project, those earlier groups are removed from the project and replaced by the new named group. If the project is then closed without saving, the plugin reconnects those groups to the Named Export the next time its window opens and shows a notice. Save the project to keep the new locations. The internal storage path is <code>archive/&lt;name&gt;/</code>; <strong>Named Exports</strong> is the user-facing name.
 </div>
 <div class="note">
-  Runs and Named Exports made with the QGIS 3 version of FOL have no Hillshade or Elevation Background. FOL creates them in the background when you show them for a run or select the Named Export, from the analysis DEM on the analysis grid, and adds them to the named group with the plugin's colours. A Named Export uses its own <code>elev_relief.tif</code>; one exported before it held a DEM uses the DEM recorded for the analysis, and if that file is no longer found, the two layers cannot be created and a message says so.
+  Runs and Named Exports made with FOL 0.x (the earlier version for QGIS 3) have no Hillshade or Elevation Background. FOL creates them in the background when you show them for a run or select the Named Export, from the analysis DEM on the analysis grid, and adds them to the named group with the plugin's colours. A Named Export uses its own <code>elev_relief.tif</code>; one exported before it held a DEM uses the DEM recorded for the analysis, and if that file is no longer found, the two layers cannot be created and a message says so.
 </div>
 <div class="note">
   <strong>Renaming a Named Export.</strong> Remove its group from the Layers panel, save the project, and close QGIS. While QGIS is closed, rename the folder <code>archive/&lt;name&gt;/</code>. Then open the project, select the new name in the analysis run selector, and answer <strong>Yes</strong> to <strong>Load it permanently into Layers?</strong> to load it again. The folder name is used as the group name.
@@ -893,6 +951,18 @@ FS は傾斜角・内部摩擦角・粘着力・土壌深度・飽和率から�
       <td>流達時間＝上流域がどれだけ速く応答するか。斜面・源頭でほぼ 0、
       流域の出口に向かって最大。</td></tr>
 </table>
+<p><strong>なぜ D8 で、窪地を埋めないのか：</strong>上の「流向方式」で D8 を
+「水が集まる危険筋の特定」に向くとしたのと同じ考え方で、流量負荷は常に D8 で計算します。
+0.5 m 程度の細かいレーザー DEM では谷の形が細かく写るため、MFD のように水を広く分けて流すと、
+流れが谷と同化して沢地形と重ねる意味がなくなります。
+また、一般的な水文解析では流向を決める前に DEM の窪地を埋めますが、FOL ではあえて埋めていません。
+微地形の窪みで流れが途切れ、集水が狭い範囲で区切られることで、沢地形と重ねたときに
+「どの沢に雨が集まっているか」が読み取りやすくなります。
+土にしみ込む水は考慮していないため、見た目は水の流れそのものではありませんが、
+沢地形と合わせて読むことで有効な指標になります。</p>
+<p>流量負荷は、同じ解析の中で場所ごとの集まり方を比べるための指標です。
+窪地や平らな所の現れ方は、DEM の解像度だけでなく作り方（標高の記録の刻み、補間の方法など）によっても
+変わるため、別のデータで解析した結果どうしの値を比べることには向きません。</p>
 <p>これは計画のための指針であり、厳密な水理解ではありません。線形・時間不変系、
 地表流主体の小〜中流域（目安 数 km² 以下）、単一の三角形設計降雨、D8 単一流向を仮定します。
 参考：Clark (1945)；Chow, Maidment &amp; Mays『Applied Hydrology』(1988)；
@@ -1018,7 +1088,7 @@ QGISスタイルは隣接する<code>.qml</code>へ保存し、有効なFlow Buf
   命名グループをレイヤーパネルから削除した後、その名前を再び選ぶと <strong>Load it permanently into Layers?</strong> と確認します。<strong>Yes</strong> の場合だけ保存済みレイヤーとスタイルを再読み込みし、<strong>No</strong> の場合は現在の選択と表示を変えません。以前の版で書き出したグループ（<code>Forestry Operations Lite - &lt;解析番号&gt;</code> で、解析番号のフォルダを参照しているもの）は、そのまま使えます。その解析番号を Export to Project で書き出すと、以前のグループはプロジェクトから外し、名前を付けたグループに置き換えます。そのあと保存せずにプロジェクトを閉じた場合は、次にプラグインの窓を開いたときに Named Export へ付け直し、お知らせを出します。新しい場所を残すため、プロジェクトを保存してください。内部保存先は <code>archive/&lt;名前&gt;/</code> で、ユーザー向けの名称は <strong>Named Exports</strong> です。
 </div>
 <div class="note">
-  QGIS 3 版の FOL で作った解析番号と Named Export には、Hillshade と Elevation Background がありません。解析番号でこの2つを表示するとき、または Named Export を選んだときに、解析のDEMから解析と同じグリッドでバックグラウンドで作り、命名グループにはプラグインの配色で加えます。Named Export は自分の <code>elev_relief.tif</code> を使います。DEM を持つ前に書き出した Named Export は、解析の記録にある DEM を使い、そのファイルが見つからないときは2つのレイヤーを作れないことを知らせます。
+  QGIS 3 用の旧版 FOL（0.x）で作った解析番号と Named Export には、Hillshade と Elevation Background がありません。解析番号でこの2つを表示するとき、または Named Export を選んだときに、解析のDEMから解析と同じグリッドでバックグラウンドで作り、命名グループにはプラグインの配色で加えます。Named Export は自分の <code>elev_relief.tif</code> を使います。DEM を持つ前に書き出した Named Export は、解析の記録にある DEM を使い、そのファイルが見つからないときは2つのレイヤーを作れないことを知らせます。
 </div>
 <div class="note">
   <strong>Named Export の名前を変えるとき</strong> レイヤーパネルからそのグループを一旦削除し、プロジェクトを保存して QGIS を閉じます。QGIS を閉じている間に <code>archive/&lt;名前&gt;/</code> のフォルダ名を変えます。プロジェクトを開き、解析番号の選択欄で新しい名前を選んで、<strong>Load it permanently into Layers?</strong> に <strong>Yes</strong> と答えると読み直せます。グループ名にはフォルダ名が使われます。
@@ -1120,12 +1190,84 @@ WebODM の DTM/DSM アセットを Forestry Operations Lite の DEM/DSM ブラ�
   </div>
 </div>
 
+<button class="to-top" type="button" hidden><span class="to-top-arrow">▲</span><span class="to-top-label">Top</span></button>
+
 <script>
 function setLang(lang) {
   var isJa = (lang === 'jp');
   document.body.classList.toggle('show-ja', isJa);
   document.getElementById('optEn').classList.toggle('active', !isJa);
   document.getElementById('optJp').classList.toggle('active', isJa);
+  document.getElementById('tocToggle').textContent = isJa ? '目次 ▾' : 'Contents ▾';
+  var toTopLabels = document.querySelectorAll('.to-top-label');
+  for (var t = 0; t < toTopLabels.length; t++) {
+    toTopLabels[t].textContent = isJa ? '上に戻る' : 'Top';
+  }
+  buildToc();
+}
+// 目次：表示中の言語の h2 / h3 から作る。h2 の ▸ で h3 を開く（開くのは一度に一つ）
+function buildToc() {
+  var isJa = document.body.classList.contains('show-ja');
+  var scope = document.querySelector(isJa ? 'body > div.lang-ja' : 'body > div.lang-en');
+  var panel = document.getElementById('tocPanel');
+  panel.innerHTML = '';
+  if (!scope) {
+    return;
+  }
+  var prefix = isJa ? 'ja' : 'en';
+  var top = document.createElement('ul');
+  var sub = null;
+  var heads = scope.querySelectorAll('h2, h3');
+  for (var i = 0; i < heads.length; i++) {
+    var h = heads[i];
+    if (!h.id) {
+      h.id = 'toc-' + prefix + '-' + (i + 1);
+    }
+    var link = document.createElement('a');
+    link.className = 'toc-link';
+    link.href = '#' + h.id;
+    link.textContent = h.textContent;
+    var li = document.createElement('li');
+    var row = document.createElement('div');
+    row.className = 'toc-row';
+    if (h.tagName === 'H2') {
+      var spacer = document.createElement('span');
+      spacer.className = 'toc-spacer';
+      row.appendChild(spacer);
+      row.appendChild(link);
+      li.appendChild(row);
+      top.appendChild(li);
+      sub = null;
+    } else {
+      if (!sub) {
+        // この h2 に h3 がある：▸ を付け、h3 の一覧を畳んで置く
+        var parentLi = top.lastElementChild;
+        if (!parentLi) {
+          continue;
+        }
+        sub = document.createElement('ul');
+        sub.className = 'toc-sub';
+        sub.hidden = true;
+        var btn = document.createElement('button');
+        btn.className = 'toc-expander';
+        btn.type = 'button';
+        btn.textContent = '▶';
+        btn.setAttribute('aria-expanded', 'false');
+        btn.setAttribute('aria-label', isJa ? '小見出しを開く' : 'Show subsections');
+        var parentRow = parentLi.querySelector('.toc-row');
+        parentRow.replaceChild(btn, parentRow.querySelector('.toc-spacer'));
+        parentLi.appendChild(sub);
+      }
+      row.appendChild(link);
+      li.appendChild(row);
+      sub.appendChild(li);
+    }
+  }
+  panel.appendChild(top);
+}
+function setTocOpen(open) {
+  document.getElementById('tocPanel').hidden = !open;
+  document.getElementById('tocToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 var lightboxItems = [];
 var lightboxIndex = 0;
@@ -1156,9 +1298,64 @@ function closeLightbox() {
 }
 (function () {
   var browserLang = (navigator.language || (navigator.languages && navigator.languages[0]) || '');
-  if (browserLang.toLowerCase().indexOf('ja') === 0) {
-    setLang('jp');
+  setLang(browserLang.toLowerCase().indexOf('ja') === 0 ? 'jp' : 'en');
+  // 上に戻る：少し下へ進んだら画面上の、EN/JP の左に出す
+  var toTopButtons = document.querySelectorAll('.to-top');
+  // 右端は EN/JP の左端にそろえる（EN/JP の幅は書体で変わるので実際に測る）。
+  // 上下は、ページ先頭での目次ボタンの高さにそろえ、押して戻るとそのまま
+  // 目次ボタンに手が当たるようにする
+  function placeToTop() {
+    var langLeft = document.querySelector('.lang-switch').getBoundingClientRect().left;
+    var right = Math.max(32, document.documentElement.clientWidth - langLeft);
+    var toc = document.getElementById('tocToggle').getBoundingClientRect();
+    var centreY = toc.top + window.scrollY + toc.height / 2;
+    for (var b = 0; b < toTopButtons.length; b++) {
+      toTopButtons[b].style.right = right + 'px';
+      toTopButtons[b].style.top = centreY + 'px';
+    }
   }
+  window.addEventListener('resize', placeToTop);
+  placeToTop();
+  function updateToTop() {
+    for (var b = 0; b < toTopButtons.length; b++) {
+      toTopButtons[b].hidden = window.scrollY < 400;
+    }
+  }
+  window.addEventListener('scroll', updateToTop, { passive: true });
+  updateToTop();
+  for (var b = 0; b < toTopButtons.length; b++) {
+    toTopButtons[b].addEventListener('click', function () {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  }
+  var tocPanel = document.getElementById('tocPanel');
+  document.getElementById('tocToggle').addEventListener('click', function () {
+    setTocOpen(tocPanel.hidden);
+  });
+  tocPanel.addEventListener('click', function (event) {
+    var expander = event.target.closest('.toc-expander');
+    if (expander) {
+      var li = expander.closest('li');
+      var willOpen = expander.getAttribute('aria-expanded') !== 'true';
+      // アコーディオン：ほかに開いている h2 は畳む
+      var opened = tocPanel.querySelectorAll('.toc-expander[aria-expanded="true"]');
+      for (var k = 0; k < opened.length; k++) {
+        opened[k].setAttribute('aria-expanded', 'false');
+        opened[k].closest('li').querySelector('.toc-sub').hidden = true;
+      }
+      expander.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      li.querySelector('.toc-sub').hidden = !willOpen;
+      return;
+    }
+    if (event.target.closest('.toc-link')) {
+      setTocOpen(false);  // リンク先へはそのまま移動する
+    }
+  });
+  document.addEventListener('click', function (event) {
+    if (!tocPanel.hidden && !event.target.closest('.title-right')) {
+      setTocOpen(false);
+    }
+  });
   var zoomButtons = document.querySelectorAll('.image-zoom');
   for (var i = 0; i < zoomButtons.length; i++) {
     zoomButtons[i].addEventListener('click', function () {
@@ -1196,6 +1393,9 @@ function closeLightbox() {
   });
   document.addEventListener('keydown', function (event) {
     if (document.getElementById('imageLightbox').hidden) {
+      if (event.key === 'Escape' && !tocPanel.hidden) {
+        setTocOpen(false);
+      }
       return;
     }
     if (event.key === 'Escape') {

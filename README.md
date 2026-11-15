@@ -44,7 +44,7 @@ Selecting a Named Export that is already in the Layers panel connects FOL direct
 
 If the named group has been removed from Layers, selecting its name again asks **Load it permanently into Layers?** **Yes** reloads the saved layers and styles; **No** leaves the current selection and display unchanged. Groups exported by earlier versions (named `Forestry Operations Lite - <run>` and referring to the run folder) are left as they are. When that run is exported with Export to Project, those earlier groups are removed from the project and replaced by the new named group. If the project is then closed without saving, the plugin reconnects those groups to the Named Export the next time its window opens and shows a notice. Save the project to keep the new locations.
 
-The folder also holds the analysis DEM (`elev_relief.tif`, shown as Elevation Background), so a Named Export stays complete after its source run or the DEM cache is deleted, and its folder can be moved to another project or PC. Runs and Named Exports made with the QGIS 3 version of FOL have no Hillshade or Elevation Background; FOL creates them in the background from the analysis DEM.
+The folder also holds the analysis DEM (`elev_relief.tif`, shown as Elevation Background), so a Named Export stays complete after its source run or the DEM cache is deleted, and its folder can be moved to another project or PC. Runs and Named Exports made with FOL 0.x (the earlier version for QGIS 3) have no Hillshade or Elevation Background; FOL creates them in the background from the analysis DEM.
 
 The internal storage path is `archive/<name>/`; **Named Exports** is the user-facing name.
 
@@ -170,7 +170,7 @@ For auto-fetched DEM sources (GSI, Terrarium, VS LP/Grid, Nagano, the Netherland
 
 ## Requirements
 
-- QGIS 4.0 or later
+- QGIS 3.44 or later (including QGIS 4.x)
 - Python 3.x (bundled with QGIS)
 - numpy, GDAL, scipy (bundled with QGIS)
 
@@ -268,6 +268,8 @@ When more than 9 files: `{seq}0+{n-10}` (e.g. `0030+2` = sequence 003, 12 files)
 
 This project is licensed under the GNU General Public License v2 or later.
 
+The plugin bundles two third-party libraries in `vendor/`, each under its own license: laspy 2.7.0 (BSD 2-Clause, `vendor/laspy/LICENSE.txt`) and defusedxml 0.7.1 (Python Software Foundation License Version 2, `vendor/defusedxml/LICENSE`). Their sources and the changes made to them are listed in `vendor/README.md`.
+
 ---
 
 ## Support
@@ -321,7 +323,7 @@ CS立体図は長野県林業総合センターが考案した地形表現図法
 
 命名グループをレイヤーパネルから削除した後、その名前を再び選ぶと **Load it permanently into Layers?** と確認します。**Yes** の場合だけ保存済みレイヤーとスタイルを再読み込みし、**No** の場合は現在の選択と表示を変えません。以前の版で書き出したグループ（`Forestry Operations Lite - <解析番号>` で、解析番号のフォルダを参照しているもの）は、そのまま使えます。その解析番号を Export to Project で書き出すと、以前のグループはプロジェクトから外し、名前を付けたグループに置き換えます。そのあと保存せずにプロジェクトを閉じた場合は、次にプラグインの窓を開いたときに Named Export へ付け直し、お知らせを出します。新しい場所を残すため、プロジェクトを保存してください。
 
-フォルダには解析のDEM（`elev_relief.tif`、Elevation Backgroundとして表示）も入るので、元の解析やDEMキャッシュを削除してもNamed Exportはそろったまま使え、フォルダを別のプロジェクトや別のPCへ移せます。QGIS 3 版の FOL で作った解析番号と Named Export には Hillshade と Elevation Background がないので、FOL が解析のDEMからバックグラウンドで作ります。
+フォルダには解析のDEM（`elev_relief.tif`、Elevation Backgroundとして表示）も入るので、元の解析やDEMキャッシュを削除してもNamed Exportはそろったまま使え、フォルダを別のプロジェクトや別のPCへ移せます。QGIS 3 用の旧版 FOL（0.x）で作った解析番号と Named Export には Hillshade と Elevation Background がないので、FOL が解析のDEMからバックグラウンドで作ります。
 
 内部保存先は `archive/<名前>/` です。ユーザー向けの名称は **Named Exports** です。
 
@@ -447,7 +449,7 @@ AWS S3上のバーチャル静岡オープンデータを使用する機能で�
 
 ## 動作環境
 
-- QGIS 4.0 以降
+- QGIS 3.44 以降（QGIS 4.x を含む）
 - Python 3.x（QGIS同梱）
 - numpy、GDAL、scipy（QGIS同梱）
 
@@ -549,6 +551,8 @@ https://paypal.me/rawslnc
 ## ライセンス
 
 GNU General Public License v2 以降
+
+プラグインは `vendor/` に2つの外部ライブラリを同梱しており、それぞれ元のライセンスに従います：laspy 2.7.0（BSD 2-Clause、`vendor/laspy/LICENSE.txt`）、defusedxml 0.7.1（Python Software Foundation License Version 2、`vendor/defusedxml/LICENSE`）。配布元と手を加えた点は `vendor/README.md` に記載しています。
 
 ## 作者
 

@@ -1,10 +1,11 @@
 import os
 import shutil
+import sys
 
 import numpy as np
 from qgis.PyQt import QtWidgets, uic
 from qgis.PyQt.QtCore import QEvent, QSettings, QSignalBlocker, Qt, QUrl, pyqtSignal
-from qgis.PyQt.QtGui import QDesktopServices, QIcon
+from qgis.PyQt.QtGui import QDesktopServices, QIcon, QKeySequence
 from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
@@ -17,6 +18,8 @@ from qgis.core import (
     QgsVectorLayer,
 )
 from qgis.gui import QgsMapCanvas, QgsMapTool, QgsMapToolPan
+
+from .ui_fonts import use_plugin_font
 
 FORM_CLASS, _ = uic.loadUiType(
     os.path.join(os.path.dirname(__file__), "forestry_operations_lite_dockwidget_base.ui")
@@ -295,6 +298,7 @@ class DemBrowserDialog(QtWidgets.QDialog):
 
     def __init__(self, preview_canvas, initial_dir="", parent=None, mode="dem"):
         super().__init__(parent)
+        use_plugin_font(self)
         self._mode = mode
         self.setWindowTitle("Select DEM File" if mode == "dem" else "Select DSM File")
         self.setMinimumSize(540, 440)
@@ -1411,6 +1415,23 @@ class ForestryOperationsLiteWindow(QtWidgets.QMainWindow):
 
     def __init__(self, content, parent=None):
         super().__init__(parent)
+        use_plugin_font(self)
+        if sys.platform == "darwin":
+            # macOS: Qt は普通の窓を全画面の「主」窓（NSWindowCollectionBehavior
+            # FullScreenPrimary）にするため、QGIS が全画面のとき FOL が別の全画面
+            # スペースに出る。CustomizeWindowHint を付けると「補助」窓になり、
+            # 全画面の QGIS と同じスペースに出る（緑のボタンは全画面でなく拡大）。
+            # CustomizeWindowHint を付けるとタイトルバーとボタンの指定が要る。
+            # 既定のフラグに足すと WindowFullscreenButtonHint（全画面ボタン）が
+            # 残り「主」窓のままになるので、QLAE と同じく一から組み立てる。
+            self.setWindowFlags(
+                Qt.WindowType.Window
+                | Qt.WindowType.CustomizeWindowHint
+                | Qt.WindowType.WindowTitleHint
+                | Qt.WindowType.WindowSystemMenuHint
+                | Qt.WindowType.WindowMinMaxButtonsHint
+                | Qt.WindowType.WindowCloseButtonHint
+            )
         self.content = content
         self.setCentralWidget(content)
         self.setWindowTitle(content.windowTitle())
@@ -1426,6 +1447,23 @@ class ForestryOperationsLiteWindow(QtWidgets.QMainWindow):
         startup_height = max(600, round(startup_width / self._STARTUP_ASPECT_RATIO))
         self.setMinimumSize(max(900, content_min_width), 600)
         self.resize(startup_width, startup_height)
+        # キー操作：Esc は全画面（最大化）をやめて元の大きさに戻すだけ（閉じない。
+        # 解析・取得の最中に押しても止まらないように）。閉じるのは Ctrl+W（macOS
+        # では Qt が Cmd+W に読み替える）で、× と同じ閉じ方。標準キーの Close は
+        # 一つ目の割り当てしか使われず、Windows ではそれが Ctrl+F4 になるため
+        # Ctrl+W を直接指定する。
+        # どちらも FOL の窓が前面のときだけ効き、FOL が開くメッセージ等の中の
+        # Esc はそちらを閉じる。
+        self._esc_shortcut = QtWidgets.QShortcut(
+            QKeySequence(Qt.Key.Key_Escape), self)
+        self._esc_shortcut.activated.connect(self._leave_fullscreen)
+        self._close_shortcut = QtWidgets.QShortcut(
+            QKeySequence("Ctrl+W"), self)
+        self._close_shortcut.activated.connect(self.close)
+
+    def _leave_fullscreen(self):
+        if self.isFullScreen() or self.isMaximized():
+            self.showNormal()
 
     def changeEvent(self, event):
         """ネイティブの最大化/復元（タイトルバーの最大化ボタン・ダブルクリック）
@@ -1453,6 +1491,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         super().__init__(parent)
         self.iface = iface
         self.setupUi(self)
+        # QGIS のフォントサイズ設定に関係なく一つの大きさで表示する（ui_fonts）。
+        # 部品の大きさを測る _build_extended_ui より先に付ける。
+        use_plugin_font(self)
 
         self.preview_canvas = None
         self._host_window = None  # ForestryOperationsLiteWindow（表示用のトップレベルホスト）
@@ -1613,16 +1654,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             _b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.chkLoadIntegrated.setToolTip(
             "Cycle: Risk Off → Overall Risk → High Risk")
-        # ラベルが状態（Risk Off / Overall Risk / High Risk）で変わるため、
-        # 最長ラベル "Overall Risk" 表示時の sizeHint 幅で固定し、切替時に幅が
-        # 動かないようにする（sizeHint はボタンの padding/border も含むので、
-        # fontMetrics + 手動余白より確実）。この後段の setMinimumWidth ループの
-        # 対象からは除外している（除外しないと最小幅が上書きされてしまう）。
-        _prev_lbl = self.chkLoadIntegrated.text()
-        self.chkLoadIntegrated.setText("Overall Risk")
-        self.chkLoadIntegrated.setFixedWidth(
-            self.chkLoadIntegrated.sizeHint().width() + 6)
-        self.chkLoadIntegrated.setText(_prev_lbl)
+        # 幅は最長ラベルで固定する（Analysis Layer Display に置いた後で測る）。
         self.btnTerrainToggle.setStyleSheet(
             "QPushButton{padding:2px 10px;}"
             "QPushButton:checked{background:#f0ff1a;color:#222;"
@@ -1670,14 +1702,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.btnFlowBuffer = QtWidgets.QPushButton("Buffer: Off")
         self.btnFlowBuffer.setToolTip("Apply blur to flow layer: Off→Low→High")
         self.btnFlowBuffer.setStyleSheet("font-size:8pt; padding:1px 2px;")
-        # ラベルが off/low/high で変わるため、最長ラベル表示時の sizeHint 幅で
-        # 固定し、切替時に幅が動かないようにする。この後段の setMinimumWidth
-        # ループの対象からは除外している（除外しないと上書きされてしまう）。
-        _bf_prev = self.btnFlowBuffer.text()
-        self.btnFlowBuffer.setText("Buffer: High")
-        self.btnFlowBuffer.setFixedWidth(
-            self.btnFlowBuffer.sizeHint().width() + 4)
-        self.btnFlowBuffer.setText(_bf_prev)
+        # 幅は最長ラベルで固定する（Analysis Layer Display に置いた後で測る）。
 
         self.lblLoadStatus = QtWidgets.QLabel("")
         self.lblLoadStatus.setStyleSheet("color:#555;font-size:8pt;")
@@ -1986,7 +2011,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self.leftTabs = QtWidgets.QTabWidget(self.leftPane)
 
         # ── 地形データ設定タブ ───────────────────────────────────────────
-        self.tabDataSettings = QtWidgets.QWidget()
+        self.tabDataSettings = QtWidgets.QWidget(self.leftTabs)
         _ds_scroll = QtWidgets.QScrollArea(self.tabDataSettings)
         _ds_scroll.setWidgetResizable(True)
         _ds_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
@@ -2143,7 +2168,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         _btn_tips.toggled.connect(_toggle_tips)
         ds_layout.addStretch(1)
 
-        self.tabTerrain = QtWidgets.QWidget()
+        # 親を付けてから組み立てる。窓の外で作ると、中で測る大きさ（Area Limit の
+        # 高さ）が FOL の文字の大きさでなく QGIS の設定の大きさになる（ui_fonts）。
+        self.tabTerrain = QtWidgets.QWidget(self.leftTabs)
         self._build_terrain_tab(self.tabTerrain)
         # タブ順: 地形データ設定 → 地形解析
         self.leftTabs.addTab(self.tabDataSettings, "Terrain Data")
@@ -2160,7 +2187,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         left_layout.addWidget(self.leftTabs)
 
         # ── 解析データの表示管理（プレビュー上部・2行）────────────────
-        grpDisplayMgmt = QtWidgets.QGroupBox("Analysis Layer Display")
+        # 親（rightPane）を付けて作る。下でボタンの幅を測るとき、窓の外だと
+        # FOL の文字の大きさでなく QGIS の設定の大きさで測られる（ui_fonts）。
+        grpDisplayMgmt = QtWidgets.QGroupBox("Analysis Layer Display", self.rightPane)
         self._grpDisplayMgmt = grpDisplayMgmt  # 解析中は操作を止める
         dm_vlay = QtWidgets.QVBoxLayout(grpDisplayMgmt)
         dm_vlay.setContentsMargins(6, 2, 6, 4)
@@ -2202,6 +2231,21 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         )
         dm_row2.addWidget(self.chkFullscreen)
         dm_vlay.addLayout(dm_row2)
+        # ここからの幅は、ボタンが窓の中（grpDisplayMgmt）に入った後で、仕上げ
+        # （ensurePolished）を済ませてから測る。窓の外や仕上げ前に測ると FOL の
+        # 文字の大きさでなく QGIS の設定の大きさになる（ui_fonts）。
+        # ラベルが状態（Risk Off / Overall Risk / High Risk、Buffer: Off/Low/High）
+        # で変わる 2 つは、最長ラベル表示時の sizeHint 幅で固定し、切替時に幅が
+        # 動かないようにする（sizeHint はボタンの padding/border も含むので、
+        # fontMetrics + 手動余白より確実）。下の setMinimumWidth ループの対象から
+        # は除外している（除外しないと最小幅が上書きされてしまう）。
+        for _btn, _longest, _pad in ((self.chkLoadIntegrated, "Overall Risk", 6),
+                                     (self.btnFlowBuffer, "Buffer: High", 4)):
+            _btn.ensurePolished()
+            _prev = _btn.text()
+            _btn.setText(_longest)
+            _btn.setFixedWidth(_btn.sizeHint().width() + _pad)
+            _btn.setText(_prev)
         for _control in (
             self.btnTerrainToggle,
             self.chkLoadValley,
@@ -2211,6 +2255,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self.chkMapLock,
             self.chkFullscreen,
         ):
+            _control.ensurePolished()
             _control.setMinimumWidth(_control.sizeHint().width())
         # Row3: レイヤー表示 ON/OFF + 透過率（GPKG / Tile / Background）
         dm_row3 = QtWidgets.QHBoxLayout()
@@ -2481,7 +2526,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         lay.addWidget(self.grpAnalysisCondition)
 
         # --- 解析制限 ---
-        grpAreaLimit = QtWidgets.QGroupBox("Area Limit")
+        # 下で高さを測るため、枠と Stop ボタンは親を付けて作る（窓の外で測ると
+        # FOL の文字の大きさでなく QGIS の設定の大きさになる、ui_fonts）。
+        grpAreaLimit = QtWidgets.QGroupBox("Area Limit", inner)
         grpAreaLimit.setStyleSheet(
             "QGroupBox{border:1px solid #ccc;border-radius:3px;margin-top:6px;padding:4px;}"
             "QGroupBox::title{subcontrol-origin:margin;left:6px;}"
@@ -2519,12 +2566,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             f"so it will be auto-resampled to {_RESAMPLE_TARGET}m before analysis."
         )
         # 右カラム（Stop ボタン）
-        self.btnStopAnalysis = QtWidgets.QPushButton("Stop")
+        self.btnStopAnalysis = QtWidgets.QPushButton("Stop", grpAreaLimit)
         self.btnStopAnalysis.setEnabled(False)
         self.btnStopAnalysis.setStyleSheet(
             "QPushButton:enabled{background:#c0392b;color:white;border-radius:3px;}"
             "QPushButton:disabled{color:#aaa;}"
         )
+        # スタイルシートの付いた窓の中の部品は、仕上げ（polish）までは QGIS の
+        # 文字の大きさのまま。コンボは sizeHint で自分を仕上げないので先に済ませる。
+        self.cmbAreaLimit.ensurePolished()
+        self.btnStopAnalysis.ensurePolished()
         _control_height = max(
             self.cmbAreaLimit.sizeHint().height(),
             self.btnStopAnalysis.sizeHint().height(),
@@ -4652,7 +4703,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     def _confirm_high_risk_dissolve(self, run_key):
         """既存 High Risk Areas の表示軽量化変換を実行するか確認する。"""
-        dialog = QtWidgets.QDialog(self)
+        dialog = use_plugin_font(QtWidgets.QDialog(self))
         dialog.setWindowTitle("High Risk Areas")
         dialog.setModal(True)
 
@@ -6076,7 +6127,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                             button="dem", label=self.lblDsmInfo)
 
     def _show_dchm_problem_dialog(self, details):
-        msg = QtWidgets.QMessageBox(self)
+        msg = use_plugin_font(QtWidgets.QMessageBox(self))
         icon_enum = getattr(QtWidgets.QMessageBox, "Icon", QtWidgets.QMessageBox)
         msg.setIcon(icon_enum.Warning)
         msg.setWindowTitle("DCHM Download Problem")
@@ -7406,7 +7457,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
     def _ask_archive_name(self, default, legacy_names=None):
         """書き出す名前（レイヤーグループ名・archive フォルダ名）を尋ねる。"""
-        dialog = QtWidgets.QDialog(self)
+        dialog = use_plugin_font(QtWidgets.QDialog(self))
         dialog.setWindowTitle("Export to Project")
         layout = QtWidgets.QVBoxLayout(dialog)
         message = QtWidgets.QLabel(
@@ -9766,7 +9817,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             dsm_loader = None  # Retry reopens the file rather than reusing a failed handle.
 
     def _ask_dsm_alignment_recovery(self, details):
-        msg = QtWidgets.QMessageBox(self)
+        msg = use_plugin_font(QtWidgets.QMessageBox(self))
         msg.setIcon(QtWidgets.QMessageBox.Icon.Warning)
         msg.setWindowTitle("DSM Preparation Problem")
         msg.setText("DSM could not be read or aligned to the analysis DEM.")

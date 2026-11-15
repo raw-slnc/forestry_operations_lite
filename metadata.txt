@@ -1,9 +1,9 @@
 [general]
 name=Forestry Operations Lite
-qgisMinimumVersion=4.0
+qgisMinimumVersion=3.44
 qgisMaximumVersion=4.99
 description=Terrain analysis for forestry sites: DEM/DSM loading, slope, TWI, stability index, CS MAP export, and time-area flow-load estimation.
-version=1.3.0
+version=2.0.0
 author=Hideharu Masai
 email=hideharumasai@void.mints.ne.jp
 
@@ -14,6 +14,8 @@ repository=https://github.com/raw-slnc/forestry_operations_lite
 
 hasProcessingProvider=no
 changelog=
+    2.0.0 - [IMPORTANT] Now also runs on QGIS 3.44 and later, so a single version covers QGIS 3.44 through 4.x. QGIS 3.x users update from 0.3.0 to this version, which also includes the changes listed under 1.x. The plugin window now keeps one text size regardless of the QGIS font size setting, so its layout no longer breaks. Esc now leaves fullscreen and Ctrl+W closes the window. The manual now explains why Flow Load uses D8 and leaves depressions unfilled, and that its values are meant for comparing places within the same analysis rather than between analyses made from different data.
+    1.3.1 - [CRITICAL FIX] Added the license notices of the bundled laspy and defusedxml libraries.
     1.3.0 - [IMPORTANT] Flow analysis now uses fallback coefficients where DSM data is missing and records DSM coverage. Nagano canopy-height gaps remain NoData. Improved analysis of local DEMs in geographic and Web Mercator coordinates. Analysis, data fetching and export now run without freezing QGIS, with progress updates, cancellation and partial-file cleanup. Added AHN4 (Netherlands), IGN LiDAR HD (France) and LINZ (New Zealand) to the DEM browser, with matching DSMs where available. WebODM Importer exports support these sources and include dated orthophotos and source/licence information. Renamed analysis export to "Export to Project" and added Named Exports that retain project edits and display settings. Improved compatibility with QGIS 3 outputs, expanded the manual, and fixed project detection, output-folder updates and diagnostic-log accumulation.
     1.2.2 - Terrain Data can now select Nagano Prefecture open-data DEM directly in the DEM browser, with DSM automatically computed from matching canopy height (CHM) data where available. Fixed Refresh (layer list) unexpectedly reverting a just-made Background/Tile layer choice back to a previously saved one. Adjusted Wetland Terrain's low/mid filter strength (low is stronger, mid is weaker). CS Map Export: exported layers are now grouped under "FOL_CSMap", placed directly below your GPKG/SHP layers instead of at the very bottom of the layer panel. Minor UI adjustments.
     1.2.1 - CS Map Export: change the output file naming scheme; embed provenance, data-quality, and attribution metadata in the output GeoTIFF; update related manual sections.

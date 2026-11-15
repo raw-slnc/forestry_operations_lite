@@ -340,7 +340,9 @@ def stability_fs(slope_deg, phi_deg=30.0, c_kpa=3.0, z_m=0.5,
     resistance = c_kpa + (gamma_s - m * gamma_w) * z_m * cos2 * np.tan(phi)
     driving = gamma_s * z_m * sincos
 
-    fs = np.where(driving > 1e-6, resistance / driving, 10.0)
+    # 平坦（driving≈0）は FS=10.0。0 で割るセルは計算しない（警告を出さない）
+    fs = np.full_like(driving, 10.0)
+    np.divide(resistance, driving, out=fs, where=driving > 1e-6)
     fs = np.where(np.isnan(slope_deg), np.nan, fs)
     return fs
 
