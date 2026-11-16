@@ -22,8 +22,38 @@ import numpy as np
 # 一番重い MFD の累積（約8µs/セル）でも 0.15秒ほどに1回になる。
 _PROGRESS_EVERY = 16384
 
-FLOW_MODEL_VERSION = "time-area-clark-d8-canopy-2"
+FLOW_MODEL_VERSION = "time-area-clark-d8-canopy-3"
 FLOW_ROUTING_OPTIONS = {"clark_k": 0.75, "n_time": 24}
+# 流量負荷の前に DEM の高さの刻み（例：0.1 m 刻み）でできた同じ高さの平らな並びを
+# ほどく丸め。元の高さから ±half_band_m を超えないようにならすので、地形は実質
+# 変えない（閉じた窪地は残る）。
+FLOW_DEM_SMOOTHING = {"half_band_m": 0.0001, "sigma": 1.0, "iterations": 40}
+
+
+def smooth_quantization(dem, half_band_m=0.0001, sigma=1.0, iterations=40):
+    """DEM を元の高さ ±half_band_m の範囲だけでならす（流量負荷用）。
+
+    ガウスでならしては元の高さ ±half_band_m に収める、を iterations 回くり返す。
+    同じ高さが並んだ平らな所に、隣との微小な高さの差ができ、D8 の流れが途切れ
+    にくくなる。NaN（NoData）はそのまま。scipy が無ければ None を返す（呼び出し
+    側は元の DEM を使う）。
+    """
+    try:
+        from scipy import ndimage
+    except ImportError:
+        return None
+    valid = np.isfinite(dem)
+    lo, hi = dem - half_band_m, dem + half_band_m
+    weight = ndimage.gaussian_filter(valid.astype("f8"), sigma, mode="nearest")
+    z = np.asarray(dem, dtype="f8").copy()
+    with np.errstate(invalid="ignore", divide="ignore"):
+        for _ in range(iterations):
+            num = ndimage.gaussian_filter(np.where(valid, z, 0.0), sigma, mode="nearest")
+            z = np.clip(num / weight, lo, hi)
+    z[~valid] = np.nan
+    return z.astype(dem.dtype, copy=False)
+
+
 FLOW_CANOPY_COEFFICIENTS = {
     "c_forest": 0.15, "c_bare": 0.55,
     "v_forest": 0.30, "v_bare": 0.60,

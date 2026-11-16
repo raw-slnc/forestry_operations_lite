@@ -184,9 +184,19 @@ class TerrainAnalysisWorker(QThread):
         # ── 流量推測（修正合理式 + 到達時間 Tc ルーティング） ──
         if p["flow"]:
             self._stage("flow")
+            # DEM の高さの刻みでできた平らな並びを、±0.0001 m の幅だけでほどいてから流す
+            # （斜面安定・TWI は元の DEM のまま）。scipy が無ければ元の DEM で計算する。
+            z_flow = ta.smooth_quantization(dem.data, **ta.FLOW_DEM_SMOOTHING)
+            if z_flow is None:
+                z_flow, fdir_flow = dem.data, fdir
+                smoothing = {"applied": False, "reason": "scipy not available"}
+            else:
+                fdir_flow = ta.d8_flow_direction(z_flow)
+                smoothing = dict(ta.FLOW_DEM_SMOOTHING, applied=True)
             c_local, velocity_coef, self.flow_conditions = ta.prepare_flow_coefficients(
-                dem.data, self._dsm_data,
+                z_flow, self._dsm_data,
                 runoff_coef=p["runoff"], velocity_coef=p["velocity_coef"])
+            self.flow_conditions["dem_smoothing"] = smoothing
             self.flow_conditions["dsm"] = dict(p.get("dsm_info", {}))
             if (self._dsm_data is not None
                     and not self.flow_conditions["dsm_valid_cells"]):
@@ -200,16 +210,16 @@ class TerrainAnalysisWorker(QThread):
             }
             self._prog()(0.01)
             local_tt = ta.compute_travel_time(
-                dem.data, fdir, dem.cell_size,
+                z_flow, fdir_flow, dem.cell_size,
                 velocity_coef=velocity_coef,
             )
             # 実測の内訳：Tc 約27% / 時間‐面積法 約69% / 保存 残り
-            tc = ta.compute_tc(dem.data, fdir, local_tt,
+            tc = ta.compute_tc(z_flow, fdir_flow, local_tt,
                                progress_cb=self._prog(0.01, 0.27))
 
             # 時間‐面積法（Clark 単位図法）による負荷3指標
             q_peak, q_mean, _tc = ta.time_area_flow_metrics(
-                dem.data, fdir, local_tt, tc, dem.cell_size,
+                z_flow, fdir_flow, local_tt, tc, dem.cell_size,
                 c_grid=c_local,
                 duration_h=p["duration_h"],
                 i_peak_mmh=p["rainfall_mmh"],
@@ -235,6 +245,8 @@ class TerrainAnalysisWorker(QThread):
                 tmp_folder,
                 analysis_prefix="",
                 fs_caution=p["fs_thresh"],
+                # 解析タブの TWI 閾値（以前は渡しておらず、常に既定の 8 で計算していた）
+                twi_caution=p["twi_thresh"],
                 progress_cb=self._prog(),
             )
             if int_result["integrated_risk_index"]:

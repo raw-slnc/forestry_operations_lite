@@ -51,6 +51,21 @@ def _prefixed_path(out_dir, prefix, name, ext):
     return path if os.path.exists(path) else None
 
 
+def _flow_cutoffs(flow, top_pct, top_pct_high):
+    """Peak load の点数の境目を、その解析の値の上位 % で決める。
+
+    流量負荷の値は DEM・セルの大きさ・DSM・雨の設定で桁が変わり、同じ解析の中で
+    比べるための指標なので、固定の値（以前は 0.5 / 1.0 m³/s）ではなく、その解析で
+    流れのあるセル（値 > 0）の上位 top_pct % / top_pct_high % を境目にする。
+    戻り値: (上位 top_pct % の下限, 上位 top_pct_high % の下限)。流れが無ければ (inf, inf)。
+    """
+    values = flow[np.isfinite(flow) & (flow > 0)]
+    if values.size == 0:
+        return math.inf, math.inf
+    return (float(np.percentile(values, 100.0 - top_pct)),
+            float(np.percentile(values, 100.0 - top_pct_high)))
+
+
 def _read_raster(path):
     ds = gdal.Open(path, gdal.GA_ReadOnly)
     if ds is None:
@@ -68,7 +83,8 @@ def build_integrated_index(
     analysis_prefix="",
     fs_caution=1.2,
     twi_caution=8.0,
-    flow_caution=0.5,
+    flow_top_pct=5.0,
+    flow_top_pct_high=1.0,
     high_risk_threshold=3,
     overwrite=True,
     progress_cb=None,
@@ -85,7 +101,7 @@ def build_integrated_index(
     index の内訳:
       FS:   <1.0 => +3, <fs_caution => +2
       TWI:  >=twi_caution => +1
-      Flow: >=flow_caution => +1, >=2*flow_caution => +2
+      Flow: その解析の Peak load の上位 flow_top_pct % => +1、上位 flow_top_pct_high % => +2
 
     High Risk Areas（高リスク域）は index>=high_risk_threshold に加えて、
     FS<fs_caution のセルを他指標との合算を待たずに無条件で含める。
@@ -138,10 +154,11 @@ def build_integrated_index(
         flow = _read_raster(flow_path).data
         flow_valid = ~np.isnan(flow)
         valid |= flow_valid
+        flow_lo, flow_hi = _flow_cutoffs(flow, flow_top_pct, flow_top_pct_high)
         flow_score = np.where(
-            flow >= (flow_caution * 2.0),
+            flow >= flow_hi,
             2.0,
-            np.where(flow >= flow_caution, 1.0, 0.0),
+            np.where(flow >= flow_lo, 1.0, 0.0),
         )
         index += flow_score.astype(np.float32)
 
@@ -182,7 +199,8 @@ def build_integrated_index(
         "thresholds": {
             "fs_caution": fs_caution,
             "twi_caution": twi_caution,
-            "flow_caution": flow_caution,
+            "flow_top_pct": flow_top_pct,
+            "flow_top_pct_high": flow_top_pct_high,
             "high_risk_threshold": high_risk_threshold,
         },
     }
@@ -193,7 +211,8 @@ def build_multiplicative_index(
     analysis_prefix="",
     fs_caution=1.2,
     twi_caution=8.0,
-    flow_caution=0.5,
+    flow_top_pct=5.0,
+    flow_top_pct_high=1.0,
     overwrite=True,
 ):
     """
@@ -205,7 +224,7 @@ def build_multiplicative_index(
     各指標の係数:
       FS:   <1.0 => ×4, <fs_caution => ×2, else ×1
       TWI:  >=twi_caution => ×2, else ×1
-      Flow: >=2*flow_caution => ×4, >=flow_caution => ×2, else ×1
+      Flow: 上位 flow_top_pct_high % => ×4, 上位 flow_top_pct % => ×2, else ×1
 
     出力範囲: 1（全安全）〜32（全危険）
     出力ファイル: {prefix}integrated_risk_multiplicative.tif
@@ -256,9 +275,10 @@ def build_multiplicative_index(
         flow = _read_raster(flow_path).data
         flow_valid = ~np.isnan(flow)
         valid |= flow_valid
+        flow_lo, flow_hi = _flow_cutoffs(flow, flow_top_pct, flow_top_pct_high)
         flow_factor = np.where(
-            flow >= (flow_caution * 2.0), 4.0,
-            np.where(flow >= flow_caution, 2.0, 1.0),
+            flow >= flow_hi, 4.0,
+            np.where(flow >= flow_lo, 2.0, 1.0),
         )
         score *= np.where(flow_valid, flow_factor, 1.0).astype(np.float32)
 
@@ -292,7 +312,8 @@ if __name__ == "__main__":
     parser.add_argument("out_dir", help="terrain_analysis ディレクトリ")
     parser.add_argument("--fs-caution", type=float, default=1.2)
     parser.add_argument("--twi-caution", type=float, default=8.0)
-    parser.add_argument("--flow-caution", type=float, default=0.5)
+    parser.add_argument("--flow-top-pct", type=float, default=5.0)
+    parser.add_argument("--flow-top-pct-high", type=float, default=1.0)
     parser.add_argument("--high-risk-threshold", type=float, default=3.0)
     parser.add_argument("--no-overwrite", action="store_true")
     args = parser.parse_args()
@@ -301,7 +322,8 @@ if __name__ == "__main__":
         args.out_dir,
         fs_caution=args.fs_caution,
         twi_caution=args.twi_caution,
-        flow_caution=args.flow_caution,
+        flow_top_pct=args.flow_top_pct,
+        flow_top_pct_high=args.flow_top_pct_high,
         high_risk_threshold=args.high_risk_threshold,
         overwrite=not args.no_overwrite,
     )
