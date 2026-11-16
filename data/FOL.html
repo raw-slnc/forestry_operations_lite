@@ -129,6 +129,16 @@
   .to-top .to-top-arrow { font-size: 1.1em; line-height: 1; }
   .to-top:hover { background: #214824; }
   .to-top[hidden] { display: none; }
+  /* 項目見出し（h3）の中身を一段下げる。見出しと、h2 直後の導入文は下げない */
+  .sec h3 ~ *:not(h2):not(h3) { margin-left: 1.2em; }
+  .sec h3 ~ table { width: calc(100% - 1.2em); }
+  /* 画像と、注意などの囲みは下げない */
+  .sec h3 ~ .figure, .sec h3 ~ .note, .sec h3 ~ .important-note { margin-left: 0; }
+  .sec h3 ~ table.figure { width: 100%; }
+  .legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1px; margin: 6px 0 4px; font-size: 0.85em; }
+  .legend-row .legend-name { color: #464646; margin-right: 6px; }
+  .legend-row .lg { min-width: 2.6em; padding: 0 0.5em; text-align: center; border: 1px solid #969696; color: #282828; }
+  .legend-row .lg-gap { width: 14px; }
 </style>
 </head>
 <body>
@@ -309,6 +319,10 @@ All parameters describe the properties of the "topsoil down to the hard layer".<
 </table>
 
 <h4>How to read this judgment</h4>
+<div class="legend-row"><span class="legend-name">Slope Stability (slope)</span><span class="lg" style="background:#6abb84">10°</span><span class="lg" style="background:#c5e69e">13°</span><span class="lg" style="background:#dff1b7">20°</span><span class="lg" style="background:#f8fcd0">41°</span><span class="lg" style="background:#f4debb">61°</span></div>
+<p>The soil settings are the same for the whole run, so the colour follows the slope angle. The legend shows the slope angle at each colour for that run's settings; changing φ', c', z or m changes the angles.
+Above: φ' 33°, c' 2 kPa, z 0.5 m, m 0.5 — slopes steeper than 41° are unstable (FS below 1). Very steep slopes (around 60° or more) appear more stable again.
+These angles are not the road-construction slope classes (see below).</p>
 <div class="note">
 The plugin looks at the stability of the mountainside <em>before</em> a forest road is built (the natural slope). "Caution" means that slope is already on the more failure-prone side — it is not a statement about what angle a forest road can or cannot be built on. Construction-guideline slope classes (e.g. Japan's 25°/35° bands) are a guide to earthwork volume and whether structures are needed once a road is built — a different question. Do not compare the two numbers directly. Planning a forest road also involves conditions the plugin does not look at: securing fill material, disposing of surplus soil, handling stumps and roots, drainage, and more.
 </div>
@@ -344,7 +358,7 @@ Higher values indicate valleys/lowlands where water tends to accumulate.</p>
 This choice affects <strong>Valley Terrain (TWI) only</strong> — flow estimation always uses D8.<br>
 It's a trade-off between "how sharp the valley lines are" and "how accurate the wetness distribution is".</p>
 
-<table>
+<table class="figure">
   <tr>
     <th style="width:33%">D8 (Single Steepest)</th>
     <th style="width:33%">D∞ (Tarboton)</th>
@@ -494,28 +508,18 @@ USDA NRCS National Engineering Handbook, Part 630.</p>
 <div class="sec">
 <h2>Feature Descriptions</h2>
 
-<h3>Background processing (progress / stop)</h3>
-<p>Analysis, DEM/DSM fetching, CS MAP export and WebODM Importer export run in the background, so QGIS stays responsive. During analysis, the <strong>Run Analysis</strong> button becomes a progress bar showing the percentage, with the current step and the estimated time remaining below it (the estimate is based on the previous run). <strong>Stop</strong> stops the analysis, and <strong>Cancel</strong> on the DEM / DSM row stops a fetch. Switching projects or closing the plugin window cancels a running task and removes its partial files.</p>
-
-<h3>CS MAP Export</h3>
-<p><strong>Run Export</strong> under <strong>Terrain Data &gt; CS Map Export</strong> creates a CS-style terrain visualization from the selected DEM. Local DEM files are exported as a whole raster; fetched sources such as VS LP/Grid, GSI DEM, and Terrarium use the currently fetched DEM raster. The output file name is derived from the exported area's center coordinate and size, so exports of different areas never collide or overwrite one another. When <strong>Overwrite Same Location</strong> is checked (default), re-exporting the same area replaces the previous file for that location; unchecked, each re-export of that same area is kept as a separate file instead. The export is always added to QGIS; when <strong>Set As Layer</strong> is checked, it is also set as the current <strong>Layer Settings &gt; Tile Layer</strong> selection.</p>
-<div class="note">
-  <strong>Input data:</strong> a CS-style map only resolves micro-relief that is genuinely present in the DEM, and it assumes a LiDAR-grade ground surface. A photogrammetric DTM (e.g. from WebODM / drone imagery) has low ground-surface accuracy: under forest canopy the ground is largely interpolated between sparse points, so fine structure in the CS map can be an interpolation artifact rather than real terrain. Prefer LiDAR, or open-terrain / leaf-off captures; treat forested photogrammetric results as indicative only.
-</div>
-<div class="important-note">
-  <strong>Note:</strong> The color balance is tuned for Forestry Operations Lite so analysis layers such as flow, wetness, and terrain features remain easy to interpret.
-</div>
-<div style="margin-top:14px;">
-  <button class="image-zoom" type="button" data-group="cs-map" data-src="cs_style_map_example.jpg" data-caption="CS-style terrain from CS Map Export, set as Layer Settings &gt; Tile Layer, with Valley Terrain and Flow Estimation layers overlaid in the preview."><img src="cs_style_map_example.jpg" alt="CS-style terrain map with Valley Terrain and Flow Estimation overlaid in Forestry Operations Lite"></button>
-  <p style="color:#666; font-size:0.86em; margin:6px 0 0;">Example: CS-style terrain output set as the Tile Layer, with Valley Terrain and Flow Estimation overlaid. The tuned colour balance keeps the overlay readable against the terrain.</p>
-</div>
-<div class="note">
-  CS立体図 is a terrain visualization method proposed by Nagano Prefecture Forestry Research Center. The method is described as open, but exported maps also follow the license and attribution requirements of the input DEM.
-</div>
-
 <h3>Slope Stability</h3>
-<p>Computes the stability factor FS using the infinite slope model. FS &lt; 1.0 indicates collapse risk,
-FS &lt; 1.5 indicates a caution zone. Calculated from soil parameters (φ, c, γ), terrain slope, and soil depth.</p>
+<div class="legend-row"><span class="legend-name">Slope Stability (slope)</span><span class="lg" style="background:#6abb84">10°</span><span class="lg" style="background:#c5e69e">13°</span><span class="lg" style="background:#dff1b7">20°</span><span class="lg" style="background:#f8fcd0">41°</span><span class="lg" style="background:#f4debb">61°</span></div>
+<ul>
+  <li>Greener is more stable; the paler and redder, the more prone to failure. The legend angles are a guide for that run's settings.</li>
+  <li>In the example above (friction angle 33°, cohesion 2 kPa, soil depth 0.5 m, saturation 0.5), slopes steeper than 41° are unstable. Above about 60°, slopes appear more stable again (a property of the formula).</li>
+  <li>The FS threshold does not change the colours; it sets which slopes go into High Risk.</li>
+</ul>
+<table>
+  <tr><th>FS threshold</th><td>0.8</td><td>1.0</td><td>1.2 (default)</td><td>1.5</td><td>2.0</td></tr>
+  <tr><th>Slopes in High Risk</th><td>56–65°</td><td>41–75°</td><td>33–78°</td><td>27–81°</td><td>20–83°</td></tr>
+</table>
+<p>These angles are not the road-construction slope classes (see <em>How to read this judgment</em> in Parameter Setting Hints).</p>
 
 <h3>Valley Terrain</h3>
 <p>Vector data extracted from the DEM, showing catchment terrain and valley lines.
@@ -543,9 +547,30 @@ For an active numbered run the buffer is a temporary display layer. For a Named 
 it is stored as a GeoTIFF alongside the analysis files and follows the named layer's
 visibility.</p>
 
-<h3>Integrated Risk</h3>
-<p>An additive risk index (0–6) combining FS, TWI, and peak load.
-Extracts areas where multiple hazard factors overlap as "high-priority" polygons.</p>
+<h3>Overall Risk / High Risk</h3>
+<div class="legend-row"><span class="legend-name">Overall Risk</span><span class="lg" style="background:#80ce80">0</span><span class="lg" style="background:#bbe5a1">1</span><span class="lg" style="background:#ffe859">2</span><span class="lg" style="background:#ffae59">3</span><span class="lg" style="background:#f2806d">4</span><span class="lg" style="background:#d5596d">5</span><span class="lg" style="background:#a15994">6</span><span class="lg-gap"></span><span class="legend-name">High Risk</span><span class="lg" style="background:#e99797">&nbsp;</span></div>
+<p><strong>Overall Risk</strong> rises where unstable slopes, wet ground and concentrated flow overlap.
+The legend lists only the levels found in the run. <strong>High Risk</strong> marks the areas where the overlap
+is high, together with slopes below the FS threshold.</p>
+
+<h3>Background processing (progress / stop)</h3>
+<p>Analysis, DEM/DSM fetching, CS MAP export and WebODM Importer export run in the background, so QGIS stays responsive. During analysis, the <strong>Run Analysis</strong> button becomes a progress bar showing the percentage, with the current step and the estimated time remaining below it (the estimate is based on the previous run). <strong>Stop</strong> stops the analysis, and <strong>Cancel</strong> on the DEM / DSM row stops a fetch. Switching projects or closing the plugin window cancels a running task and removes its partial files.</p>
+
+<h3>CS MAP Export</h3>
+<p><strong>Run Export</strong> under <strong>Terrain Data &gt; CS Map Export</strong> creates a CS-style terrain visualization from the selected DEM. Local DEM files are exported as a whole raster; fetched sources such as VS LP/Grid, GSI DEM, and Terrarium use the currently fetched DEM raster. The output file name is derived from the exported area's center coordinate and size, so exports of different areas never collide or overwrite one another. When <strong>Overwrite Same Location</strong> is checked (default), re-exporting the same area replaces the previous file for that location; unchecked, each re-export of that same area is kept as a separate file instead. The export is always added to QGIS; when <strong>Set As Layer</strong> is checked, it is also set as the current <strong>Layer Settings &gt; Tile Layer</strong> selection.</p>
+<div class="note">
+  <strong>Input data:</strong> a CS-style map only resolves micro-relief that is genuinely present in the DEM, and it assumes a LiDAR-grade ground surface. A photogrammetric DTM (e.g. from WebODM / drone imagery) has low ground-surface accuracy: under forest canopy the ground is largely interpolated between sparse points, so fine structure in the CS map can be an interpolation artifact rather than real terrain. Prefer LiDAR, or open-terrain / leaf-off captures; treat forested photogrammetric results as indicative only.
+</div>
+<div class="important-note">
+  <strong>Note:</strong> The color balance is tuned for Forestry Operations Lite so analysis layers such as flow, wetness, and terrain features remain easy to interpret.
+</div>
+<div class="figure" style="margin-top:14px;">
+  <button class="image-zoom" type="button" data-group="cs-map" data-src="cs_style_map_example.jpg" data-caption="CS-style terrain from CS Map Export, set as Layer Settings &gt; Tile Layer, with Valley Terrain and Flow Estimation layers overlaid in the preview."><img src="cs_style_map_example.jpg" alt="CS-style terrain map with Valley Terrain and Flow Estimation overlaid in Forestry Operations Lite"></button>
+  <p style="color:#666; font-size:0.86em; margin:6px 0 0;">Example: CS-style terrain output set as the Tile Layer, with Valley Terrain and Flow Estimation overlaid. The tuned colour balance keeps the overlay readable against the terrain.</p>
+</div>
+<div class="note">
+  CS立体図 is a terrain visualization method proposed by Nagano Prefecture Forestry Research Center. The method is described as open, but exported maps also follow the license and attribution requirements of the input DEM.
+</div>
 
 <h3>Named Exports</h3>
 <p>Select an active numbered run and click <strong>Export to Project</strong> (first row of
@@ -859,6 +884,8 @@ FS は傾斜角・内部摩擦角・粘着力・土壌深度・飽和率から�
 </table>
 
 <h4>この判定の見方</h4>
+<div class="legend-row"><span class="legend-name">Slope Stability (slope)</span><span class="lg" style="background:#6abb84">10°</span><span class="lg" style="background:#c5e69e">13°</span><span class="lg" style="background:#dff1b7">20°</span><span class="lg" style="background:#f8fcd0">41°</span><span class="lg" style="background:#f4debb">61°</span></div>
+<p>土質の設定は解析全体で同じなので、色は傾斜で決まります。凡例は、その解析の設定で各色になる傾斜角です。φ'・c'・z・m を変えると角度も変わります。上は φ' 33°・c' 2 kPa・z 0.5 m・m 0.5 の例で、41° より急な斜面が不安定（FS 1 未満）です。極端な急斜面（約 60° 以上）は、逆に安定側に見えます。この角度は、作業道の傾斜区分とは別のものです（下記）。</p>
 <div class="note">
 プラグインが見ているのは、作業道を作る前の山林（自然斜面）の安定度です。「要注意」は、その斜面がもともと崩れやすい側にあるという意味で、作業道を作れる・作れない角度ではありません。作設指針の傾斜区分（25°・35°）は、作業道を作ったときの土工量や構造物の要否からみた目安で、見ている対象が異なります。数値を並べて比べないでください。作業道の計画では、盛土に使う土の確保、余った土の処理、根株の処理、排水など、プラグインでは見ない条件も検討します。
 </div>
@@ -894,7 +921,7 @@ FS は傾斜角・内部摩擦角・粘着力・土壌深度・飽和率から�
 この選択は<strong>沢地形（TWI）のみ</strong>に効き、流量推測は常に D8 です。<br>
 「沢の線のくっきりさ」と「湿り分布の正確さ」のトレードオフになります。</p>
 
-<table>
+<table class="figure">
   <tr>
     <th style="width:33%">D8（単一最急）</th>
     <th style="width:33%">D∞（Tarboton）</th>
@@ -1025,28 +1052,18 @@ USDA NRCS National Engineering Handbook, Part 630。</p>
 <div class="sec">
 <h2>機能説明</h2>
 
-<h3>バックグラウンド処理（進捗・中止）</h3>
-<p>解析・DEM/DSM の取得・CS MAP 出力・WebODM Importer 向け書き出しはバックグラウンドで行い、QGIS の操作を止めません。解析中は <strong>Run Analysis</strong> ボタンが進捗バー（%）になり、その下に現在の段階と残り時間の目安を表示します（目安は前回の解析の速さから計算）。<strong>Stop</strong> で解析を、DEM / DSM 行の <strong>Cancel</strong> で取得を中止できます。プロジェクトを切り替えた場合やプラグインウィンドウを閉じた場合も、実行中の処理を中止して途中のファイルを削除します。</p>
-
-<h3>CS MAP Export</h3>
-<p><strong>Terrain Data &gt; CS Map Export</strong> の <strong>Run Export</strong> で、選択中のDEMからCS系の地形表現ラスタを作成します。ローカルDEMファイルはラスタ全体、VS LP/Grid・GSI DEM・Terrarium などの取得型ソースは現在取得済みのDEMラスタ全体を対象にします。出力ファイル名は書き出し範囲の中心座標と面積から決まるため、別の範囲を書き出しても互いに上書きされることはありません。<strong>Overwrite Same Location</strong>（既定でオン）がオンの場合、同じ範囲を出し直すと該当ファイルを上書きします。オフの場合は同じ範囲の再出力も別ファイルとして残ります。出力は常にQGISへ追加され、<strong>Set As Layer</strong> をオンにすると <strong>Layer Settings &gt; Tile Layer</strong> にも直接設定します。</p>
-<div class="note">
-  <strong>入力データについて:</strong> CS系表現図は DEM に実在する微地形しか描けず、LiDAR 級の地表面を前提とします。写真測量由来の DTM（WebODM／ドローン空撮など）は地表面精度が低く、特に林冠下では疎な地表点の間を補間しているだけなので、CS図に出る細かい構造は実地形ではなく補間アーティファクトのことがあります。LiDAR、または開放地・落葉期・十分に管理された撮影を優先し、林内の写真測量結果は参考程度に扱ってください。
-</div>
-<div class="important-note">
-  <strong>注意:</strong> 本プラグインでは、流量・湿潤・地形特徴などの解析データを判断しやすいよう、CS系地形表現の色味を調整しています。
-</div>
-<div style="margin-top:14px;">
-  <button class="image-zoom" type="button" data-group="cs-map" data-src="cs_style_map_example.jpg" data-caption="CS Map Export で出力したCS系地形を Layer Settings &gt; Tile Layer に設定し、プレビューで Valley TerrainとFlow Estimation レイヤーを重ねた表示例。"><img src="cs_style_map_example.jpg" alt="Forestry Operations Lite でCS系地形に流量解析を重ねた表示例"></button>
-  <p style="color:#666; font-size:0.86em; margin:6px 0 0;">表示例：CS系地形の出力を Tile Layer に設定し、Valley Terrain、Flow Estimation を重ねた状態。調整済みの色味により、地形の上でも重ねた解析レイヤーが読み取りやすい。</p>
-</div>
-<div class="note">
-  CS立体図は長野県林業総合センターが考案した地形表現図法です。図法自体はオープンと説明されていますが、出力した地図の利用条件は入力DEMのライセンス・出典表示条件にも従います。
-</div>
-
 <h3>斜面安定</h3>
-<p>無限斜面モデルによる安定性係数 FS を算出。FS &lt; 1.0 で崩壊リスク、FS &lt; 1.5 で注意域。
-土質パラメータ（φ・c・γ）と地形勾配・土層深から計算。</p>
+<div class="legend-row"><span class="legend-name">Slope Stability (slope)</span><span class="lg" style="background:#6abb84">10°</span><span class="lg" style="background:#c5e69e">13°</span><span class="lg" style="background:#dff1b7">20°</span><span class="lg" style="background:#f8fcd0">41°</span><span class="lg" style="background:#f4debb">61°</span></div>
+<ul>
+  <li>緑ほど安定、淡い黄から赤みが出るほど崩れやすい斜面です。凡例の角度は、その解析の設定での目安です。</li>
+  <li>上の例（内部摩擦角 33°・粘着力 2 kPa・土層深 0.5 m・飽和率 0.5）では、41° より急な斜面が不安定です。ただし約 60° を超えると、逆に安定側に見えます（計算式の性質）。</li>
+  <li>FS 閾値は色を変えず、High Risk に入れる傾斜を決めます。</li>
+</ul>
+<table>
+  <tr><th>FS 閾値</th><td>0.8</td><td>1.0</td><td>1.2（既定）</td><td>1.5</td><td>2.0</td></tr>
+  <tr><th>High Risk に入る傾斜</th><td>56〜65°</td><td>41〜75°</td><td>33〜78°</td><td>27〜81°</td><td>20〜83°</td></tr>
+</table>
+<p>この角度は作業道の傾斜区分とは別のものです（パラメータ設定ヒントの<em>この判定の見方</em>）。</p>
 
 <h3>沢地形</h3>
 <p>DEM から集水地形・沢筋を抽出したベクターデータ。
@@ -1069,9 +1086,28 @@ DSM 設定時は樹冠高から流出係数・流速係数を地点ごとに可�
 設定を共有し、Time load は独立したBuffer設定を持ちます。解析番号のRunでは一時表示レイヤーですが、
 Named Exportでは解析ファイルと同じ場所にGeoTIFFとして保存し、命名レイヤーの表示状態に追従します。</p>
 
-<h3>総合リスク</h3>
-<p>FS・TWI・Peak load を統合した加算型リスク指標（0〜6）。
-複数の危険因子が重なる箇所を「重点箇所」ポリゴンで抽出。</p>
+<h3>総合リスク（Overall Risk / High Risk）</h3>
+<div class="legend-row"><span class="legend-name">Overall Risk</span><span class="lg" style="background:#80ce80">0</span><span class="lg" style="background:#bbe5a1">1</span><span class="lg" style="background:#ffe859">2</span><span class="lg" style="background:#ffae59">3</span><span class="lg" style="background:#f2806d">4</span><span class="lg" style="background:#d5596d">5</span><span class="lg" style="background:#a15994">6</span><span class="lg-gap"></span><span class="legend-name">High Risk</span><span class="lg" style="background:#e99797">&nbsp;</span></div>
+<p><strong>Overall Risk</strong> は、不安定な斜面・湿りやすい地形・水の集まりが重なるほど高くなります。凡例には、その解析に現れた段階だけを表示します。<strong>High Risk</strong> は、重なりの大きい所に、FS 閾値を下回る斜面を加えた範囲です。</p>
+
+<h3>バックグラウンド処理（進捗・中止）</h3>
+<p>解析・DEM/DSM の取得・CS MAP 出力・WebODM Importer 向け書き出しはバックグラウンドで行い、QGIS の操作を止めません。解析中は <strong>Run Analysis</strong> ボタンが進捗バー（%）になり、その下に現在の段階と残り時間の目安を表示します（目安は前回の解析の速さから計算）。<strong>Stop</strong> で解析を、DEM / DSM 行の <strong>Cancel</strong> で取得を中止できます。プロジェクトを切り替えた場合やプラグインウィンドウを閉じた場合も、実行中の処理を中止して途中のファイルを削除します。</p>
+
+<h3>CS MAP Export</h3>
+<p><strong>Terrain Data &gt; CS Map Export</strong> の <strong>Run Export</strong> で、選択中のDEMからCS系の地形表現ラスタを作成します。ローカルDEMファイルはラスタ全体、VS LP/Grid・GSI DEM・Terrarium などの取得型ソースは現在取得済みのDEMラスタ全体を対象にします。出力ファイル名は書き出し範囲の中心座標と面積から決まるため、別の範囲を書き出しても互いに上書きされることはありません。<strong>Overwrite Same Location</strong>（既定でオン）がオンの場合、同じ範囲を出し直すと該当ファイルを上書きします。オフの場合は同じ範囲の再出力も別ファイルとして残ります。出力は常にQGISへ追加され、<strong>Set As Layer</strong> をオンにすると <strong>Layer Settings &gt; Tile Layer</strong> にも直接設定します。</p>
+<div class="note">
+  <strong>入力データについて:</strong> CS系表現図は DEM に実在する微地形しか描けず、LiDAR 級の地表面を前提とします。写真測量由来の DTM（WebODM／ドローン空撮など）は地表面精度が低く、特に林冠下では疎な地表点の間を補間しているだけなので、CS図に出る細かい構造は実地形ではなく補間アーティファクトのことがあります。LiDAR、または開放地・落葉期・十分に管理された撮影を優先し、林内の写真測量結果は参考程度に扱ってください。
+</div>
+<div class="important-note">
+  <strong>注意:</strong> 本プラグインでは、流量・湿潤・地形特徴などの解析データを判断しやすいよう、CS系地形表現の色味を調整しています。
+</div>
+<div class="figure" style="margin-top:14px;">
+  <button class="image-zoom" type="button" data-group="cs-map" data-src="cs_style_map_example.jpg" data-caption="CS Map Export で出力したCS系地形を Layer Settings &gt; Tile Layer に設定し、プレビューで Valley TerrainとFlow Estimation レイヤーを重ねた表示例。"><img src="cs_style_map_example.jpg" alt="Forestry Operations Lite でCS系地形に流量解析を重ねた表示例"></button>
+  <p style="color:#666; font-size:0.86em; margin:6px 0 0;">表示例：CS系地形の出力を Tile Layer に設定し、Valley Terrain、Flow Estimation を重ねた状態。調整済みの色味により、地形の上でも重ねた解析レイヤーが読み取りやすい。</p>
+</div>
+<div class="note">
+  CS立体図は長野県林業総合センターが考案した地形表現図法です。図法自体はオープンと説明されていますが、出力した地図の利用条件は入力DEMのライセンス・出典表示条件にも従います。
+</div>
 
 <h3>Named Exports</h3>
 <p>実行中の解析番号を選び、<strong>Analysis Layer Display</strong> の1行目（解析番号の選択欄の隣）にある

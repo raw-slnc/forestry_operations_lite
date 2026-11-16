@@ -5,7 +5,7 @@ import sys
 import numpy as np
 from qgis.PyQt import QtWidgets, uic
 from qgis.PyQt.QtCore import QEvent, QSettings, QSignalBlocker, Qt, QUrl, pyqtSignal
-from qgis.PyQt.QtGui import QDesktopServices, QIcon, QKeySequence
+from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon, QKeySequence
 from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
@@ -219,6 +219,148 @@ class _ElidedPathLabel(QtWidgets.QLabel):
         if event.button() == Qt.MouseButton.LeftButton and self._path and os.path.isdir(self._path):
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._path))
         super().mousePressEvent(event)
+
+
+class PreviewLegend(QtWidgets.QWidget):
+    """Design Preview の見出し行の右端に重ねる凡例（1行）。
+
+    items は左から順に描く。種類:
+      ("ramp",    名前, [(0..1 の位置, QColor)], [(0..1 の位置, 目盛り文字)], 不透明度)
+      ("classes", 名前, [(文字, QColor)], 不透明度)
+      ("swatch",  名前, QColor, 不透明度)
+    部品の並びには入れず、親（見出しのある枠）の上に重ねるので、窓の大きさは変わらない。
+    """
+
+    _RAMP_W = 128
+    _GAP = 14
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setStyleSheet("font-size: 8pt;")  # 注記と同じ大きさ（窓の 9pt より優先）
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._items = []
+        self.hide()
+
+    def set_items(self, items, tooltip=""):
+        self._items = list(items)
+        self.setToolTip(tooltip)
+        self.setVisible(bool(self._items))
+        self.ensurePolished()
+        self.resize(self.sizeHint())
+        self.update()
+
+    @staticmethod
+    def _half(fm):
+        # 「半角」1文字分の余白＝数字1文字の幅（スペース文字の幅は狭すぎて見えない）
+        return fm.horizontalAdvance("0")
+
+    def _box_w(self, fm, text=None):
+        """四角の幅。凡例の四角はすべて同じ幅（一番長い文字＋両側に半角1文字分）。"""
+        texts = [t for item in self._items if item[0] == "classes" for t, _c in item[2]]
+        widest = max((fm.horizontalAdvance(t) for t in texts), default=0)
+        return widest + 2 * self._half(fm)
+
+    def sizeHint(self):
+        from qgis.PyQt.QtCore import QSize
+        fm = self.fontMetrics()
+        w = 0
+        for n, item in enumerate(self._items):
+            kind, name = item[0], item[1]
+            w += (self._GAP if n else 0) + fm.horizontalAdvance(name) + 5
+            if kind == "ramp":
+                w += self._RAMP_W
+            elif kind == "classes":
+                w += sum(self._box_w(fm, t) + 1 for t, _c in item[2])
+            else:
+                w += fm.height()
+        return QSize(max(w, 1), fm.height() + 2)
+
+    @staticmethod
+    def _blend(color, opacity):
+        c = QColor(color)
+        c.setAlphaF(max(0.0, min(1.0, c.alphaF() * opacity)))
+        return c
+
+    @staticmethod
+    def _text_on(color, opacity):
+        # 白地に重ねたときの明るさで、上に書く数字の色を決める
+        a = color.alphaF() * opacity
+        lum = sum(w * (ch * a + 255 * (1 - a)) for w, ch in
+                  ((0.299, color.red()), (0.587, color.green()), (0.114, color.blue())))
+        return QColor(255, 255, 255) if lum < 140 else QColor(40, 40, 40)
+
+    @staticmethod
+    def _draw_number(p, fm, rect, text):
+        """数字を四角の中に置く。行の高さ（下の余白を含む）でなく、数字の形の上端〜
+        下端を四角の上下の中央にそろえる（行の高さで中央にすると少し上に寄って見える）。"""
+        from qgis.PyQt.QtCore import QPointF
+        glyph = fm.tightBoundingRect("0123456789")  # 上端は負（ベースラインより上）
+        baseline = rect.center().y() - (glyph.top() + glyph.bottom()) / 2
+        x = rect.center().x() - fm.horizontalAdvance(text) / 2
+        p.drawText(QPointF(x, baseline), text)
+
+    def paintEvent(self, event):
+        from qgis.PyQt.QtGui import QPainter, QLinearGradient
+        from qgis.PyQt.QtCore import QRectF
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        fm = self.fontMetrics()
+        h = fm.height()
+        y = (self.height() - h) / 2
+        x = 0.0
+        frame = QColor(150, 150, 150)
+        name_col = QColor(70, 70, 70)
+        for n, item in enumerate(self._items):
+            kind, name = item[0], item[1]
+            if n:
+                x += self._GAP
+            p.setPen(name_col)
+            nw = fm.horizontalAdvance(name)
+            p.drawText(QRectF(x, y, nw, h), Qt.AlignmentFlag.AlignVCenter, name)
+            x += nw + 5
+            if kind == "ramp":
+                stops, ticks, opacity = item[2], item[3], item[4]
+                rect = QRectF(x, y, self._RAMP_W, h)
+                # 端の数字（0 と 4+）も、値の位置を中心に両側へ半角スペース分あくよう、
+                # 値の範囲を帯の内側に置く。外側は端の色をそのまま伸ばす
+                space = self._half(fm)
+                pad_l = space + fm.horizontalAdvance(ticks[0][1]) / 2 if ticks else 0
+                pad_r = space + fm.horizontalAdvance(ticks[-1][1]) / 2 if ticks else 0
+                inner_l, inner_w = rect.left() + pad_l, rect.width() - pad_l - pad_r
+                grad = QLinearGradient(rect.left(), 0, rect.right(), 0)
+                grad.setColorAt(0.0, self._blend(stops[0][1], opacity))
+                grad.setColorAt(1.0, self._blend(stops[-1][1], opacity))
+                for pos, color in stops:
+                    grad.setColorAt((pad_l + pos * inner_w) / rect.width(), self._blend(color, opacity))
+                p.fillRect(rect, grad)
+                p.setPen(frame)
+                p.drawRect(rect)
+                for pos, text in ticks:
+                    tw = fm.horizontalAdvance(text)
+                    tx = inner_l + pos * inner_w - tw / 2
+                    under = min(stops, key=lambda s: abs(s[0] - pos))[1]
+                    p.setPen(self._text_on(under, opacity))
+                    self._draw_number(p, fm, QRectF(tx, y, tw, h), text)
+                x += self._RAMP_W
+            elif kind == "classes":
+                classes, opacity = item[2], item[3]
+                for text, color in classes:
+                    bw = self._box_w(fm, text)
+                    rect = QRectF(x, y, bw, h)
+                    p.fillRect(rect, self._blend(color, opacity))
+                    p.setPen(frame)
+                    p.drawRect(rect)
+                    p.setPen(self._text_on(color, opacity))
+                    self._draw_number(p, fm, rect, text)
+                    x += bw + 1
+            else:
+                color, opacity = item[2], item[3]
+                rect = QRectF(x, y, h, h)
+                p.fillRect(rect, self._blend(color, opacity))
+                p.setPen(frame)
+                p.drawRect(rect)
+                x += h
+        p.end()
 
 
 class CrosshairOverlay(QtWidgets.QWidget):
@@ -1738,6 +1880,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # キーボードフォーカスを有効化（矢印キーパンのため）
         self.preview_canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         preview_layout.addWidget(self.preview_canvas)
+        # 凡例（Slope Stability / Overall Risk / High Risk）：見出し行の右端に重ねる。
+        # 表示レイヤーが入れ替わったとき（layersChanged）と透過率の変更で作り直す。
+        self._preview_legend = PreviewLegend(self.grpPreviewCanvas)
+        self._legend_value_cache = {}
+        self.grpPreviewCanvas.installEventFilter(self)
+        self.preview_canvas.layersChanged.connect(self._update_preview_legend)
 
         # デフォルトツール: ドラッグ・スクロール・矢印キーでのパン/ズーム
         self._pan_tool = PreviewPanTool(self.preview_canvas)
@@ -2637,7 +2785,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
 
     def eventFilter(self, obj, event):
-        """タブバー空白 / パラメータ表示領域背景クリックで次タブへ切り替える。"""
+        """タブバー空白 / パラメータ表示領域背景クリックで次タブへ切り替える。
+        Design Preview の枠の大きさが変わったら凡例の位置を合わせる。"""
+        if (obj is getattr(self, "grpPreviewCanvas", None)
+                and event.type() in (QEvent.Type.Resize, QEvent.Type.Show)):
+            self._position_preview_legend()
         if event.type() == QEvent.Type.MouseButtonPress and self.tabParams.count() > 0:
             nxt = (self.tabParams.currentIndex() + 1) % self.tabParams.count()
             # タブバーの空白部分
@@ -3689,6 +3841,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         # 固定値型: (value, QColor, label) のリスト。値はそのまま使用。
         FIXED = {
+            # 他のレイヤーと重ねて見るため、淡い色合いのままにする（ユーザー判断）
             "stability_fs": [
                 (0.0, QColor(215,  25,  28), "0"),
                 (1.0, QColor(245, 251, 182), "1"),
@@ -3696,11 +3849,16 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 (3.0, QColor(166, 217, 106), "3"),
                 (4.0, QColor( 26, 150,  65), "4"),
             ],
+            # 点数（0〜6 の整数）ごとの色。よく出る 0・2・3 は従来の色のまま、
+            # 1・4・5・6 を見分けられる色にする（段階の色＝Exact で描く）
             "integrated_risk_index": [
-                (0.0, QColor( 60, 180,  60), "Low 0"),
-                (2.0, QColor(255, 220,   0), "Mid 2"),
-                (3.0, QColor(255, 130,   0), "High 3"),
-                (5.0, QColor(200,   0,   0), "Max 5"),
+                (0.0, QColor( 60, 180,  60), "0"),
+                (1.0, QColor(150, 215, 110), "1"),
+                (2.0, QColor(255, 220,   0), "2"),
+                (3.0, QColor(255, 130,   0), "3"),
+                (4.0, QColor(235,  60,  30), "4"),
+                (5.0, QColor(190,   0,  30), "5"),
+                (6.0, QColor(110,   0,  90), "6"),
             ],
             "integrated_high_risk_mask": [
                 (0.0, QColor(200,   0,   0,   0), ""),
@@ -3868,8 +4026,11 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         ramp_min = items[0].value
         ramp_max = items[-1].value
 
+        # Overall Risk は整数の点数なので、値ごとの色（Exact）で描く
+        stepped = base_name == "integrated_risk_index"
         shader_func = QgsColorRampShader()
-        shader_func.setColorRampType(QgsColorRampShader.Type.Interpolated)
+        shader_func.setColorRampType(
+            QgsColorRampShader.Type.Exact if stepped else QgsColorRampShader.Type.Interpolated)
         shader_func.setColorRampItemList(items)
         shader_func.setMinimumValue(ramp_min)
         shader_func.setMaximumValue(ramp_max)
@@ -3887,7 +4048,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             for it in items[1:-1]
         ]
         source_ramp = QgsGradientColorRamp(
-            items[0].color, items[-1].color, False, stops
+            items[0].color, items[-1].color, stepped, stops
         )
         shader_func.setSourceColorRamp(source_ramp)
         try:
@@ -3929,6 +4090,201 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._persist_named_export_display_state()
         if self.preview_canvas is not None:
             self.preview_canvas.refresh()
+        if key in ("stability", "integrated"):
+            self._update_preview_legend()
+
+    # ── プレビューの凡例 ─────────────────────────────────────
+    _LEGEND_FALLBACK_HIGH_RISK = QColor(200, 0, 0, 160)
+
+    def _position_preview_legend(self):
+        """凡例を Design Preview の見出し行の右端に置く。"""
+        legend = getattr(self, "_preview_legend", None)
+        grp = getattr(self, "grpPreviewCanvas", None)
+        if legend is None or grp is None or not legend.isVisible():
+            return
+        # 見出しの文字の位置は OS のスタイルで違うので、スタイルに聞いて上下の中心をそろえる
+        try:
+            opt = QtWidgets.QStyleOptionGroupBox()
+            grp.initStyleOption(opt)
+            label = grp.style().subControlRect(
+                QtWidgets.QStyle.ComplexControl.CC_GroupBox, opt,
+                QtWidgets.QStyle.SubControl.SC_GroupBoxLabel, grp)
+            centre_y, label_right = label.center().y(), label.right()
+        except Exception:  # nosec B110
+            centre_y = grp.fontMetrics().height() / 2
+            label_right = grp.fontMetrics().horizontalAdvance(grp.title()) + 8
+        y = max(0, round(centre_y - legend.height() / 2))
+        x = max(label_right + 16, grp.width() - legend.width() - 8)
+        legend.move(x, y)
+        legend.raise_()
+
+    @staticmethod
+    def _legend_layer_file(lyr):
+        return lyr.source().split("|")[0]
+
+    def _legend_present_values(self, path):
+        """Overall Risk のラスターに実際にある点数（整数）の一覧。ファイルが同じなら再計算しない。"""
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return []
+        key = (path, stat.st_mtime, stat.st_size)
+        cached = self._legend_value_cache.get(key)
+        if cached is not None:
+            return cached
+        values = []
+        try:
+            from osgeo import gdal as _gdal
+            ds = _gdal.Open(path)
+            arr = ds.GetRasterBand(1).ReadAsArray()
+            nodata = ds.GetRasterBand(1).GetNoDataValue()
+            ds = None
+            finite = arr[np.isfinite(arr)]
+            if nodata is not None:
+                finite = finite[finite != nodata]
+            values = sorted({int(round(v)) for v in np.unique(finite)})
+        except Exception:  # nosec B110
+            values = []
+        self._legend_value_cache = {key: values}
+        return values
+
+    @staticmethod
+    def _legend_shader_items(lyr):
+        try:
+            return lyr.renderer().shader().rasterShaderFunction().colorRampItemList()
+        except Exception:  # nosec B110
+            return []
+
+    @staticmethod
+    def _legend_color_at(items, value):
+        """レイヤーの色の付け方（連続・段階）に沿って value の色を求める。"""
+        if not items:
+            return QColor(128, 128, 128)
+        for it in items:
+            if abs(it.value - value) < 1e-9:
+                return QColor(it.color)
+        if value <= items[0].value:
+            return QColor(items[0].color)
+        for a, b in zip(items, items[1:]):
+            if a.value <= value <= b.value:
+                t = (value - a.value) / ((b.value - a.value) or 1.0)
+                ca, cb = a.color, b.color
+                return QColor(round(ca.red() + (cb.red() - ca.red()) * t),
+                              round(ca.green() + (cb.green() - ca.green()) * t),
+                              round(ca.blue() + (cb.blue() - ca.blue()) * t),
+                              round(ca.alpha() + (cb.alpha() - ca.alpha()) * t))
+        return QColor(items[-1].color)
+
+    def _legend_params(self, lyr):
+        """レイヤーの解析の params.json（無ければ {}）。"""
+        folder = os.path.dirname(self._legend_layer_file(lyr))
+        try:
+            import json
+            with open(os.path.join(folder, "params.json"), encoding="utf-8") as f:
+                return json.load(f) or {}
+        except Exception:  # nosec B110
+            return {}
+
+    @staticmethod
+    def _legend_fs_angles(params, fs_values):
+        """FS の値を、その解析の土質の設定での傾斜角（度）に置き換える。
+
+        FS は傾斜角だけで決まる（土質の値は解析全体で一つ）ので、解析と同じ式で
+        0〜89.9° を細かく計算し、緩い側から最初にその FS を下回る角度を求める。
+        戻り値: ([(FS, 角度)], (最小FS, その角度))。設定が無ければ None。
+        """
+        keys = ("phi_deg", "c_kpa", "z_m", "m_sat")
+        if not all(isinstance(params.get(k), (int, float)) for k in keys):
+            return None
+        from .terrain import analysis as _ta
+        deg = np.linspace(0.1, 89.9, 8981)
+        fs = _ta.stability_fs(deg, phi_deg=params["phi_deg"], c_kpa=params["c_kpa"],
+                              z_m=params["z_m"], m=params["m_sat"])
+        i_min = int(np.nanargmin(fs))
+        pairs = []
+        for target in fs_values:
+            below = np.nonzero(fs[:i_min + 1] <= target)[0]
+            if below.size:
+                pairs.append((target, float(deg[below[0]])))
+        return pairs, (float(fs[i_min]), float(deg[i_min]))
+
+    def _update_preview_legend(self, *_args):
+        """表示中の Slope Stability / Overall Risk / High Risk の凡例を作り直す。"""
+        legend = getattr(self, "_preview_legend", None)
+        if legend is None:
+            return
+        proj = QgsProject.instance()
+        items, tips = [], []
+        for key in ("stability", "integrated"):
+            for lid in self._loaded_terrain_layers.get(key, []):
+                lyr = proj.mapLayer(lid)
+                if lyr is None:
+                    continue
+                stem = os.path.splitext(os.path.basename(self._legend_layer_file(lyr)))[0]
+                opacity = lyr.opacity()
+                if stem.endswith("stability_fs"):
+                    ramp = self._legend_shader_items(lyr)
+                    if len(ramp) < 2:
+                        continue
+                    params = self._legend_params(lyr)
+                    # 名前の付いた色の点だけ凡例にする（色の区切り用の点は出さない）
+                    angles = self._legend_fs_angles(
+                        params, sorted({it.value for it in ramp if it.value > 0 and it.label},
+                                       reverse=True))
+                    if angles:
+                        # 傾斜角で表す：FS の目盛り（4・3・2・1）の角度と、FS が最も小さい
+                        # （最も赤い）角度を、緩い順（緑→赤）に並べる
+                        pairs, (fs_min, deg_min) = angles
+                        classes = [(f"{d:.0f}°", self._legend_color_at(ramp, v)) for v, d in pairs]
+                        # FS が最小になる角度は、最後の目盛り（最も赤い色）と近ければ出さない
+                        if not pairs or deg_min - pairs[-1][1] > 5:
+                            classes.append((f"{deg_min:.0f}°", self._legend_color_at(ramp, fs_min)))
+                        items.append(("classes", "Slope Stability (slope)", classes, opacity))
+                        fs1 = next((d for v, d in pairs if abs(v - 1.0) < 1e-9), None)
+                        tips.append(
+                            "Slope Stability: colour by slope angle for this run's soil settings "
+                            f"(friction angle {params['phi_deg']:g}°, cohesion {params['c_kpa']:g} kPa, "
+                            f"soil depth {params['z_m']:g} m, saturation {params['m_sat']:g}). "
+                            + (f"FS 1 (unstable) at about {fs1:.0f}°. " if fs1 is not None else "")
+                            + f"FS is lowest at about {deg_min:.0f}° and rises again on steeper slopes.")
+                    else:
+                        lo, hi = ramp[0].value, ramp[-1].value
+                        span = (hi - lo) or 1.0
+                        stops = [((it.value - lo) / span, QColor(it.color)) for it in ramp]
+                        ticks = [((it.value - lo) / span, f"{it.value:g}") for it in ramp if it.label]
+                        ticks[-1] = (ticks[-1][0], ticks[-1][1] + "+")
+                        items.append(("ramp", "Slope Stability (FS)", stops, ticks, opacity))
+                        tips.append("Slope Stability: factor of safety (FS). Below 1 is unstable; "
+                                    "higher is more stable.")
+                elif stem.endswith("integrated_risk_index"):
+                    ramp = self._legend_shader_items(lyr)
+                    values = self._legend_present_values(self._legend_layer_file(lyr))
+                    if not values:
+                        continue
+                    classes = [(str(v), self._legend_color_at(ramp, v)) for v in values]
+                    items.append(("classes", "Overall Risk", classes, opacity))
+                    tips.append("Overall Risk: sum of scores (0-6). Only scores present in this "
+                                "run are listed.")
+                elif stem.endswith("integrated_high_risk") or stem.endswith("integrated_high_risk_mask"):
+                    color = self._LEGEND_FALLBACK_HIGH_RISK
+                    try:
+                        if lyr.type() == lyr.VectorLayer:
+                            color = QColor(lyr.renderer().symbol().color())
+                        else:
+                            color = self._legend_color_at(self._legend_shader_items(lyr), 1.0)
+                    except Exception:  # nosec B110
+                        pass
+                    items.append(("swatch", "High Risk", color, opacity))
+                    params = self._legend_params(lyr)
+                    thr = params.get("fs_thresh")
+                    cond = f"FS below {thr:g}" if isinstance(thr, (int, float)) else "FS below the threshold"
+                    angles = (self._legend_fs_angles(params, [thr])
+                              if isinstance(thr, (int, float)) else None)
+                    if angles and angles[0]:
+                        cond += f" (slope steeper than about {angles[0][0][1]:.0f}°)"
+                    tips.append(f"High Risk: Overall Risk 3 or more, or {cond}.")
+        legend.set_items(items, "\n".join(tips))
+        self._position_preview_legend()
 
     def _flow_filter_state(self, base_name=None):
         if base_name == "tc":
