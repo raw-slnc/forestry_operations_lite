@@ -181,56 +181,126 @@ def _download_progress(ctx, prefix):
     return _cb
 
 
-def fetch_vs_grid(ctx, codes, out_dir):
-    """Virtual Shizuoka LP/Grid タイル（codes）を S3 から取得して DEM にする。
+def _vs_need_mask(tif_paths, bbox, cell=2.0):
+    """取得したタイル（古い順）を bbox に載せたとき、値の無いセル（cell m 角）の配列と、その格子。"""
+    from osgeo import gdal
+    xmin, ymin, xmax, ymax = bbox
+    cols = max(1, int(np.ceil((xmax - xmin) / cell)))
+    rows = max(1, int(np.ceil((ymax - ymin) / cell)))
+    grid = (xmin, ymax, cell, rows, cols)
+    if not tif_paths:
+        return np.ones((rows, cols), dtype=bool), grid
+    ds = gdal.Warp("", tif_paths, format="MEM", dstSRS="EPSG:6676",
+                   outputBounds=(xmin, ymax - rows * cell, xmin + cols * cell, ymax),
+                   width=cols, height=rows, resampleAlg="near", srcNodata=-9999.0, dstNodata=-9999.0)
+    data = ds.GetRasterBand(1).ReadAsArray()
+    ds = None
+    return ~np.isfinite(data) | (data == -9999.0), grid
+
+
+def _box_needed(box, need, grid):
+    """タイルの範囲 box に、まだ値の無いセルがあるか。"""
+    if box is None:
+        return False
+    xmin, ymax, cell, rows, cols = grid
+    c0 = max(0, int(np.floor((box[0] - xmin) / cell)))
+    c1 = min(cols, int(np.ceil((box[2] - xmin) / cell)))
+    r0 = max(0, int(np.floor((ymax - box[3]) / cell)))
+    r1 = min(rows, int(np.ceil((ymax - box[1]) / cell)))
+    return c0 < c1 and r0 < r1 and bool(need[r0:r1, c0:c1].any())
+
+
+def fetch_vs_grid(ctx, codes, out_dir, bbox=None):
+    """Virtual Shizuoka LP/Grid タイルを S3 から取得して DEM にする。
+
+    bbox（EPSG:6676）を渡すと、新しい年度から順に、まだ値の無い所に掛かるタイルだけを取って
+    重ねる（新しい年度が上。新しい年度のタイルの欠けは古い年度で埋まる）。年度ごとのタイルの方式
+    （2022年は 1000m×750m）で範囲と重なるかを確かめる。
+    タイルの取得に失敗したら、黙って飛ばさずに止める（欠けた DEM で解析させない）。
 
     戻り値: {"loader": DEMLoader, "tif_path": str, "resolved": {code: year}}
     """
     from .terrain.dem_loader import DEMLoader
     from .terrain.remote_zip import Cancelled
-    from .vs_lp import download_grid_tif, merge_tifs, resolve_years
+    from .vs_lp import (NetworkError, available_years, code_overlaps, download_grid_tif, existing_codes,
+                        merge_tifs, tile_bbox, YEAR_SCHEME)
+    from osgeo import gdal
 
     ctx.watch_dir(out_dir)
-    ctx.report(f"Resolving {len(codes)} tile(s)...")
-    resolved = resolve_years(
-        codes, progress_cb=_cancel_aware_progress(ctx, "Checking S3… {done}/{total}"))
-    if not resolved:
+    if bbox is None:
+        bbox = _codes_bbox(codes)
+    try:
+        ctx.report("Checking survey years…")
+        years = available_years(cancel_cb=ctx.cancelled)
+        layers = []          # (year, tif) 新しい年度が先
+        resolved = {}
+        need, grid = _vs_need_mask([], bbox)
+        for year in years:
+            ctx.check()
+            if not need.any():
+                break
+            schemes = (YEAR_SCHEME[year],) if year in YEAR_SCHEME else ("A", "B")
+            candidates = {c for c in codes if code_overlaps(c, year, bbox)
+                          and any(_box_needed(tile_bbox(c, sc), need, grid) for sc in schemes)}
+            if not candidates:
+                continue
+            ctx.report(f"Checking {year} tiles…")
+            found = sorted(existing_codes(year, candidates, "Grid", cancel_cb=ctx.cancelled))
+            added = False
+            for i, code in enumerate(found):
+                ctx.check()
+                ctx.report(f"Downloading {year} {i + 1}/{len(found)}…")
+                tif = download_grid_tif(
+                    code, year, out_dir, cancel_cb=ctx.cancelled,
+                    progress_cb=_download_progress(ctx, f"Downloading {year} {i + 1}/{len(found)}: "),
+                )
+                if year not in YEAR_SCHEME:
+                    # 方式の分からない年度は、ファイル自身の位置で範囲と重なるかを確かめる
+                    info = gdal.Info(tif, format="json")["cornerCoordinates"]
+                    box = (info["lowerLeft"][0], info["lowerLeft"][1], info["upperRight"][0], info["upperRight"][1])
+                    if not _box_needed(box, need, grid):
+                        continue
+                layers.append((year, tif))
+                resolved.setdefault(code, year)
+                added = True
+            if added:
+                need, grid = _vs_need_mask([t for _y, t in reversed(layers)], bbox)
+    except Cancelled:
+        raise DemFetchCancelled()
+    except NetworkError as e:
+        raise DemFetchError(f"⚠ {e}")
+    except (DemFetchCancelled, DemFetchError):
+        raise
+    except Exception as e:
+        raise DemFetchError(f"⚠ VS tile download failed: {e}")
+
+    if not layers:
         raise DemFetchError("⚠ No VS LP Grid tiles available for this area.")
-
-    tif_paths = []
-    errors = []
-    n = len(resolved)
-    for i, (code, year) in enumerate(resolved.items()):
-        ctx.check()
-        ctx.report(f"Downloading {i + 1}/{n}…")
-        try:
-            tif_paths.append(download_grid_tif(
-                code, year, out_dir, cancel_cb=ctx.cancelled,
-                progress_cb=_download_progress(ctx, f"Downloading {i + 1}/{n}: "),
-            ))
-        except Cancelled:
-            raise DemFetchCancelled()
-        except Exception as e:
-            errors.append(f"{code}: {e}")
-
-    if not tif_paths:
-        raise DemFetchError("⚠ All tile downloads failed.\n" + "\n".join(errors[:3]))
 
     ctx.check()
     ctx.report("Processing…")
+    tif_paths = [t for _y, t in reversed(layers)]  # 古い順（後に並べた新しい年度が上）
     if len(tif_paths) == 1:
         tif_path = tif_paths[0]
     else:
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         tif_path = os.path.join(out_dir, f"vs_grid_{ts}.tif")
-        merge_tifs(tif_paths, tif_path)
+        merge_tifs(tif_paths, tif_path, src_nodata=-9999.0)
 
     dem_loader = DEMLoader()
     dem_loader.load(tif_path)
-    return {"loader": dem_loader, "tif_path": tif_path, "resolved": resolved}
+    return {"loader": dem_loader, "tif_path": tif_path, "resolved": resolved,
+            "missing_ratio": float(need.mean())}
 
 
-def fetch_vs_dsm(ctx, codes, out_dir):
+def _codes_bbox(codes):
+    """範囲が渡されないとき（古い呼び出し）、候補コードを方式Aの位置で囲んだ範囲。"""
+    from .vs_lp import tile_bbox
+    boxes = [tile_bbox(c, "A") for c in codes]
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def fetch_vs_dsm(ctx, codes, out_dir, bbox=None):
     """Virtual Shizuoka LP（LP/Original 優先、無ければ LP/Ground）の LAS を取得し、
     DSM（最大値グリッド）にする。成功したら、今回使わない古い LAS・DSM TIF を消す。
 
@@ -241,13 +311,22 @@ def fetch_vs_dsm(ctx, codes, out_dir):
     from .terrain.remote_zip import Cancelled
     from .vs_lp import BUCKET_URL, download_las, las_to_dsm, merge_tifs, resolve_years
 
+    from .vs_lp import NetworkError
+
     ctx.watch_dir(out_dir)
     ctx.report(f"Resolving {len(codes)} tile(s)...")
     _prog = _cancel_aware_progress(ctx, "Checking S3… {done}/{total}")
-    resolved_orig = resolve_years(codes, progress_cb=_prog, lp_type="Original")
-    remaining = codes - set(resolved_orig.keys())
-    resolved_ground = (resolve_years(remaining, progress_cb=_prog, lp_type="Ground")
-                       if remaining else {})
+    try:
+        resolved_orig = resolve_years(codes, progress_cb=_prog, lp_type="Original", bbox=bbox,
+                                      cancel_cb=ctx.cancelled)
+        remaining = codes - set(resolved_orig.keys())
+        resolved_ground = (resolve_years(remaining, progress_cb=_prog, lp_type="Ground", bbox=bbox,
+                                         cancel_cb=ctx.cancelled)
+                           if remaining else {})
+    except Cancelled:
+        raise DemFetchCancelled()
+    except NetworkError as e:
+        raise DemFetchError(f"⚠ {e}")
     resolved = {**resolved_orig, **resolved_ground}
     resolved_lp_type = {c: "Original" for c in resolved_orig}
     resolved_lp_type.update({c: "Ground" for c in resolved_ground})
@@ -679,21 +758,29 @@ _LAS_NOT_USED_README = (
 )
 
 
-def vs_resolve_ortho(ctx, codes):
-    """VS の書き出しの前に、LP/Ortho のある年度を調べる。戻り値: {code: year}"""
-    from .vs_lp import resolve_years
+def vs_resolve_ortho(ctx, codes, bbox=None):
+    """VS の書き出しの前に、LP/Ortho のある年度を調べる。戻り値: {code: year}
+    bbox（EPSG:6676）を渡すと、年度ごとのタイルの方式で範囲と重なるものだけを数える。"""
+    from .terrain.remote_zip import Cancelled
+    from .vs_lp import NetworkError, resolve_years
     ctx.report("Checking Ortho…")
     if not codes:
         return {}
-    return resolve_years(codes, lp_type="Ortho",
-                         progress_cb=_cancel_aware_progress(ctx, "Checking Ortho… {done}/{total}"))
+    try:
+        return resolve_years(codes, lp_type="Ortho", bbox=bbox, cancel_cb=ctx.cancelled,
+                             progress_cb=_cancel_aware_progress(ctx, "Checking Ortho… {done}/{total}"))
+    except Cancelled:
+        raise DemFetchCancelled()
+    except NetworkError as e:
+        raise DemFetchError(f"⚠ {e}")
 
 
 def vs_export_zip(ctx, resolved_ortho, tmp_dir, zip_dir, dtm_path, dsm_path,
                   las_paths, las_urls, las_capable):
     """LP/Ortho を取得し、DTM/DSM/Ortho と LAS の参照を WODMI ZIP に書き出す。
 
-    戻り値: {"zip_path": str, "zip_name": str, "has_dsm": bool, "has_ortho": bool}
+    戻り値: {"zip_path": str, "zip_name": str, "has_dsm": bool, "has_ortho": bool,
+             "ortho_missing": int, "ortho_total": int}
     ZIP の作成に失敗したら DemFetchError("ZIP creation failed:\n...")。
     """
     import json
@@ -704,6 +791,7 @@ def vs_export_zip(ctx, resolved_ortho, tmp_dir, zip_dir, dtm_path, dsm_path,
 
     # ── Ortho (LP/Ortho) ─────────────────────────────────────
     ortho_path = None
+    ortho_missing = 0  # 取れなかった Ortho のタイルの数（書き出しは続け、結果で知らせる）
     if resolved_ortho:
         ortho_tifs = []
         n = len(resolved_ortho)
@@ -717,8 +805,8 @@ def vs_export_zip(ctx, resolved_ortho, tmp_dir, zip_dir, dtm_path, dsm_path,
                 ))
             except Cancelled:
                 raise DemFetchCancelled()
-            except Exception:  # nosec B110  取れなかったタイルは飛ばす（今までどおり）
-                pass
+            except Exception:  # nosec B110  Ortho は背景の画像なので書き出しは続け、取れなかった数を知らせる
+                ortho_missing += 1
         if ortho_tifs:
             ctx.check()
             ctx.report("Merging Ortho…")
@@ -789,7 +877,8 @@ def vs_export_zip(ctx, resolved_ortho, tmp_dir, zip_dir, dtm_path, dsm_path,
         raise DemFetchError(f"ZIP creation failed:\n{e}")
     ctx.check()
     return {"zip_path": zip_path, "zip_name": zip_name,
-            "has_dsm": bool(dsm_path), "has_ortho": bool(ortho_path)}
+            "has_dsm": bool(dsm_path), "has_ortho": bool(ortho_path),
+            "ortho_missing": ortho_missing, "ortho_total": len(resolved_ortho or {})}
 
 
 # ── 海外の公開 DEM / DSM（オランダ AHN・フランス IGN LiDAR HD・ニュージーランド LINZ）──

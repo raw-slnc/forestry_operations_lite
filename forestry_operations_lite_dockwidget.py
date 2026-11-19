@@ -4,7 +4,7 @@ import sys
 
 import numpy as np
 from qgis.PyQt import QtWidgets, uic
-from qgis.PyQt.QtCore import QEvent, QSettings, QSignalBlocker, Qt, QUrl, pyqtSignal
+from qgis.PyQt.QtCore import QEvent, QSettings, QSignalBlocker, Qt, QTimer, QUrl, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon, QKeySequence
 from qgis.core import (
     QgsCoordinateReferenceSystem,
@@ -911,7 +911,15 @@ class DemBrowserDialog(QtWidgets.QDialog):
         # ── 海外の公開 DEM / DSM（地図がその国に掛かっているときだけ）──
         for _title, _bbox, _color, _dem_items, _dsm_items in self._REMOTE_REGIONS:
             _items = _dem_items if self._mode == "dem" else _dsm_items
-            if not _items or not self._canvas_overlaps_bbox(_bbox):
+            if not _items:
+                continue
+            from .remote_coverage import available_shape_for_sentinel
+            _coverage_state = available_shape_for_sentinel(
+                _items[0][0], self._canvas, margin_tiles=1) is not None
+            # The country bbox is retained only for the no-data notice.  A
+            # published tile always wins, so the choice and yellow mesh cannot
+            # disagree near an approximate country-bbox edge.
+            if not _coverage_state and not self._canvas_overlaps_bbox(_bbox):
                 continue
             sec_r = QtWidgets.QListWidgetItem(_title)
             sec_r.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -919,6 +927,13 @@ class DemBrowserDialog(QtWidgets.QDialog):
             f_r = QFont(); f_r.setBold(True)
             sec_r.setFont(f_r)
             self._list.addItem(sec_r)
+            if not _coverage_state:
+                unavailable = QtWidgets.QListWidgetItem(
+                    "⚠  No published elevation tile in the current preview")
+                unavailable.setFlags(Qt.ItemFlag.NoItemFlags)
+                unavailable.setForeground(QColor("#9a6a00"))
+                self._list.addItem(unavailable)
+                continue
             for sentinel, label, _info in _items:
                 item = QtWidgets.QListWidgetItem(label)
                 item.setData(Qt.ItemDataRole.UserRole, sentinel)
@@ -1623,11 +1638,47 @@ class ForestryOperationsLiteWindow(QtWidgets.QMainWindow):
         # content は埋め込み済みでトップレベルではないため、ネイティブのクローズ
         # イベントは自動では content に届かない。
         self.content.closeEvent(event)
+        if not event.isAccepted():
+            return
         super().closeEvent(event)
 
 
 class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
     closingPlugin = pyqtSignal()
+
+    @property
+    def _terrain_loader(self):
+        return getattr(self, "_terrain_loader_value", None)
+
+    @_terrain_loader.setter
+    def _terrain_loader(self, loader):
+        self._terrain_loader_value = loader
+        overlay = getattr(self, "_dem_coverage_overlay", None)
+        if overlay is not None:
+            overlay.set_loader(loader)
+        self._sync_remote_coverage_exclusions()
+        self._schedule_remote_coverage_update()
+
+    @property
+    def _dsm_loader(self):
+        return getattr(self, "_dsm_loader_value", None)
+
+    @_dsm_loader.setter
+    def _dsm_loader(self, loader):
+        self._dsm_loader_value = loader
+        overlay = getattr(self, "_dsm_coverage_overlay", None)
+        if overlay is not None:
+            overlay.set_loader(loader)
+        self._sync_remote_coverage_exclusions()
+        self._schedule_remote_coverage_update()
+
+    def _sync_remote_coverage_exclusions(self):
+        overlay = getattr(self, "_remote_coverage_overlay", None)
+        if overlay is not None:
+            overlay.set_exclusion_loaders((
+                getattr(self, "_terrain_loader_value", None),
+                getattr(self, "_dsm_loader_value", None),
+            ))
 
     def __init__(self, iface, parent=None):
         super().__init__(parent)
@@ -1698,9 +1749,13 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             self._host_window = ForestryOperationsLiteWindow(self, parent=parent)
         win = self._host_window
         if win.isMinimized():
-            win.showNormal()
-        else:
-            win.show()
+            # Remove only the minimized bit so a window minimized from a
+            # maximized state returns maximized instead of becoming normal.
+            state = win.windowState()
+            win.setWindowState(
+                (state & ~Qt.WindowState.WindowMinimized)
+                | Qt.WindowState.WindowActive)
+        win.show()
         win.raise_()
         win.activateWindow()
 
@@ -1894,6 +1949,34 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # 中心十字線オーバーレイ
         self._crosshair = CrosshairOverlay(self.preview_canvas)
         self._crosshair.raise_()
+
+        # 海外公開DEMの取得可能範囲。取得前は黄色の粗い網目で示す。読み込み後は
+        # その部分を除き、下の青DEM・緑DSMの実取得範囲を優先する。
+        from .raster_coverage_overlay import (
+            COVERAGE_HALO_COLOR,
+            COVERAGE_HALO_PX,
+            RasterCoverageOverlay,
+        )
+        self._remote_coverage_overlay = RasterCoverageOverlay(
+            self.preview_canvas, QColor(224, 174, 0), directions=(1, -1),
+            line_halo_color=QColor(COVERAGE_HALO_COLOR),
+            line_halo_px=COVERAGE_HALO_PX)
+        self._remote_coverage_timer = QTimer(self)
+        self._remote_coverage_timer.setSingleShot(True)
+        self._remote_coverage_timer.setInterval(180)
+        self._remote_coverage_timer.timeout.connect(self._update_remote_coverage_overlay)
+        self.preview_canvas.extentsChanged.connect(self._remote_coverage_timer.start)
+
+        # 読み込み済みDEM/DSMの範囲。単独では一方向の細い斜線、重なる場所だけ
+        # 青と緑の線が網目になる。背景地図を隠さないよう20px間隔で描く。
+        self._dem_coverage_overlay = RasterCoverageOverlay(
+            self.preview_canvas, QColor(36, 116, 216), direction=1,
+            line_halo_color=QColor(COVERAGE_HALO_COLOR),
+            line_halo_px=COVERAGE_HALO_PX)
+        self._dsm_coverage_overlay = RasterCoverageOverlay(
+            self.preview_canvas, QColor(22, 134, 78), direction=-1,
+            line_halo_color=QColor(COVERAGE_HALO_COLOR),
+            line_halo_px=COVERAGE_HALO_PX)
 
         _ps = "QLabel{border:1px solid palette(mid);padding:0 4px;font-size:9pt;}"
         _ts = "QLabel{font-size:9pt;}"
@@ -2100,6 +2183,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._vs_export_sig = None
         self._vs_export_pending_sig = None
         self._vs_dem_codes = []   # VS LP/Grid 読込時のタイルコード（Ortho 範囲合わせ用）
+        self._vs_fetch_bbox = None  # VS LP/Grid を取得したときの範囲（EPSG:6676、Ortho の年度の判定用）
         self._vs_dsm_codes = []   # VS LP/Ground 読込時のタイルコード（同上）
         # Export for WebODM Importer は Virtual Shizuoka と、オルソが取れる海外の公開データ
         # （オランダ AHN4・フランス IGN LiDAR HD・ニュージーランド LINZ）。DSM はどれも任意。長野対応は 2026-09-24 に
@@ -2966,6 +3050,34 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             area_text = "---"
         self.lblPreviewStatusArea.setText(area_text)
 
+    def _schedule_remote_coverage_update(self):
+        timer = getattr(self, "_remote_coverage_timer", None)
+        if timer is not None:
+            timer.start()
+
+    def _update_remote_coverage_overlay(self):
+        """Show fetchable foreign DEM tiles in yellow before acquisition.
+
+        Japan-specific sources and global Terrarium are deliberately excluded.
+        The source below the current preview is detected with exactly the same
+        coverage rule used for the DEM/DSM browser choices.
+        """
+        overlay = getattr(self, "_remote_coverage_overlay", None)
+        canvas = getattr(self, "preview_canvas", None)
+        if overlay is None or canvas is None or canvas.extent().isEmpty():
+            return
+
+        from .remote_coverage import active_shape
+
+        found = active_shape(canvas)
+
+        if found is None:
+            overlay.reset()
+            return
+        _key, (geometry, crs) = found
+        overlay.set_geometry(geometry, crs)
+        self._sync_remote_coverage_exclusions()
+
     def _setup_canvas_sync(self):
         if self.iface is not None:
             self.iface.mapCanvas().extentsChanged.connect(self._on_main_canvas_changed)
@@ -3168,6 +3280,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
 
         self.preview_canvas.refresh()
         self._update_preview_status()
+        self._schedule_remote_coverage_update()
         self._schedule_post_init_apply()
 
     def _schedule_post_init_apply(self):
@@ -6019,8 +6132,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         from .dem_worker import fetch_vs_grid
         out_dir = os.path.join(self._terrain_output_dir(), "vs_lp_grid")
 
+        # 年度ごとのタイルの方式で範囲と重なるかを確かめるため、表示範囲も渡す（Ortho の書き出しでも使う）
+        bbox = (ext6.xMinimum(), ext6.yMinimum(), ext6.xMaximum(), ext6.yMaximum())
+        self._vs_fetch_bbox = bbox
+
         def _job(ctx):
-            return fetch_vs_grid(ctx, codes, out_dir)
+            return fetch_vs_grid(ctx, codes, out_dir, bbox=bbox)
 
         def _finish(result, cancelled, error):
             ok = self._finish_vs_lp_grid(result, cancelled, error, update_cs_map_source)
@@ -6067,9 +6184,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         if update_cs_map_source:
             self._cs_map_dem_path = tif_path
         self.txtDemPath.setToolTip(tif_path)
+        # 表示範囲のうち VS の値が無い所（海・整備範囲の外など。NoData のまま）の割合も出す
+        missing = result.get("missing_ratio", 0.0)
+        missing_text = f", no VS data: {missing * 100:.1f}% of view" if missing >= 0.001 else ""
         self.lblDemInfo.setText(
             f"{dem_loader.info_text()}  [{len(resolved)} tile(s), "
-            f"year(s): {', '.join(str(y) for y in sorted(set(resolved.values())))}]"
+            f"year(s): {', '.join(str(y) for y in sorted(set(resolved.values())))}{missing_text}]"
         )
         self._vs_dem_codes = list(resolved.keys())
         self._partial_outside_warned = False
@@ -6629,8 +6749,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         from .dem_worker import fetch_vs_dsm
         out_dir = os.path.join(self._terrain_output_dir(), "vs_lp_ground")
 
+        bbox = (ext6.xMinimum(), ext6.yMinimum(), ext6.xMaximum(), ext6.yMaximum())
+
         def _job(ctx):
-            return fetch_vs_dsm(ctx, codes, out_dir)
+            return fetch_vs_dsm(ctx, codes, out_dir, bbox=bbox)
 
         def _finish(result, cancelled, error):
             ok = self._finish_vs_lp_ground(result, cancelled, error, auto_mode)
@@ -8639,8 +8761,10 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         # 非 VS ソースの場合はキャンバス範囲にフォールバック。
         dem_codes = getattr(self, "_vs_dem_codes", [])
         dsm_codes = getattr(self, "_vs_dsm_codes", [])
+        # Ortho の年度を調べるときも、DEM を取得したときの範囲で年度ごとの方式に合うタイルだけを数える
+        ortho_bbox = getattr(self, "_vs_fetch_bbox", None)
         if dem_codes or dsm_codes:
-            codes = list(set(dem_codes) | set(dsm_codes))
+            codes = set(dem_codes) | set(dsm_codes)
         else:
             if self.preview_canvas is None or self.preview_canvas.extent().isEmpty():
                 QtWidgets.QMessageBox.warning(self, "VS Export",
@@ -8654,6 +8778,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 ext6.xMinimum(), ext6.yMinimum(),
                 ext6.xMaximum(), ext6.yMaximum(),
             )
+            ortho_bbox = (ext6.xMinimum(), ext6.yMinimum(), ext6.xMaximum(), ext6.yMaximum())
 
         # 書き出しに使う値は、ここで写し取っておく（途中で DEM 等が変わっても使わない）
         ctx_vals = {
@@ -8676,7 +8801,7 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         from .dem_worker import vs_resolve_ortho
 
         def _job(ctx):
-            return vs_resolve_ortho(ctx, codes)
+            return vs_resolve_ortho(ctx, codes, bbox=ortho_bbox)
 
         def _finish(resolved_ortho, cancelled, error):
             self._on_vs_ortho_resolved(resolved_ortho, cancelled, error, ctx_vals)
@@ -8764,10 +8889,12 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
                 parts = ["DTM included"]
                 parts.append("DSM included" if result["has_dsm"] else "DSM not available for this area")
                 parts.append("Ortho included" if result["has_ortho"] else "Ortho not available for this area")
-                QtWidgets.QMessageBox.information(
-                    self, "VS Export",
-                    f"Export complete.\n{result['zip_name']}\n" + ", ".join(parts)
-                )
+                message = f"Export complete.\n{result['zip_name']}\n" + ", ".join(parts)
+                if result.get("ortho_missing"):
+                    # 取れなかった Ortho のタイルは画像に穴として残るので、数を知らせる
+                    message += (f"\n\nOrtho: {result['ortho_missing']} of {result['ortho_total']} tiles "
+                                "could not be downloaded (left blank in the image).")
+                QtWidgets.QMessageBox.information(self, "VS Export", message)
         finally:
             self._end_vs_export(tmp_dir)
 
@@ -10400,6 +10527,40 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
             ctx["btn_prog"].finish()
             self._set_analysis_running(False)
 
+    def _confirm_close_during_analysis(self):
+        """Ask before closing while analysis or its DEM refetch is active."""
+        worker_active = self._analysis_worker is not None
+        refetch_active = (
+            self._dem_worker is not None
+            and self.btnStopAnalysis.isEnabled()
+        )
+        if not worker_active and not refetch_active:
+            return True
+
+        message = (
+            "Terrain analysis is still running.\n\n"
+            "Closing Forestry Operations Lite will cancel the analysis "
+            "and delete its incomplete results."
+        )
+        ctx = self._analysis_ctx
+        if ctx is not None and ctx.get("is_overwrite"):
+            message += (
+                "\n\n[IMPORTANT] The previous analysis removed for this "
+                "overwrite cannot be restored."
+            )
+        message += "\n\nClose and cancel the analysis?"
+
+        parent = self._host_window or self
+        answer = QtWidgets.QMessageBox.question(
+            parent,
+            "Analysis in progress",
+            message,
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        return answer == QtWidgets.QMessageBox.StandardButton.Yes
+
     # ── 解析時間の見積もり（前回実績：100万セルあたりの秒数） ──
     # 時間は機械と解析の組み合わせで大きく違うので、固定値でなく前回の
     # 実測を QSettings に残して使う。DSM の有無は差が小さいので区別しない。
@@ -10775,6 +10936,9 @@ class ForestryOperationsLiteDockWidget(QtWidgets.QWidget, FORM_CLASS):
         self._update_cs_map_export_state()
 
     def closeEvent(self, event):
+        if not self._confirm_close_during_analysis():
+            event.ignore()
+            return
         # 解析中・DEM 取得中なら中止して終わるのを待つ（スレッドを残して閉じない）
         self.shutdown_analysis()
         self._shutdown_dem_job()

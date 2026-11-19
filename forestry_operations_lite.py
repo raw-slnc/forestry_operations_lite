@@ -101,9 +101,14 @@ class ForestryOperationsLite:
         self.actions = []
 
     def run(self):
-        if not self.plugin_is_active:
-            self.plugin_is_active = True
-            if self.dockwidget is None:
-                self.dockwidget = ForestryOperationsLiteDockWidget(self.iface)
-            self.dockwidget.closingPlugin.connect(self.on_close_plugin)
-            self.dockwidget.initialize_window_mode()
+        if self.plugin_is_active and self.dockwidget is not None:
+            # A toolbar re-click only brings the existing window forward.
+            # Re-running initialize_window_mode() would repeat map/preview setup.
+            self.dockwidget._show_as_window()
+            return
+
+        self.plugin_is_active = True
+        if self.dockwidget is None:
+            self.dockwidget = ForestryOperationsLiteDockWidget(self.iface)
+        self.dockwidget.closingPlugin.connect(self.on_close_plugin)
+        self.dockwidget.initialize_window_mode()
